@@ -38,7 +38,11 @@ export function resolveDiffArgs(ref: string): RefDiffArgs {
     case 'work':
       return { type: 'args', args: ['HEAD'], includeUntracked: true };
     default:
-      return { type: 'args', args: [normalizeRef(ref)], includeUntracked: true };
+      // Bare refs (`diffity main`) diff against the working tree, so untracked
+      // files are part of the change set (#10). Ranges (`A..B`) pin both
+      // endpoints — the working tree isn't involved, so untracked files must
+      // be excluded or the diff won't match `git diff A..B`.
+      return { type: 'args', args: [normalizeRef(ref)], includeUntracked: !ref.includes('..') };
   }
 }
 
