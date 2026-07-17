@@ -1,7 +1,7 @@
 import { createHash } from 'crypto';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { readSkills, renderSkill, writeFile, cleanDir } from './lib/utils.js';
+import { readSkills, renderSkill, writeFile, cleanDir, cleanManagedSkills } from './lib/utils.js';
 import { claudeCode } from './lib/transformers/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -30,7 +30,9 @@ writeFile(
 );
 console.log(`Skills hash: ${skillsHash}`);
 
-cleanDir(globalClaudeSkillsDir);
+// Only remove diffity's own dev skills, not the whole directory — ~/.claude/skills
+// is shared with the user's own skills and skills from other tools.
+cleanManagedSkills(globalClaudeSkillsDir, 'diffity-dev');
 for (const skill of skills) {
   claudeCode(skill, homeDir, { binary: 'diffity-dev', namePrefix: 'diffity-dev', slashPrefix: '/diffity-dev-', installHint: 'run `npm run dev` from the diffity repo root to link the CLI' });
 }
