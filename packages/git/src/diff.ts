@@ -1,7 +1,22 @@
 import { exec, execLarge, execLines, execWithStdin } from './exec.js';
 
+/**
+ * Flags that neutralize user git config which would otherwise alter the diff
+ * format and break parsing:
+ * - `--no-color` guards against `color.ui=always` / `color.diff=always`
+ * - `--no-ext-diff` guards against a configured `diff.external` driver
+ * - `--src-prefix`/`--dst-prefix` force the standard `a/`/`b/` prefixes,
+ *   overriding `diff.mnemonicPrefix`, `diff.noprefix` and custom prefixes
+ */
+const DIFF_FORMAT_ARGS = [
+  '--no-color',
+  '--no-ext-diff',
+  '--src-prefix=a/',
+  '--dst-prefix=b/',
+];
+
 export function getDiff(args: string[] = []): string {
-  const cmd = ['git', 'diff', ...args].join(' ');
+  const cmd = ['git', 'diff', ...DIFF_FORMAT_ARGS, ...args].join(' ');
   return execLarge(cmd);
 }
 
@@ -14,7 +29,7 @@ export function getUntrackedDiff(files: string[]): string {
 
   for (const file of files) {
     try {
-      execLarge(`git diff --no-index -- /dev/null "${file}"`);
+      execLarge(`git diff ${DIFF_FORMAT_ARGS.join(' ')} --no-index -- /dev/null "${file}"`);
     } catch (err: unknown) {
       const error = err as { stdout?: string; status?: number };
       if (error.status === 1 && error.stdout) {
