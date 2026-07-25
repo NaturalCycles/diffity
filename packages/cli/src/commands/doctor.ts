@@ -34,10 +34,10 @@ export function registerDoctorCommand(program: Command, version: string) {
 
       process.stdout.write('  sqlite       ');
       try {
-        require('better-sqlite3');
-        console.log(pc.green('✓ better-sqlite3 loaded'));
+        require('node:sqlite');
+        console.log(pc.green('✓ node:sqlite available'));
       } catch {
-        console.log(pc.red('✗ better-sqlite3 failed to load (native module issue)'));
+        console.log(pc.red(`✗ node:sqlite unavailable (needs Node >= 22.13, running ${process.version})`));
         ok = false;
       }
 

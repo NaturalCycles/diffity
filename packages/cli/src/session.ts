@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { getHeadHash, getDiffityDir } from '@diffity/git';
-import { getDb } from './db.js';
+import { getDb, queryOne } from './db.js';
 
 export interface Session {
   id: string;
@@ -18,9 +18,11 @@ export function findOrCreateSession(ref: string): Session {
   const db = getDb();
   const headHash = getHeadHash();
 
-  const existing = db.prepare(
-    'SELECT id, ref, head_hash FROM review_sessions WHERE ref = ? AND head_hash = ?'
-  ).get(ref, headHash) as { id: string; ref: string; head_hash: string } | undefined;
+  const existing = queryOne<{ id: string; ref: string; head_hash: string }>(
+    'SELECT id, ref, head_hash FROM review_sessions WHERE ref = ? AND head_hash = ?',
+    ref,
+    headHash,
+  );
 
   if (existing) {
     const session: Session = { id: existing.id, ref: existing.ref, headHash: existing.head_hash };
