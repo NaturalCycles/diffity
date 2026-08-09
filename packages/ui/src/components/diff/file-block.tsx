@@ -484,7 +484,8 @@ export function FileBlock(props: FileBlockProps) {
               onDeleteComment={deleteComment}
               onDeleteThread={deleteThread}
             />
-            <table className="w-full border-collapse table-fixed">
+            <div className="code-scroll">
+            <table className="w-full border-collapse table-fixed code-table">
               {viewMode === 'split' ? (
                 <colgroup>
                   <col className="w-12.5" />
@@ -568,6 +569,7 @@ export function FileBlock(props: FileBlockProps) {
                 );
               })()}
             </table>
+            </div>
             </>
           )}
         </div>

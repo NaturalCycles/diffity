@@ -18,6 +18,7 @@ import {
   tourOptions,
 } from '../../queries/tree';
 import { useTheme } from '../../hooks/use-theme';
+import { useWrapLines } from '../../hooks/use-wrap-lines';
 import { useReviewThreads } from '../../hooks/use-review-threads';
 import { useCommentActions } from '../../hooks/use-comment-actions';
 import { isThreadResolved, GENERAL_THREAD_FILE_PATH } from '../comments/types';
@@ -104,6 +105,7 @@ export function TreePage(props: TreePageProps) {
   const { theme, toggleTheme } = useTheme(
     initialTheme ?? loaderData?.theme ?? null,
   );
+  const { wrapLines, toggleWrapLines } = useWrapLines();
   const queryClient = useQueryClient();
   const { isStale, resetStaleness } = useTreeStaleness();
 
@@ -459,7 +461,12 @@ export function TreePage(props: TreePageProps) {
             onDeleteAllComments={commentActions.deleteAllThreads}
             formatForCopy={formatForCopy}
           />
-          <OptionsMenu theme={theme} onToggleTheme={toggleTheme} />
+          <OptionsMenu
+            theme={theme}
+            onToggleTheme={toggleTheme}
+            wrapLines={wrapLines}
+            onToggleWrapLines={toggleWrapLines}
+          />
         </div>
       </div>
 

@@ -3,17 +3,20 @@ import { SunIcon } from '../icons/sun-icon';
 import { MoonIcon } from '../icons/moon-icon';
 import { EllipsisIcon } from '../icons/ellipsis-icon';
 import { GitHubIcon } from '../icons/github-icon';
+import { WrapTextIcon } from '../icons/wrap-text-icon';
 
 export const menuItemClass = 'flex items-center gap-2.5 w-full px-3 py-1.5 text-xs text-text-secondary hover:bg-hover hover:text-text transition-colors cursor-pointer text-left';
 
 interface OptionsMenuProps {
   theme: 'light' | 'dark';
   onToggleTheme: () => void;
+  wrapLines: boolean;
+  onToggleWrapLines: () => void;
   renderExtraItems?: (close: () => void) => ReactNode;
 }
 
 export function OptionsMenu(props: OptionsMenuProps) {
-  const { theme, onToggleTheme, renderExtraItems } = props;
+  const { theme, onToggleTheme, wrapLines, onToggleWrapLines, renderExtraItems } = props;
   const [showMenu, setShowMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -44,6 +47,17 @@ export function OptionsMenu(props: OptionsMenuProps) {
       {showMenu && (
         <div className="absolute right-0 top-full mt-1 w-48 py-1 bg-bg-secondary rounded-md shadow-lg ring-1 ring-border z-50">
           {renderExtraItems && renderExtraItems(close)}
+          <button
+            className={menuItemClass}
+            onClick={() => {
+              onToggleWrapLines();
+              close();
+            }}
+          >
+            <WrapTextIcon className="w-3.5 h-3.5" />
+            Wrap lines
+            {wrapLines && <span className="ml-auto text-accent text-[10px]">On</span>}
+          </button>
           <button
             className={menuItemClass}
             onClick={() => {

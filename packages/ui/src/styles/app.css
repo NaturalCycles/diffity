@@ -365,6 +365,36 @@ dialog {
   border-left: 1px solid var(--color-border);
 }
 
+/*
+ * Code cells wrap by default (long lines stay readable without horizontal
+ * scrolling). `data-wrap-lines="false"` on <html> opts out, letting the
+ * surrounding .code-scroll container scroll horizontally instead.
+ */
+.code-cell {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+:root[data-wrap-lines='false'] .code-cell {
+  white-space: pre;
+  word-break: normal;
+}
+
+.code-scroll {
+  overflow-x: clip;
+}
+:root[data-wrap-lines='false'] .code-scroll {
+  overflow-x: auto;
+}
+
+/*
+ * Fixed layout keeps gutter/pane widths stable while wrapping. With wrapping
+ * off, columns must grow to the longest line so .code-scroll has something to
+ * scroll (and so split panes don't overlap each other).
+ */
+:root[data-wrap-lines='false'] .code-table {
+  table-layout: auto;
+}
+
 .diff-empty-cell {
   background:
     repeating-linear-gradient(

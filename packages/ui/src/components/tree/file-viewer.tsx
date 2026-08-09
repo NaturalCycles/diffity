@@ -6,6 +6,9 @@ import type { CommentActions } from '../../hooks/use-comment-actions';
 import { CommentThread } from '../comments/comment-thread';
 import { CommentForm } from '../comments/comment-form';
 import { CommentLineNumber } from '../comments/comment-line-number';
+import { CheckIcon } from '../icons/check-icon';
+import { CopyIcon } from '../icons/copy-icon';
+import { useCopy } from '../../hooks/use-copy';
 import { cn } from '../../lib/cn';
 
 interface TourHighlight {
@@ -44,6 +47,8 @@ export function FileViewer(props: FileViewerProps) {
   const [pendingSelection, setPendingSelection] = useState<LineSelection | null>(null);
   const { highlight, ready } = useHighlighter();
   const tableRef = useRef<HTMLTableElement>(null);
+  const headerRef = useRef<HTMLDivElement>(null);
+  const { copied: pathCopied, copy: copyPath } = useCopy();
 
   const activeTourHighlight = tourHighlight && tourHighlight.filePath === filePath ? tourHighlight : null;
   const isFullFileHighlight = activeTourHighlight
@@ -72,7 +77,9 @@ export function FileViewer(props: FileViewerProps) {
       if (scrollParent) {
         const rowTop = row.getBoundingClientRect().top;
         const parentTop = scrollParent.getBoundingClientRect().top;
-        scrollParent.scrollTop = rowTop - parentTop;
+        // Keep the target line clear of the sticky file header.
+        const headerHeight = headerRef.current?.offsetHeight ?? 0;
+        scrollParent.scrollTop = rowTop - parentTop - headerHeight;
       } else {
         row.scrollIntoView({ block: 'start' });
       }
@@ -213,7 +220,7 @@ export function FileViewer(props: FileViewerProps) {
         />
         <td
           className={cn(
-            'px-4 py-0 font-mono text-[13px] leading-6 whitespace-pre',
+            'px-4 py-0 font-mono text-[13px] leading-6 code-cell align-top',
             highlightType === 'base' && 'bg-diff-comment-bg/40',
             highlightType === 'focus' && 'bg-diff-comment-bg',
             highlightType === 'selected' && 'bg-diff-comment-bg',
@@ -272,16 +279,48 @@ export function FileViewer(props: FileViewerProps) {
     }
   }
 
+  const dirPath = filePath.includes('/') ? filePath.slice(0, filePath.lastIndexOf('/') + 1) : '';
+  const fileName = filePath.slice(filePath.lastIndexOf('/') + 1);
+
   return (
     <div className={cn(
-      'border border-border rounded-lg overflow-x-auto',
+      'border border-border rounded-lg overflow-clip',
       isFullFileHighlight && 'border-l-2 border-l-accent',
     )}>
-      <table ref={tableRef} className="w-full border-collapse">
-        <tbody>
-          {rows}
-        </tbody>
-      </table>
+      <div
+        ref={headerRef}
+        className="sticky top-0 z-10 flex items-center gap-2 px-3 py-1.5 bg-bg-secondary border-b border-border text-xs shadow-sticky"
+      >
+        <span className="font-mono text-xs truncate">
+          {dirPath && <span className="text-text-muted">{dirPath}</span>}
+          <span className="text-text">{fileName}</span>
+        </span>
+        {activeTourHighlight && !isFullFileHighlight && (
+          <span className="shrink-0 font-mono text-[11px] text-text-muted">
+            :{activeTourHighlight.startLine === activeTourHighlight.endLine
+              ? activeTourHighlight.startLine
+              : `${activeTourHighlight.startLine}-${activeTourHighlight.endLine}`}
+          </span>
+        )}
+        <button
+          onClick={() => copyPath(filePath)}
+          className="shrink-0 text-text-muted hover:text-text transition-colors cursor-pointer"
+          title="Copy file path"
+        >
+          {pathCopied ? (
+            <CheckIcon className="w-3 h-3 text-added" />
+          ) : (
+            <CopyIcon className="w-3 h-3" />
+          )}
+        </button>
+      </div>
+      <div className="code-scroll">
+        <table ref={tableRef} className="w-full border-collapse code-table">
+          <tbody>
+            {rows}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
