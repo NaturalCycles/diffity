@@ -56,7 +56,9 @@ export function OptionsMenu(props: OptionsMenuProps) {
           >
             <WrapTextIcon className="w-3.5 h-3.5" />
             Wrap lines
-            {wrapLines && <span className="ml-auto text-accent text-[10px]">On</span>}
+            <span className={`ml-auto text-[10px] ${wrapLines ? 'text-accent' : 'text-text-muted'}`}>
+              {wrapLines ? 'On' : 'Off'}
+            </span>
           </button>
           <button
             className={menuItemClass}

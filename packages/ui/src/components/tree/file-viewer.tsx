@@ -287,9 +287,14 @@ export function FileViewer(props: FileViewerProps) {
       'border border-border rounded-lg overflow-clip',
       isFullFileHighlight && 'border-l-2 border-l-accent',
     )}>
+      {/*
+        -top-6 cancels the p-6 on the scrolling <main>: that padding insets the
+        sticky rectangle, which would otherwise leave a strip of code visible
+        above the pinned header.
+      */}
       <div
         ref={headerRef}
-        className="sticky top-0 z-10 flex items-center gap-2 px-3 py-1.5 bg-bg-secondary border-b border-border text-xs shadow-sticky"
+        className="sticky -top-6 z-10 flex items-center gap-2 px-3 py-1.5 bg-bg-secondary border-b border-border text-xs shadow-sticky"
       >
         <span className="font-mono text-xs truncate">
           {dirPath && <span className="text-text-muted">{dirPath}</span>}
