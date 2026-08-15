@@ -18,6 +18,13 @@ import { useDiffStaleness } from '../../hooks/use-diff-staleness';
 import { type ViewMode, getFilePath, getAutoCollapsedPaths } from '../../lib/diff-utils';
 import { buildFirstOpenThreadByFile, buildThreadCountsByFile } from '../../lib/comment-navigation';
 import { getHunkHeaders, scrollToElement } from '../../lib/dom-utils';
+import {
+  fingerprintFiles,
+  loadViewedFiles,
+  pickFingerprints,
+  reconcileViewed,
+  saveViewedFiles,
+} from '../../lib/viewed-storage';
 import { fetchGitHubDetails, type GitHubDetails } from '../../lib/api';
 import type { LineSelection } from '../comments/types';
 import { isThreadResolved } from '../comments/types';
@@ -79,15 +86,26 @@ export function DiffPage() {
     setPendingSelection(null);
   }, [commentActions]);
 
+  const repoRoot = info?.root ?? null;
+  const fileFingerprints = useMemo(() => (diff ? fingerprintFiles(diff.files) : {}), [diff]);
+
   useEffect(() => {
     if (!diff || diff === initializedDiffRef.current) {
       return;
     }
     initializedDiffRef.current = diff;
 
+    const restoredViewed = repoRoot
+      ? reconcileViewed(loadViewedFiles(repoRoot, refParam), fileFingerprints)
+      : new Set<string>();
+    setReviewedFiles(restoredViewed);
+
     const autoCollapsed = getAutoCollapsedPaths(diff.files);
     for (const path of filesWithComments) {
       autoCollapsed.delete(path);
+    }
+    for (const path of restoredViewed) {
+      autoCollapsed.add(path);
     }
     for (const path of manuallyToggledRef.current) {
       if (autoCollapsed.has(path)) {
@@ -97,7 +115,14 @@ export function DiffPage() {
       }
     }
     setCollapsedFiles(autoCollapsed);
-  }, [diff]);
+  }, [diff, fileFingerprints, repoRoot, refParam]);
+
+  useEffect(() => {
+    if (!repoRoot || !initializedDiffRef.current) {
+      return;
+    }
+    saveViewedFiles(repoRoot, refParam, pickFingerprints(fileFingerprints, reviewedFiles));
+  }, [reviewedFiles, fileFingerprints, repoRoot, refParam]);
 
   useEffect(() => {
     if (filesWithComments.size === 0) {
@@ -107,6 +132,9 @@ export function DiffPage() {
       let changed = false;
       const next = new Set(prev);
       for (const path of filesWithComments) {
+        if (reviewedFiles.has(path)) {
+          continue;
+        }
         if (next.has(path)) {
           next.delete(path);
           changed = true;
@@ -114,7 +142,7 @@ export function DiffPage() {
       }
       return changed ? next : prev;
     });
-  }, [filesWithComments]);
+  }, [filesWithComments, reviewedFiles]);
 
   const handleToggleCollapse = useCallback((path: string) => {
     const toggled = manuallyToggledRef.current;
