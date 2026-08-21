@@ -33,7 +33,15 @@ diffity agent reply <id> --body "<text>"
 ## Prerequisites
 
 1. Check that `diffity` is available: run `which diffity`. If not found, install it with `npm install -g diffity`.
-2. Check that a review session exists: run `diffity agent list`. If this fails with "No active review session", tell the user to start diffity first (e.g. `diffity` or **/diffity-diff**).
+2. **Work out which repository to use.** A project directory often holds several worktrees as
+   subdirectories rather than being a repository itself, so the current directory may not be one.
+   - If the current directory is a git repository (`git rev-parse --show-toplevel` succeeds), use it.
+   - Otherwise look one level down for directories containing a `.git` entry. Exactly one → use it.
+     Several → **ask the user which one**, listing them with their current branch, and stop until
+     they answer. Guessing here reviews the wrong branch, which wastes the whole review.
+   - Pass the chosen directory to every `diffity` call as `--repo <path>`, before any positional
+     argument. Do not `cd`.
+3. Check that a review session exists: run `diffity agent list`. If this fails with "No active review session", tell the user to start diffity first (e.g. `diffity` or **/diffity-diff**).
 
 ## Instructions
 

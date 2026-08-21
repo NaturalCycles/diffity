@@ -1,5 +1,7 @@
 import { Command } from 'commander';
 import { createHash } from 'node:crypto';
+import { existsSync, statSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import open from 'open';
 import pc from 'picocolors';
@@ -31,6 +33,27 @@ const pkg = require('../package.json');
 
 const program = new Command();
 
+// Project directories often hold several worktrees as subdirectories, so the repository to
+// review is not always the directory the command was run from. Everything downstream resolves
+// against the working directory, so switching it here is enough.
+function applyRepoOption(repo: unknown): void {
+  if (typeof repo !== 'string' || !repo) {
+    return;
+  }
+
+  const target = resolve(repo);
+  if (!existsSync(target) || !statSync(target).isDirectory()) {
+    console.error(pc.red(`Error: --repo is not a directory: ${repo}`));
+    process.exit(1);
+  }
+
+  process.chdir(target);
+}
+
+program.hook('preAction', (thisCommand) => {
+  applyRepoOption(thisCommand.opts().repo);
+});
+
 program
   .name('diffity')
   .description('GitHub-style git diff viewer in the browser')
@@ -38,6 +61,7 @@ program
   .enablePositionalOptions()
   .passThroughOptions()
   .option('--skills-hash', 'Print skills hash and exit', false)
+  .option('--repo <path>', 'Repository to work on, when the current directory is not one')
   .argument('[refs...]', 'Git refs to diff')
   .option('--base <ref>', 'Base ref to compare from (e.g. main, HEAD~3, v1.0.0)')
   .option('--compare <ref>', 'Ref to compare against base (default: working tree)')

@@ -33,7 +33,15 @@ You are reading open review comments and resolving them by making the requested 
 ## Prerequisites
 
 1. Check that `{{binary}}` is available: run `which {{binary}}`. If not found, {{install_hint}}.
-2. Check that a review session exists: run `{{binary}} agent list`. If this fails with "No active review session", tell the user to start diffity first (e.g. `{{binary}}` or **{{slash}}diff**).
+2. **Work out which repository to use.** A project directory often holds several worktrees as
+   subdirectories rather than being a repository itself, so the current directory may not be one.
+   - If the current directory is a git repository (`git rev-parse --show-toplevel` succeeds), use it.
+   - Otherwise look one level down for directories containing a `.git` entry. Exactly one → use it.
+     Several → **ask the user which one**, listing them with their current branch, and stop until
+     they answer. Guessing here reviews the wrong branch, which wastes the whole review.
+   - Pass the chosen directory to every `{{binary}}` call as `--repo <path>`, before any positional
+     argument. Do not `cd`.
+3. Check that a review session exists: run `{{binary}} agent list`. If this fails with "No active review session", tell the user to start diffity first (e.g. `{{binary}}` or **{{slash}}diff**).
 
 ## Instructions
 
