@@ -20,14 +20,13 @@ const buildOptions = {
   entryPoints: [join(__dirname, 'src/index.ts')],
   bundle: true,
   platform: 'node' as const,
-  target: 'node18',
+  target: 'node22',
   format: 'esm' as const,
   outfile: join(distDir, 'index.js'),
   banner: {
     js: '#!/usr/bin/env node',
   },
   external: [
-    'better-sqlite3',
     'commander',
     'open',
     'picocolors',
