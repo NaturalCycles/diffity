@@ -6,6 +6,7 @@ import type { SyntaxToken } from '../../lib/syntax-token';
 import type { HighlightedTokens } from '../../hooks/use-highlighter';
 import type { CommentSide, LineSelection } from '../comments/types';
 import { type ViewMode, getFilePath, buildChangeGroupPatch, extractLinesFromDiff, extractLinesFromExpandedLines } from '../../lib/diff-utils';
+import { classifyHunk, hunkIntersectsRanges, MECHANICAL_LABELS } from '../../lib/hunk-attention';
 import { revertHunk as apiRevertHunk } from '../../lib/api';
 import { ConfirmDialog } from '../ui/confirm-dialog';
 import { computeGaps, createContextLines, getExpandRange, type ExpandableGap } from '../../lib/context-expansion';
@@ -58,6 +59,8 @@ interface FileBlockProps {
   onPendingSelectionChange: (selection: LineSelection | null) => void;
   highlighted?: boolean;
   onHighlightEnd?: () => void;
+  /** Line ranges the walkthrough asked the reader to look at, on the new side. */
+  focusRanges?: { startLine: number; endLine: number }[];
 }
 
 interface GapExpansion {
@@ -69,7 +72,7 @@ interface GapExpansion {
 
 export function FileBlock(props: FileBlockProps) {
   const {
-    file, viewMode, collapsed, onToggleCollapse, reviewed, onReviewedChange, highlightLine, baseRef, canRevert, onRevert,
+    file, viewMode, collapsed, onToggleCollapse, reviewed, onReviewedChange, highlightLine, baseRef, canRevert, onRevert, focusRanges,
     threads: allThreads, commentsEnabled, commentActions, onAddThread: rawAddThread, pendingSelection, onPendingSelectionChange,
     highlighted, onHighlightEnd,
   } = props;
@@ -261,6 +264,16 @@ export function FileBlock(props: FileBlockProps) {
       cancelled = true;
     };
   }, [file, highlightLine]);
+
+  const hunkAttention = useMemo(
+    () => file.hunks.map(hunk => classifyHunk(file, hunk)),
+    [file],
+  );
+
+  const isHunkFocused = useCallback(
+    (hunk: DiffHunk) => hunkIntersectsRanges(hunk, focusRanges),
+    [focusRanges],
+  );
 
   const gaps = useMemo(() => {
     if (isNewFile) {
@@ -502,6 +515,18 @@ export function FileBlock(props: FileBlockProps) {
                 </colgroup>
               )}
               {file.hunks.map((hunk, i) => {
+                const mechanical = hunkAttention[i];
+                const focused = isHunkFocused(hunk);
+                const attentionClass = focused
+                  ? 'bg-accent/5'
+                  : mechanical
+                    ? 'opacity-45 hover:opacity-100 transition-opacity'
+                    : '';
+                const attentionTitle = focused
+                  ? 'The walkthrough points here'
+                  : mechanical
+                    ? `Dimmed: ${MECHANICAL_LABELS[mechanical]}`
+                    : undefined;
                 const betweenGap = i > 0 ? gapMap.get(`between-${i - 1}`) : undefined;
                 const betweenExpansion = betweenGap ? expansions.get(betweenGap.id) : undefined;
                 const topExpansion = i === 0 ? expansions.get('top') : undefined;
@@ -510,6 +535,8 @@ export function FileBlock(props: FileBlockProps) {
                   <HunkWithGap
                     key={i}
                     hunk={hunk}
+                    attentionClass={attentionClass}
+                    attentionTitle={attentionTitle}
                     viewMode={viewMode}
                     syntaxMap={syntaxMap}
                     expandControls={getExpandControlsForHunk(i)}

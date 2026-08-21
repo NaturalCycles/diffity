@@ -8,6 +8,7 @@ import { useWrapLines } from '../../hooks/use-wrap-lines';
 import { useKeyboard } from '../../hooks/use-keyboard';
 import { useReviewThreads } from '../../hooks/use-review-threads';
 import { useTours } from '../../hooks/use-tours';
+import { useHideWhitespace } from '../../hooks/use-hide-whitespace';
 import { pickActiveTour, orderPathsByTour, stopsByPath } from '../../lib/tour-order';
 import { TourStepper } from './tour-stepper';
 import { useCommentActions } from '../../hooks/use-comment-actions';
@@ -41,7 +42,7 @@ export function DiffPage() {
   }>();
 
   const [viewMode, setViewMode] = useState<ViewMode>(initialViewMode || 'split');
-  const [hideWhitespace, setHideWhitespace] = useState(false);
+  const { hideWhitespace, setHideWhitespace } = useHideWhitespace();
   const [showHelp, setShowHelp] = useState(false);
   const { theme, toggleTheme } = useTheme(initialTheme);
   const { wrapLines, toggleWrapLines } = useWrapLines();
@@ -84,6 +85,16 @@ export function DiffPage() {
 
   const diffPaths = useMemo(() => (diff ? diff.files.map(file => getFilePath(file)) : []), [diff]);
   const tourStops = useMemo(() => stopsByPath(activeTour, diffPaths), [activeTour, diffPaths]);
+
+  const focusRangesByFile = useMemo(() => {
+    const ranges = new Map<string, { startLine: number; endLine: number }[]>();
+    for (const step of activeTour?.steps ?? []) {
+      const existing = ranges.get(step.filePath) ?? [];
+      existing.push({ startLine: step.startLine, endLine: step.endLine });
+      ranges.set(step.filePath, existing);
+    }
+    return ranges;
+  }, [activeTour]);
 
   const orderedDiff = useMemo(() => {
     if (!diff || !activeTour || !reviewOrderEnabled || activeTour.steps.length === 0) {
@@ -404,7 +415,7 @@ export function DiffPage() {
         onScrollToThread={handleScrollToThread}
         repoName={info?.name || null}
         branch={info?.branch || null}
-        description={info?.description || null}
+        description={hideWhitespace ? `${info?.description ?? ''} · whitespace hidden` : info?.description || null}
         githubDetails={githubDetails}
         sessionId={sessionId}
         onGitHubPulled={() => queryClient.invalidateQueries({ queryKey: ['threads'] })}
@@ -458,6 +469,7 @@ export function DiffPage() {
             onAddThread={handleAddThread}
             pendingSelection={pendingSelection}
             onPendingSelectionChange={setPendingSelection}
+            focusRangesByFile={focusRangesByFile}
           />
         ) : null}
       </div>

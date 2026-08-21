@@ -17,6 +17,8 @@ interface GapExpansion {
 
 interface HunkWithGapProps {
   hunk: DiffHunk;
+  attentionClass?: string;
+  attentionTitle?: string;
   viewMode: ViewMode;
   syntaxMap?: Map<string, SyntaxToken[]>;
   expandControls?: ExpandControls;
@@ -46,7 +48,8 @@ interface HunkWithGapProps {
 
 export function HunkWithGap(props: HunkWithGapProps) {
   const {
-    hunk, viewMode, syntaxMap, expandControls, topExpansionLines, gapExpansion, gapId, highlightLine,
+    hunk,
+    attentionClass, attentionTitle, viewMode, syntaxMap, expandControls, topExpansionLines, gapExpansion, gapId, highlightLine,
     threads, pendingSelection, currentAuthor, isLineSelected,
     onLineMouseDown, onLineMouseEnter, onCommentClick,
     onAddThread, onReply, onResolve, onUnresolve, onEditComment, onDeleteComment, onDeleteThread,
@@ -86,6 +89,8 @@ export function HunkWithGap(props: HunkWithGapProps) {
       )}
       <HunkComponent
         hunk={hunk}
+        attentionClass={attentionClass}
+        attentionTitle={attentionTitle}
         syntaxMap={syntaxMap}
         expandControls={expandControls}
         topExpansionLines={topExpansionLines && topExpansionLines.length > 0 ? topExpansionLines : undefined}
