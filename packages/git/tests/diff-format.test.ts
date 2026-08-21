@@ -55,6 +55,30 @@ describe('diff format neutralization', () => {
     git('checkout -- base.txt');
   });
 
+  it('lists file names without color escapes despite color.ui', async () => {
+    const { getDiffFiles } = await import('../src/diff.js');
+    writeFile('base.txt', 'a\nd\n');
+
+    const files = getDiffFiles('unstaged');
+
+    expect(files).toEqual(['base.txt']);
+    expect(files.join('')).not.toMatch(/\x1b\[/);
+
+    git('checkout -- base.txt');
+  });
+
+  it('emits a diffstat without color escapes despite color.ui', async () => {
+    const { getDiffStatForRef } = await import('../src/diff.js');
+    writeFile('base.txt', 'a\ne\n');
+
+    const stat = getDiffStatForRef('unstaged');
+
+    expect(stat).toContain('base.txt');
+    expect(stat).not.toMatch(/\x1b\[/);
+
+    git('checkout -- base.txt');
+  });
+
   it('emits standard prefixes for untracked files', async () => {
     const { resolveRef } = await import('../src/diff.js');
     writeFile('untracked.txt', 'x\ny\n');

@@ -77,7 +77,7 @@ export function resolveRef(ref: string, extraArgs: string[] = []): string {
 export function getDiffFiles(ref: string): string[] {
   const resolved = resolveDiffArgs(ref);
 
-  const tracked = execLines(`git diff --name-only ${resolved.args.join(' ')}`.trim());
+  const tracked = execLines(`git diff ${DIFF_FORMAT_ARGS.join(' ')} --name-only ${resolved.args.join(' ')}`.trim());
   if (resolved.includeUntracked) {
     const untracked = getUntrackedFiles();
     return [...new Set([...tracked, ...untracked])];
@@ -86,7 +86,7 @@ export function getDiffFiles(ref: string): string[] {
 }
 
 export function getDiffStat(args: string[] = []): string {
-  const cmd = ['git', 'diff', '--stat', ...args].join(' ');
+  const cmd = ['git', 'diff', ...DIFF_FORMAT_ARGS, '--stat', ...args].join(' ');
   try {
     return execLarge(cmd);
   } catch {
