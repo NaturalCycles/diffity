@@ -68,9 +68,12 @@ Branches after #24 were merged straight into `develop` rather than through a pul
 
 ## Known and not yet done
 
-- `createReview` has never submitted a review end to end. The payload shape is verified against
-  GitHub's documentation, the comment lines are validated before sending, and the 400 our own
-  route returns is tested — but nothing has ever been posted from this fork.
+- A submitted thread is not marked as submitted. After a review goes out, its threads are still
+  `open` locally with nothing to say they are already on the pull request. `isAlreadyCommented`
+  stops a duplicate from being posted, but only by trying — the dialog should show which findings
+  have already left the machine.
+- There is no way to delete or replace a walkthrough. `agent tour-*` can only add, and the newest
+  silently wins, so an agent that gets one wrong leaves the wrong one in the database.
 - Hash-based `script-src`, computed from `index.html` at server start, would remove the
   `'unsafe-inline'` caveat in the CSP. The sanitizer is what keeps injected script out of the DOM
   in the meantime.
@@ -88,6 +91,12 @@ Branches after #24 were merged straight into `develop` rather than through a pul
   checkout would settle it.
 - `server.ts` now has HTTP-level tests covering the security surface and the diff routes, but the
   forge routes (`/api/github/*`) are still only exercised by hand.
+
+### Exercised for real
+
+`createReview` submitted its first review on 2026-08-21 (NCBackend3#14378): one `COMMENTED`
+review, an edited summary as the body, two inline comments with their multi-line ranges intact
+(`start_line` 62, `line` 66), markdown preserved, and the deselected findings correctly absent.
 
 ### Done since the audit
 
