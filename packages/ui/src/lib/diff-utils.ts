@@ -88,7 +88,7 @@ function getTotalLineCount(file: DiffFile): number {
   return count;
 }
 
-function isAutoCollapsible(file: DiffFile): boolean {
+export function isAutoCollapsible(file: DiffFile): boolean {
   if (file.status === 'deleted' || file.status === 'renamed') {
     return true;
   }

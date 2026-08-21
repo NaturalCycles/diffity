@@ -11,6 +11,10 @@ import { UndoIcon } from '../icons/undo-icon';
 
 interface HunkBlockProps {
   hunk: DiffHunk;
+  /** Applied to every row group of the hunk, so a whole hunk recedes or stands out together. */
+  attentionClass?: string;
+  /** Why it was dimmed, so the reader can always find out rather than having to trust it. */
+  attentionTitle?: string;
   syntaxMap?: Map<string, SyntaxToken[]>;
   expandControls?: ExpandControls;
   topExpansionLines?: DiffLineType[];
@@ -163,7 +167,7 @@ export function HunkBlock(props: HunkBlockProps) {
     if (isChangeGroup && onRevertChange) {
       const group = changeGroups[groupIdx];
       sections.push(
-        <tbody key={`change-${groupIdx}`} className="group/undo">
+        <tbody key={`change-${groupIdx}`} className={`group/undo ${attentionClass}`} title={attentionTitle}>
           {currentRows}
           <tr className="relative z-10">
             <td colSpan={4} className="relative h-0">
@@ -183,7 +187,7 @@ export function HunkBlock(props: HunkBlockProps) {
       );
     } else {
       sections.push(
-        <tbody key={`context-${sections.length}`}>
+        <tbody key={`context-${sections.length}`} className={attentionClass} title={attentionTitle}>
           {currentRows}
         </tbody>
       );
@@ -216,7 +220,7 @@ export function HunkBlock(props: HunkBlockProps) {
 
   return (
     <>
-      <tbody className={tbodyClass}>
+      <tbody className={`${tbodyClass} ${attentionClass}`} title={attentionTitle}>
         <HunkHeader hunk={hunk} expandControls={expandControls} />
         {expansionRows}
       </tbody>

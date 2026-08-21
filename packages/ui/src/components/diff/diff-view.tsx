@@ -47,6 +47,8 @@ interface DiffViewProps {
   onAddThread: CommentActions['addThread'];
   pendingSelection: LineSelection | null;
   onPendingSelectionChange: (selection: LineSelection | null) => void;
+  /** Per file, the line ranges the walkthrough points at. */
+  focusRangesByFile?: Map<string, { startLine: number; endLine: number }[]>;
 }
 
 function estimateFileHeight(file: { hunks: { lines: { length: number } }[]; isBinary: boolean }, collapsed: boolean): number {
@@ -73,6 +75,7 @@ export function DiffView(props: DiffViewProps) {
     handle, baseRef, canRevert, onRevert,
     threads, commentsEnabled, commentActions, onAddThread,
     pendingSelection, onPendingSelectionChange,
+    focusRangesByFile,
   } = props;
   const { highlight } = useHighlighter();
   const scrollElementRef = useRef<HTMLElement>(null);
@@ -277,6 +280,7 @@ export function DiffView(props: DiffViewProps) {
               ref={virtualizer.measureElement}
             >
               <FileBlock
+                focusRanges={focusRangesByFile?.get(filePath)}
                 highlighted={highlightedFile === filePath}
                 onHighlightEnd={() => {
                   if (highlightedFile === filePath) {
