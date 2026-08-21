@@ -285,6 +285,7 @@ range syntax (main..feature, main...feature) also work.`)
         diffArgs,
         description,
         effectiveRef,
+        pinnedRef: prBase?.oid,
         version: pkg.version,
         registryInfo: { repoRoot, repoHash, repoName },
       });

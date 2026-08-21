@@ -116,6 +116,11 @@ interface ServerOptions {
   diffArgs: string[];
   description?: string;
   effectiveRef?: string;
+  /**
+   * When the instance was started for a pull request, the commit its diff must be taken
+   * from. A `ref` in the URL that disagrees is corrected rather than honoured.
+   */
+  pinnedRef?: string;
   version?: string;
   registryInfo?: {
     repoRoot: string;
@@ -166,6 +171,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
     effectiveRef,
     version,
     registryInfo,
+    pinnedRef,
   } = options;
 
   const includeUntracked = diffArgs.length === 0;
@@ -222,6 +228,16 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
 
         if (req.method !== 'GET' && req.method !== 'HEAD' && !isSameOriginRequest(req)) {
           sendError(res, 403, 'Cross-origin request rejected');
+          return;
+        }
+
+        // A pull request's diff has to match the one GitHub shows, so a stale ref in the URL —
+        // a tab left open from an earlier session, a bookmark — is corrected on load. Switching
+        // revision inside the UI is a client-side navigation and never reaches this.
+        if (pinnedRef && pathname === '/diff' && url.searchParams.get('ref') !== pinnedRef) {
+          url.searchParams.set('ref', pinnedRef);
+          res.writeHead(302, { Location: `${pathname}?${url.searchParams.toString()}` });
+          res.end();
           return;
         }
 
