@@ -5,7 +5,7 @@ interface CommentLineNumberProps {
   lineNumber: number | null;
   className?: string;
   isSelected?: boolean;
-  onMouseDown?: () => void;
+  onMouseDown?: (shiftKey: boolean) => void;
   onMouseEnter?: () => void;
   onCommentClick?: () => void;
   showCommentButton?: boolean;
@@ -27,7 +27,7 @@ export function CommentLineNumber(props: CommentLineNumberProps) {
       onMouseDown={(e) => {
         if (onMouseDown && lineNumber !== null) {
           e.preventDefault();
-          onMouseDown();
+          onMouseDown(e.shiftKey);
         }
       }}
       onMouseEnter={() => {

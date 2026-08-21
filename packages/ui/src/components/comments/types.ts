@@ -45,7 +45,7 @@ export interface LineSelection {
 
 export interface LineRenderProps {
   isLineSelected?: (line: number, side: CommentSide) => boolean;
-  onLineMouseDown?: (line: number, side: CommentSide) => void;
+  onLineMouseDown?: (line: number, side: CommentSide, shiftKey?: boolean) => void;
   onLineMouseEnter?: (line: number, side: CommentSide) => void;
   onCommentClick?: (line: number, side: CommentSide) => void;
   threads?: CommentThread[];

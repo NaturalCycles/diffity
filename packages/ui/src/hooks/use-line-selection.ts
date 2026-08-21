@@ -4,6 +4,8 @@ import type { CommentSide, LineSelection } from '../components/comments/types';
 interface UseLineSelectionOptions {
   filePath: string;
   onSelectionComplete: (selection: LineSelection) => void;
+  /** The comment being composed, if any. Shift-clicking extends it instead of replacing it. */
+  pendingSelection?: LineSelection | null;
 }
 
 interface UseLineSelectionReturn {
@@ -12,7 +14,7 @@ interface UseLineSelectionReturn {
     anchorLine: number;
     currentLine: number;
   } | null;
-  handleLineMouseDown: (line: number, side: CommentSide) => void;
+  handleLineMouseDown: (line: number, side: CommentSide, shiftKey?: boolean) => void;
   handleLineMouseEnter: (line: number, side: CommentSide) => void;
   isLineInSelection: (line: number, side: CommentSide) => boolean;
   getSelectionRange: () => { startLine: number; endLine: number; side: CommentSide } | null;
@@ -43,7 +45,7 @@ function getLineNumberFromPoint(x: number, y: number): number | null {
 }
 
 export function useLineSelection(options: UseLineSelectionOptions): UseLineSelectionReturn {
-  const { filePath, onSelectionComplete } = options;
+  const { filePath, onSelectionComplete, pendingSelection } = options;
   const [selectionState, setSelectionState] = useState<{
     side: CommentSide;
     anchorLine: number;
@@ -54,11 +56,28 @@ export function useLineSelection(options: UseLineSelectionOptions): UseLineSelec
   const selectionRef = useRef(selectionState);
   selectionRef.current = selectionState;
 
-  const handleLineMouseDown = useCallback((line: number, side: CommentSide) => {
+  const handleLineMouseDown = useCallback((line: number, side: CommentSide, shiftKey = false) => {
+    // Shift extends the comment being composed, the way the forge does it. Only within one file
+    // and one side: a range spanning both sides of a diff is not a thing that can be commented on.
+    if (
+      shiftKey &&
+      pendingSelection &&
+      pendingSelection.filePath === filePath &&
+      pendingSelection.side === side
+    ) {
+      onSelectionComplete({
+        filePath,
+        side,
+        startLine: Math.min(pendingSelection.startLine, line),
+        endLine: Math.max(pendingSelection.endLine, line),
+      });
+      return;
+    }
+
     isDragging.current = true;
     anchorX.current = 0;
     setSelectionState({ side, anchorLine: line, currentLine: line });
-  }, []);
+  }, [filePath, onSelectionComplete, pendingSelection]);
 
   const handleLineMouseEnter = useCallback((line: number, side: CommentSide) => {
     if (!isDragging.current || !selectionRef.current) {

@@ -179,9 +179,12 @@ export function FileBlock(props: FileBlockProps) {
     onPendingSelectionChange(selection);
   }, [onPendingSelectionChange, commentsEnabled]);
 
+  const filePendingSelection = pendingSelection && pendingSelection.filePath === filePath ? pendingSelection : null;
+
   const { isLineInSelection, handleLineMouseDown, handleLineMouseEnter } = useLineSelection({
     filePath,
     onSelectionComplete: handleSelectionComplete,
+    pendingSelection: filePendingSelection,
   });
 
   const handleCommentClickFn = useCallback((line: number, side: CommentSide) => {
@@ -387,7 +390,6 @@ export function FileBlock(props: FileBlockProps) {
   const bottomGap = gapMap.get('bottom');
   const bottomRemaining = bottomGap ? getGapRemaining(bottomGap).total : 0;
 
-  const filePendingSelection = pendingSelection && pendingSelection.filePath === filePath ? pendingSelection : null;
 
   return (
     <div

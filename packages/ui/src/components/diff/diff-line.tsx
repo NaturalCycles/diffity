@@ -13,7 +13,7 @@ interface DiffLineProps {
   syntaxTokens?: SyntaxToken[];
   expanded?: boolean;
   isSelected?: boolean;
-  onLineMouseDown?: (line: number, side: CommentSide) => void;
+  onLineMouseDown?: (line: number, side: CommentSide, shiftKey?: boolean) => void;
   onLineMouseEnter?: (line: number, side: CommentSide) => void;
   onCommentClick?: (line: number, side: CommentSide) => void;
 }
@@ -54,7 +54,7 @@ export function DiffLine(props: DiffLineProps) {
         className={cn('border-r border-border-muted', gutterBg)}
         showCommentButton={!!onCommentClick && line.type === 'delete' && line.oldLineNumber !== null}
         isSelected={isSelected && side === 'old'}
-        onMouseDown={line.oldLineNumber !== null ? () => onLineMouseDown?.(line.oldLineNumber!, line.type === 'delete' ? 'old' : 'new') : undefined}
+        onMouseDown={line.oldLineNumber !== null ? (shiftKey: boolean) => onLineMouseDown?.(line.oldLineNumber!, line.type === 'delete' ? 'old' : 'new', shiftKey) : undefined}
         onMouseEnter={line.oldLineNumber !== null ? () => onLineMouseEnter?.(line.oldLineNumber!, line.type === 'delete' ? 'old' : 'new') : undefined}
         onCommentClick={line.oldLineNumber !== null && line.type === 'delete' ? () => onCommentClick?.(line.oldLineNumber!, 'old') : undefined}
       />
@@ -63,7 +63,7 @@ export function DiffLine(props: DiffLineProps) {
         className={cn('border-r border-border-muted', gutterBg)}
         showCommentButton={!!onCommentClick && line.type !== 'delete' && line.newLineNumber !== null}
         isSelected={isSelected && side === 'new'}
-        onMouseDown={line.newLineNumber !== null ? () => onLineMouseDown?.(line.newLineNumber!, line.type === 'delete' ? 'old' : 'new') : undefined}
+        onMouseDown={line.newLineNumber !== null ? (shiftKey: boolean) => onLineMouseDown?.(line.newLineNumber!, line.type === 'delete' ? 'old' : 'new', shiftKey) : undefined}
         onMouseEnter={line.newLineNumber !== null ? () => onLineMouseEnter?.(line.newLineNumber!, line.type === 'delete' ? 'old' : 'new') : undefined}
         onCommentClick={line.newLineNumber !== null && line.type !== 'delete' ? () => onCommentClick?.(line.newLineNumber!, 'new') : undefined}
       />

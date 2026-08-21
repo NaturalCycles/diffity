@@ -24,7 +24,7 @@ interface HunkBlockProps {
   pendingSelection?: LineSelection | null;
   currentAuthor?: CommentAuthor;
   isLineSelected?: (line: number, side: CommentSide) => boolean;
-  onLineMouseDown?: (line: number, side: CommentSide) => void;
+  onLineMouseDown?: (line: number, side: CommentSide, shiftKey?: boolean) => void;
   onLineMouseEnter?: (line: number, side: CommentSide) => void;
   onCommentClick?: (line: number, side: CommentSide) => void;
   onAddThread?: (filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor) => void;

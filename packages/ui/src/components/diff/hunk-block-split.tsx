@@ -26,7 +26,7 @@ interface HunkBlockSplitProps {
   pendingSelection?: LineSelection | null;
   currentAuthor?: CommentAuthor;
   isLineSelected?: (line: number, side: CommentSide) => boolean;
-  onLineMouseDown?: (line: number, side: CommentSide) => void;
+  onLineMouseDown?: (line: number, side: CommentSide, shiftKey?: boolean) => void;
   onLineMouseEnter?: (line: number, side: CommentSide) => void;
   onCommentClick?: (line: number, side: CommentSide) => void;
   onAddThread?: (filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor) => void;
@@ -183,7 +183,7 @@ export function renderSplitRows(
           syntaxMap={syntaxMap}
           expanded={expanded}
           isSelected={leftNum !== null ? props.isLineSelected?.(leftNum, 'old') : false}
-          onMouseDown={leftNum !== null ? () => props.onLineMouseDown?.(leftNum, 'old') : undefined}
+          onMouseDown={leftNum !== null ? (shiftKey: boolean) => props.onLineMouseDown?.(leftNum, 'old', shiftKey) : undefined}
           onMouseEnter={leftNum !== null ? () => props.onLineMouseEnter?.(leftNum, 'old') : undefined}
           onCommentClick={leftNum !== null && props.onCommentClick ? () => props.onCommentClick!(leftNum, 'old') : undefined}
         />
@@ -193,7 +193,7 @@ export function renderSplitRows(
           syntaxMap={syntaxMap}
           expanded={expanded}
           isSelected={rightNum !== null ? props.isLineSelected?.(rightNum, 'new') : false}
-          onMouseDown={rightNum !== null ? () => props.onLineMouseDown?.(rightNum, 'new') : undefined}
+          onMouseDown={rightNum !== null ? (shiftKey: boolean) => props.onLineMouseDown?.(rightNum, 'new', shiftKey) : undefined}
           onMouseEnter={rightNum !== null ? () => props.onLineMouseEnter?.(rightNum, 'new') : undefined}
           onCommentClick={rightNum !== null && props.onCommentClick ? () => props.onCommentClick!(rightNum, 'new') : undefined}
         />
