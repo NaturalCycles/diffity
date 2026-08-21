@@ -44,6 +44,7 @@ export interface GitHubDetails {
   prCreatedAt: string;
   headSha: string;
   commentCount: number;
+  viewerDidAuthor: boolean;
 }
 
 export interface RepoInfo {
@@ -208,13 +209,6 @@ export async function fetchFileContent(filePath: string, ref?: string): Promise<
   return json.content;
 }
 
-export interface PushCommentsResult {
-  pushed: number;
-  skipped: number;
-  failed: number;
-  errors: string[];
-}
-
 export interface PrCommentPayload {
   filePath: string;
   side: 'LEFT' | 'RIGHT';
@@ -231,11 +225,25 @@ export async function fetchGitHubDetails(): Promise<GitHubDetails | null> {
   return res.json();
 }
 
-export function pushCommentsToGitHub(comments: PrCommentPayload[]): Promise<PushCommentsResult> {
-  return apiFetch('/api/github/push-comments', {
+export type ReviewEvent = 'COMMENT' | 'APPROVE' | 'REQUEST_CHANGES';
+
+export interface CreateReviewResult {
+  submitted: number;
+  skipped: number;
+  failed: number;
+  errors: string[];
+  reviewUrl: string | null;
+}
+
+export function createReviewOnGitHub(review: {
+  event: ReviewEvent;
+  body: string;
+  comments: PrCommentPayload[];
+}): Promise<CreateReviewResult> {
+  return apiFetch('/api/github/create-review', {
     method: 'POST',
     headers: JSON_HEADERS,
-    body: JSON.stringify({ comments }),
+    body: JSON.stringify(review),
   });
 }
 

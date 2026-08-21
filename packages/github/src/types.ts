@@ -10,6 +10,24 @@ export interface GitHubDetails {
   prCreatedAt: string;
   headSha: string;
   commentCount: number;
+  /** GitHub refuses to approve or request changes on your own pull request. */
+  viewerDidAuthor: boolean;
+}
+
+export type ReviewEvent = 'COMMENT' | 'APPROVE' | 'REQUEST_CHANGES';
+
+export interface ReviewSubmission {
+  event: ReviewEvent;
+  body: string;
+  comments: PrComment[];
+}
+
+export interface ReviewResult {
+  submitted: number;
+  skipped: number;
+  failed: number;
+  errors: string[];
+  reviewUrl: string | null;
 }
 
 export interface PrBase {
