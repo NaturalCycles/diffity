@@ -65,3 +65,46 @@ export function reanchorInWorkingTree(
     return null;
   }
 }
+
+/**
+ * A comment cannot be about lines a file does not have. An agent working from hunk headers can
+ * easily overshoot the end, and the result renders nowhere at all, so the range is trimmed to
+ * what exists rather than being taken on trust.
+ */
+export function clampToFile(
+  fileLineCount: number | null,
+  startLine: number,
+  endLine: number,
+): AnchorRange {
+  if (!fileLineCount || fileLineCount < 1) {
+    return { startLine, endLine };
+  }
+
+  const start = Math.min(startLine, fileLineCount);
+  return { startLine: start, endLine: Math.max(start, Math.min(endLine, fileLineCount)) };
+}
+
+/**
+ * A file ending in a newline splits into a trailing empty string, which is not a line. Counting
+ * it makes every range one too long, and a comment anchored past the end renders nowhere.
+ */
+export function countLines(content: string): number {
+  if (content === '') {
+    return 0;
+  }
+
+  const lines = content.split('\n');
+  if (lines[lines.length - 1] === '') {
+    lines.pop();
+  }
+
+  return lines.length;
+}
+
+export function countWorkingTreeLines(filePath: string): number | null {
+  try {
+    return countLines(getWorkingTreeFileContent(filePath));
+  } catch {
+    return null;
+  }
+}

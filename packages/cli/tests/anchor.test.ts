@@ -48,3 +48,51 @@ describe('reanchor', () => {
     expect(reanchor(file.join('\n') + '\nextra', file, 1)).toBeNull();
   });
 });
+
+describe('clampToFile', () => {
+  it('trims a range that runs past the end of the file', async () => {
+    const { clampToFile } = await import('../src/anchor.js');
+
+    // A five-line file; a comment claiming lines 4-40 means lines 4-5.
+    expect(clampToFile(['a', 'b', 'c', 'd', 'e'].length, 4, 40)).toEqual({ startLine: 4, endLine: 5 });
+  });
+
+  it('leaves a range inside the file alone', async () => {
+    const { clampToFile } = await import('../src/anchor.js');
+
+    expect(clampToFile(10, 3, 7)).toEqual({ startLine: 3, endLine: 7 });
+  });
+
+  it('pins a start line past the end to the last line', async () => {
+    const { clampToFile } = await import('../src/anchor.js');
+
+    expect(clampToFile(5, 9, 12)).toEqual({ startLine: 5, endLine: 5 });
+  });
+
+  it('does nothing when the file length is unknown', async () => {
+    const { clampToFile } = await import('../src/anchor.js');
+
+    expect(clampToFile(null, 4, 40)).toEqual({ startLine: 4, endLine: 40 });
+  });
+})
+
+describe('countLines', () => {
+  it('does not count the empty string after a trailing newline', async () => {
+    const { countLines } = await import('../src/anchor.js');
+
+    expect(countLines('a\nb\nc\n')).toBe(3);
+  });
+
+  it('counts a file with no trailing newline', async () => {
+    const { countLines } = await import('../src/anchor.js');
+
+    expect(countLines('a\nb\nc')).toBe(3);
+  });
+
+  it('handles the empty file', async () => {
+    const { countLines } = await import('../src/anchor.js');
+
+    expect(countLines('')).toBe(0);
+    expect(countLines('\n')).toBe(1);
+  });
+})

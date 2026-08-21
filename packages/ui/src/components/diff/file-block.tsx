@@ -154,18 +154,22 @@ export function FileBlock(props: FileBlockProps) {
     const anchored: typeof allFileThreads = [];
     const orphaned: typeof allFileThreads = [];
     for (const thread of allFileThreads) {
-      let isInDiff = false;
+      // A thread renders beside its end line, so a range running past what the diff shows -- a
+      // comment written against lines the hunk does not reach -- would be counted and
+      // highlighted but never displayed. It attaches to the last line that is actually there.
+      let lastRendered: number | null = null;
       for (let line = thread.startLine; line <= thread.endLine; line++) {
         if (diffLineNumbers.has(`${thread.side}:${line}`)) {
-          isInDiff = true;
-          break;
+          lastRendered = line;
         }
       }
 
-      if (isInDiff) {
+      if (lastRendered === null) {
+        orphaned.push(thread);
+      } else if (lastRendered === thread.endLine) {
         anchored.push(thread);
       } else {
-        orphaned.push(thread);
+        anchored.push({ ...thread, endLine: lastRendered });
       }
     }
 

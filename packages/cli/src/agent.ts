@@ -14,7 +14,7 @@ import {
   type Thread,
 } from './threads.js';
 import { createTour, addTourStep, updateTourStatus } from './tours.js';
-import { readAnchor } from './anchor.js';
+import { readAnchor, clampToFile, countWorkingTreeLines } from './anchor.js';
 import { startReviewRun, finishReviewRun } from './review-run.js';
 import { readRepoConfig, DEFAULT_SEVERITIES, resolveInRepo, REPO_CONFIG_FILE } from '@diffity/git';
 import { readFileSync } from 'node:fs';
@@ -159,17 +159,27 @@ Examples:
           process.exit(1);
         }
       }
-      const endLine = opts.endLine ?? opts.line;
+      const requested = opts.endLine ?? opts.line;
+      const { startLine, endLine } = clampToFile(
+        countWorkingTreeLines(opts.file),
+        opts.line,
+        requested,
+      );
+      if (endLine !== requested || startLine !== opts.line) {
+        console.error(
+          pc.yellow(`Warning: ${opts.file} has fewer lines than ${opts.line}-${requested}; anchored to ${startLine}-${endLine}`),
+        );
+      }
       const thread = createThread(
         session.id,
         opts.file,
         opts.side,
-        opts.line,
+        startLine,
         endLine,
         opts.body,
         { name: 'Agent', type: 'agent' },
         // Recorded so the finding can follow its code when a later commit moves it.
-        opts.side === 'new' ? readAnchor(opts.file, opts.line, endLine) : undefined,
+        opts.side === 'new' ? readAnchor(opts.file, startLine, endLine) : undefined,
       );
       console.log(pc.green(`Created thread ${thread.id.slice(0, 8)}`));
     });
