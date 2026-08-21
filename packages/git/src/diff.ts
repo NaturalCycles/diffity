@@ -1,4 +1,4 @@
-import { exec, execLarge, execLines, execWithStdin, git } from './exec.js';
+import { git, gitLines, gitWithStdin } from './exec.js';
 
 /**
  * Flags that neutralize user git config which would otherwise alter the diff
@@ -16,12 +16,11 @@ const DIFF_FORMAT_ARGS = [
 ];
 
 export function getDiff(args: string[] = []): string {
-  const cmd = ['git', 'diff', ...DIFF_FORMAT_ARGS, ...args].join(' ');
-  return execLarge(cmd);
+  return git(['diff', ...DIFF_FORMAT_ARGS, ...args]);
 }
 
 export function getUntrackedFiles(): string[] {
-  return execLines('git ls-files --others --exclude-standard');
+  return gitLines(['ls-files', '--others', '--exclude-standard']);
 }
 
 export function getUntrackedDiff(files: string[]): string {
@@ -29,7 +28,7 @@ export function getUntrackedDiff(files: string[]): string {
 
   for (const file of files) {
     try {
-      execLarge(`git diff ${DIFF_FORMAT_ARGS.join(' ')} --no-index -- /dev/null "${file}"`);
+      git(['diff', ...DIFF_FORMAT_ARGS, '--no-index', '--', '/dev/null', file]);
     } catch (err: unknown) {
       const error = err as { stdout?: string; status?: number };
       if (error.status === 1 && error.stdout) {
@@ -77,7 +76,7 @@ export function resolveRef(ref: string, extraArgs: string[] = []): string {
 export function getDiffFiles(ref: string): string[] {
   const resolved = resolveDiffArgs(ref);
 
-  const tracked = execLines(`git diff ${DIFF_FORMAT_ARGS.join(' ')} --name-only ${resolved.args.join(' ')}`.trim());
+  const tracked = gitLines(['diff', ...DIFF_FORMAT_ARGS, '--name-only', ...resolved.args]);
   if (resolved.includeUntracked) {
     const untracked = getUntrackedFiles();
     return [...new Set([...tracked, ...untracked])];
@@ -86,9 +85,8 @@ export function getDiffFiles(ref: string): string[] {
 }
 
 export function getDiffStat(args: string[] = []): string {
-  const cmd = ['git', 'diff', ...DIFF_FORMAT_ARGS, '--stat', ...args].join(' ');
   try {
-    return execLarge(cmd);
+    return git(['diff', ...DIFF_FORMAT_ARGS, '--stat', ...args]);
   } catch {
     return '';
   }
@@ -106,18 +104,19 @@ export function getDiffStatForRef(ref: string): string {
 
 export function revertFile(filePath: string, isUntracked: boolean): void {
   if (isUntracked) {
-    exec(`rm "${filePath}"`);
+    // git refuses paths outside the repository, which a bare `rm` would not.
+    git(['clean', '--force', '--', filePath]);
   } else {
-    exec(`git checkout HEAD -- "${filePath}"`);
+    git(['checkout', 'HEAD', '--', filePath]);
   }
 }
 
 export function revertHunk(patch: string): void {
-  execWithStdin('git apply --reverse --unidiff-zero', patch);
+  gitWithStdin(['apply', '--reverse', '--unidiff-zero'], patch);
 }
 
 export function getMergeBase(a: string, b: string): string {
-  return exec(`git merge-base ${a} ${b}`);
+  return git(['merge-base', a, b]);
 }
 
 function isLocalBranch(ref: string): boolean {
@@ -201,12 +200,12 @@ export function resolveBaseRef(ref: string): string {
 }
 
 export function getFileContent(path: string, ref = 'HEAD'): string {
-  return exec(`git show ${ref}:${path}`);
+  return git(['show', `${ref}:${path}`]);
 }
 
 export function getFileLineCount(path: string, ref = 'HEAD'): number | null {
   try {
-    const content = exec(`git show ${ref}:${path}`);
+    const content = git(['show', `${ref}:${path}`]);
     return content.split('\n').length;
   } catch {
     return null;
