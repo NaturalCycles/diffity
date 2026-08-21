@@ -276,6 +276,24 @@ Point it **outside** the working tree, or add it to `.gitignore`. Otherwise the 
 untracked files in the very diff you are reviewing; diffity warns on startup when that happens.
 The database quotes the code under review, so it is created readable only by you.
 
+## Review standards
+
+An agent reviewing a diff can be told what this project reviews against, so the standards live with
+the code rather than in one person's agent configuration:
+
+```json
+{
+  "review": {
+    "severities": ["P1", "P2", "P3"],
+    "standards": ".claude/skills/code-review/SKILL.md"
+  }
+}
+```
+
+`severities` are the labels findings are prefixed with, most severe first, defaulting to
+`P1`/`P2`/`P3`. `standards` is a repository-relative path to a document the agent reads before
+reviewing. `diffity agent standards` prints both, and the review skill reads it first.
+
 ## License
 
 [PolyForm Shield 1.0.0](./LICENSE) © [Kamran Ahmed](https://x.com/kamrify)

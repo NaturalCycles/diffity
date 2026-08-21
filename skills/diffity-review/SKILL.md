@@ -16,6 +16,7 @@ You are reviewing a diff and leaving inline comments using the `diffity agent` C
 ## CLI Reference
 
 ```
+diffity agent standards [--json]
 diffity agent diff
 diffity agent list [--status open|resolved|dismissed] [--json]
 diffity agent comment --file <path> --line <n> [--end-line <n>] [--side new|old] --body "<text>"
@@ -23,6 +24,9 @@ diffity agent general-comment --body "<text>"
 diffity agent resolve <id> [--summary "<text>"]
 diffity agent dismiss <id> [--reason "<text>"]
 diffity agent reply <id> --body "<text>"
+diffity agent tour-start --topic "<text>" [--body "<text>"] --json
+diffity agent tour-step --tour <id> --file <path> --line <n> [--end-line <n>] --body "<text>" [--annotation "<text>"]
+diffity agent tour-done --tour <id>
 ```
 
 - `--file`, `--line`, `--body` are required for `comment`
@@ -59,11 +63,16 @@ The review needs a running session whose ref matches the requested ref. A ref mi
    diffity agent diff
    ```
    This outputs the full unified diff for the current session. Line numbers are in the `@@` hunk headers.
-2. Find and read all relevant CLAUDE.md files — the root CLAUDE.md and any CLAUDE.md files in directories containing modified files. These define project-specific rules that the diff must follow.
+2. **Read the project's review standards.** Run `diffity agent standards`. A project can point
+   `review.standards` in `.diffity.json` at its own standards document, and set `review.severities`
+   to the labels its reviewers use. Whatever it prints outranks the generic guidance in this skill:
+   it is what this team has agreed to review against. If nothing is configured, carry on with the
+   defaults below.
+3. Find and read all relevant CLAUDE.md files — the root CLAUDE.md and any CLAUDE.md files in directories containing modified files. These define project-specific rules that the diff must follow.
 
 #### Assess the change size and adapt your strategy
 
-3. **Gauge the diff size** and plan your approach. Every file gets a thorough review regardless of diff size — the difference is how you organize the work:
+4. **Gauge the diff size** and plan your approach. Every file gets a thorough review regardless of diff size — the difference is how you organize the work:
    - **Small** (under ~100 changed lines, 1-3 files): Straightforward — review each file in order.
    - **Medium** (100-500 changed lines, 3-10 files): Group files by area (e.g. backend, frontend, tests, config). Review core logic files first so you understand intent before reviewing the ripple effects.
    - **Large** (500+ changed lines or 10+ files): Group files by area. Start with core logic, then review every remaining file. For mechanically repetitive changes (e.g. the same rename applied to 20 files), verify the pattern is correct on the first few instances, then check every remaining instance for deviations from the pattern — don't skip any, but you can check them faster once the pattern is established.
@@ -72,7 +81,7 @@ The review needs a running session whose ref matches the requested ref. A ref mi
 
 #### Understand the change before reviewing it
 
-4. **Summarize the change first.** Before looking for problems, build a mental model of the diff:
+5. **Summarize the change first.** Before looking for problems, build a mental model of the diff:
    - What is this change trying to accomplish? (new feature, bug fix, refactor, config change)
    - Which files are structural changes vs. the core logic change?
    - What is the author's intent? Read commit messages (`git log --oneline <args>`) and any linked issues or PR descriptions for context.
@@ -80,12 +89,12 @@ The review needs a running session whose ref matches the requested ref. A ref mi
 
    Understanding intent helps you distinguish intentional behavior from real bugs.
 
-5. For each changed file (adjusted by size strategy above), read the **entire file** (not just the diff hunks) to understand the full context.
-6. **Cross-reference callers and dependents.** For any changed function signature, renamed export, modified return type, or altered behavior: grep for usages across the codebase. A function that looks correct in isolation can break every caller. Check:
+6. For each changed file (adjusted by size strategy above), read the **entire file** (not just the diff hunks) to understand the full context.
+7. **Cross-reference callers and dependents.** For any changed function signature, renamed export, modified return type, or altered behavior: grep for usages across the codebase. A function that looks correct in isolation can break every caller. Check:
    - Who calls this function? Will they handle the new return value / error / null case?
    - Who imports this module? Will the changed export name resolve?
    - Does this type change propagate correctly to consumers?
-7. Analyze the code changes using the techniques below. If a `focus` argument was provided, concentrate on that area. Otherwise, apply all analysis passes and the signal threshold.
+8. Analyze the code changes using the techniques below. If a `focus` argument was provided, concentrate on that area. Otherwise, apply all analysis passes and the signal threshold.
 
 #### How to analyze
 
@@ -170,12 +179,19 @@ If a repeated pattern appears across files, comment on the first occurrence and 
 
 ### Step 3: Leave comments
 
-1. **Order comments by severity.** Post all `[must-fix]` comments first, then `[suggestion]`, then `[question]`. Within each severity, follow file order. This ensures the most important issues are seen first if the author skims.
+1. **Order comments by severity**, most severe first, and within a severity follow file order. The
+   most important issues are then seen first by someone who skims.
 
-2. Categorize each finding with a severity prefix in the comment body:
+2. Prefix each finding with its severity. Use the labels `diffity agent standards` printed — they
+   are what this project's reviewers read, and matching them is what makes a review usable rather
+   than merely correct. `P1: …`, `P2: …`, `P3: …` are the default. Only when a project configures
+   nothing, fall back to:
    - `[must-fix]` — Bugs, security issues, data loss risks. Code that will break or produce wrong results.
    - `[suggestion]` — Concrete improvements with a clear reason. Not style preferences — real improvements. This includes missing tests, incomplete changes, and better approaches.
    - `[question]` — Something unclear that needs clarification from the author.
+
+   Whichever vocabulary applies, the most severe label means *this must not merge*. Do not inflate:
+   a review where everything is severe tells the reader nothing.
 
 3. For each finding, leave an inline comment using:
    ```
@@ -199,7 +215,25 @@ If a repeated pattern appears across files, comment on the first occurrence and 
    diffity agent general-comment --body "<overall review summary>"
    ```
 
-### Step 4: Open the browser
+### Step 4: Set the reading order
+
+A diff is served alphabetically, which is rarely the order it should be read in. Give the reader
+one, unless the change is a single file:
+
+1. Decide the order someone should read the change in — the piece that explains the rest first, the
+   call sites and their ripple effects after, mechanical or signature-only files last.
+2. Record it:
+   ```
+   diffity agent tour-start --topic "Reading order" --body "<why this order>" --json
+   diffity agent tour-step --tour <id> --file <path> --line <n> [--end-line <n>] \
+     --body "<what to understand here>" --annotation "<3-6 words on why it is read here>"
+   diffity agent tour-done --tour <id>
+   ```
+3. The `--annotation` becomes the file's label in the reordered file list, so make it say *why* this
+   file is read at this point ("the primitive", "first consumer", "where the P1 lives") rather than
+   restating its name. Point a step at the most important lines in the file, not line 1.
+
+### Step 5: Open the browser
 
 1. Open the browser now that comments are ready:
    ```
@@ -210,6 +244,8 @@ If a repeated pattern appears across files, comment on the first occurrence and 
 
    > Review complete — check your browser.
    >
-   > Found: 2 must-fix, 1 suggestion
+   > Found: 1 P1, 2 P2. The file list is in reading order; the P1 is on the last stop.
    >
    > When you're ready, run **/diffity-resolve** to fix them.
+
+   Report the counts using the same labels you used in the comments.
