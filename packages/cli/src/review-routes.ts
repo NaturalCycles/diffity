@@ -11,7 +11,7 @@ import {
   type ThreadAuthor,
   type ThreadStatus,
 } from './threads.js';
-import { getCurrentSession } from './session.js';
+import { getCurrentSession, resolveSessionId } from './session.js';
 import { sendJson, sendError, withJsonBody } from './http-utils.js';
 
 export function handleReviewRoute(req: IncomingMessage, res: ServerResponse, pathname: string, url: URL): boolean {
@@ -22,9 +22,9 @@ export function handleReviewRoute(req: IncomingMessage, res: ServerResponse, pat
   }
 
   if (pathname === '/api/threads' && req.method === 'GET') {
-    const sid = url.searchParams.get('session');
+    const sid = resolveSessionId(url.searchParams.get('session'));
     if (!sid) {
-      sendError(res, 400, 'Missing session parameter');
+      sendError(res, 400, 'No review session');
       return true;
     }
     const status = url.searchParams.get('status') as ThreadStatus | null;

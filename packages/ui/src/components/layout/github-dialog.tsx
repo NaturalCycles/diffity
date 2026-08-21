@@ -25,6 +25,8 @@ interface GitHubDialogProps {
   details: GitHubDetails;
   threads: CommentThread[];
   sessionId: string | null;
+  /** An agent is still writing findings, so the review is not ready to leave the machine. */
+  reviewInProgress?: boolean;
   onPulled: () => void;
   onClose: () => void;
 }
@@ -42,7 +44,7 @@ function lineLabel(thread: CommentThread): string {
 }
 
 export function GitHubDialog(props: GitHubDialogProps) {
-  const { details, threads, sessionId, onPulled, onClose } = props;
+  const { details, threads, sessionId, reviewInProgress, onPulled, onClose } = props;
   const [commentCount, setCommentCount] = useState(details.commentCount);
   const [submitting, setSubmitting] = useState(false);
   const [pulling, setPulling] = useState(false);
@@ -84,7 +86,7 @@ export function GitHubDialog(props: GitHubDialogProps) {
   }, [onClose]);
 
   const chosen = submittable.filter(thread => selected.has(thread.id));
-  const canSubmit = chosen.length > 0 || summary.trim().length > 0;
+  const canSubmit = !reviewInProgress && (chosen.length > 0 || summary.trim().length > 0);
 
   const toggle = (id: string) => {
     setSelected(prev => {
@@ -262,6 +264,13 @@ export function GitHubDialog(props: GitHubDialogProps) {
               </ul>
             )}
           </div>
+
+          {reviewInProgress && (
+            <div className="flex items-center gap-2 px-2.5 py-2 rounded-md border border-accent/40 bg-accent/10 text-[11px] text-text">
+              A review is still in progress — more findings may arrive. Wait for it to finish
+              before submitting.
+            </div>
+          )}
 
           <div className="flex items-center gap-2">
             <div className="flex items-center gap-1 flex-1">

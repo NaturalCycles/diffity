@@ -19,6 +19,8 @@ You are reviewing a diff and leaving inline comments using the `diffity agent` C
 ## CLI Reference
 
 ```
+diffity agent review-start [--note "<text>"]
+diffity agent review-done
 diffity agent standards [--json]
 diffity agent diff
 diffity agent list [--status open|resolved|dismissed] [--json]
@@ -53,7 +55,23 @@ diffity agent tour-done --tour <id>
 
 ## Instructions
 
-### Step 0: Decide what to review
+### Step 0: Say that you have started
+
+As soon as the session exists, run:
+
+```
+diffity agent review-start --note "<what you are reviewing>"
+```
+
+The page then shows an unmissable banner, and submitting the review to the forge is blocked
+until you finish. Without it a reader cannot tell "nothing found" from "not finished looking",
+and may approve the change while findings are still arriving.
+
+Run `diffity agent review-done` as the last thing you do, **after** the comments and the
+reading order are in — including when you found nothing, and including when you give up early.
+Leaving a review marked in progress blocks submission indefinitely.
+
+### Step 0b: Decide what to review
 
 Only when no `ref` argument was given:
 

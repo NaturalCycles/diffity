@@ -133,6 +133,7 @@ export function Toolbar(props: ToolbarProps) {
     branch,
     description,
     githubDetails,
+    reviewInProgress,
     sessionId,
     onGitHubPulled,
   } = props;
@@ -220,6 +221,7 @@ export function Toolbar(props: ToolbarProps) {
       {showGitHub && githubDetails && (
         <GitHubDialog
           details={githubDetails}
+          reviewInProgress={reviewInProgress}
           threads={threads}
           sessionId={sessionId ?? null}
           onPulled={() => onGitHubPulled?.()}

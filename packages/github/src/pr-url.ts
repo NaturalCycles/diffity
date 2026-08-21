@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { exec } from './exec.js';
 import type { PrBase } from './types.js';
 
@@ -21,7 +22,19 @@ export function parseGitHubPrUrl(url: string): { owner: string; repo: string; nu
 }
 
 export function checkoutPr(prNumber: number): void {
-  exec(`gh pr checkout ${prNumber}`);
+  try {
+    exec(`gh pr checkout ${prNumber}`);
+    return;
+  } catch (err) {
+    // A merged pull request usually has its branch deleted, and gh can only check out a branch.
+    // The forge keeps refs/pull/<n>/head either way, which is what a review actually needs.
+    try {
+      execFileSync('git', ['fetch', 'origin', `refs/pull/${prNumber}/head`], { stdio: 'pipe' });
+      execFileSync('git', ['checkout', '--detach', 'FETCH_HEAD'], { stdio: 'pipe' });
+    } catch {
+      throw err;
+    }
+  }
 }
 
 export function parsePrBase(json: string): PrBase {
