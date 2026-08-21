@@ -2,9 +2,9 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { removePrefixedDirs, DEV_SKILL_PREFIX } from './utils.js';
+import { cleanManagedSkills, DEV_SKILL_PREFIX } from './utils.js';
 
-describe('removePrefixedDirs', () => {
+describe('cleanManagedSkills', () => {
   let dir: string;
 
   beforeEach(() => {
@@ -24,12 +24,11 @@ describe('removePrefixedDirs', () => {
     writeFileSync(join(dir, 'loose-file.md'), 'not a skill');
   }
 
-  it('removes only directories matching the prefix', () => {
+  it('removes only the directories it manages', () => {
     seed();
 
-    const removed = removePrefixedDirs(dir, DEV_SKILL_PREFIX);
+    cleanManagedSkills(dir, DEV_SKILL_PREFIX);
 
-    expect(removed).toEqual([`${DEV_SKILL_PREFIX}-review`]);
     expect(readdirSync(dir).sort()).toEqual(['loose-file.md', 'slack-canvas', 'standup']);
     expect(existsSync(join(dir, 'slack-canvas', 'scripts', 'slack-canvas.sh'))).toBe(true);
   });
@@ -37,19 +36,24 @@ describe('removePrefixedDirs', () => {
   it('leaves the containing directory in place', () => {
     seed();
 
-    removePrefixedDirs(dir, DEV_SKILL_PREFIX);
+    cleanManagedSkills(dir, DEV_SKILL_PREFIX);
 
     expect(existsSync(dir)).toBe(true);
   });
 
-  it('returns nothing when the directory does not exist', () => {
-    expect(removePrefixedDirs(join(dir, 'missing'), DEV_SKILL_PREFIX)).toEqual([]);
+  it('creates the directory when it does not exist yet', () => {
+    const missing = join(dir, 'nested', 'skills');
+
+    cleanManagedSkills(missing, DEV_SKILL_PREFIX);
+
+    expect(existsSync(missing)).toBe(true);
   });
 
-  it('rejects an empty prefix instead of removing everything', () => {
+  it('does not treat an empty prefix as "everything"', () => {
     seed();
 
-    expect(() => removePrefixedDirs(dir, '')).toThrow(/non-empty prefix/);
+    cleanManagedSkills(dir, '');
+
     expect(readdirSync(dir)).toHaveLength(4);
   });
 });

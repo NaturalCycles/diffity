@@ -4,7 +4,7 @@ import { execSync } from 'child_process';
 import { dirname, resolve, join } from 'path';
 import { fileURLToPath } from 'url';
 import concurrently from 'concurrently';
-import { removePrefixedDirs, DEV_SKILL_PREFIX } from './lib/utils.js';
+import { cleanManagedSkills, DEV_SKILL_PREFIX } from './lib/utils.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = resolve(__dirname, '..');
@@ -19,8 +19,8 @@ const globalClaudeSkillsDir = join(homeDir, '.claude', 'skills');
 
 function cleanupDevSkills() {
   try {
-    const removed = removePrefixedDirs(globalClaudeSkillsDir, DEV_SKILL_PREFIX);
-    console.log(`Cleaned up ${removed.length} dev skills`);
+    cleanManagedSkills(globalClaudeSkillsDir, DEV_SKILL_PREFIX);
+    console.log('Cleaned up dev skills');
   } catch {}
 }
 

@@ -71,25 +71,15 @@ export function cleanDir(dir: string): void {
 
 export const DEV_SKILL_PREFIX = 'diffity-dev';
 
-// `dir` holds skills this repo does not own, so only our own prefixed entries may be removed —
-// never the directory itself.
-export function removePrefixedDirs(dir: string, prefix: string): string[] {
-  if (!prefix) {
-    throw new Error('removePrefixedDirs requires a non-empty prefix');
-  }
-
-  if (!existsSync(dir)) {
-    return [];
-  }
-
-  const removed: string[] = [];
+// Remove only the skill directories diffity manages (those named `${prefix}-*`),
+// leaving any other skills in the directory untouched. Unlike cleanDir, this is
+// safe to run against a shared location like ~/.claude/skills, which may hold
+// the user's own skills or skills installed by other tools.
+export function cleanManagedSkills(dir: string, prefix: string): void {
+  mkdirSync(dir, { recursive: true });
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (!entry.isDirectory() || !entry.name.startsWith(prefix)) {
-      continue;
+    if (entry.isDirectory() && entry.name.startsWith(`${prefix}-`)) {
+      rmSync(join(dir, entry.name), { recursive: true, force: true });
     }
-    rmSync(join(dir, entry.name), { recursive: true, force: true });
-    removed.push(entry.name);
   }
-
-  return removed;
 }
