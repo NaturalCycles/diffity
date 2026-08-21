@@ -1,0 +1,71 @@
+# Fork ledger
+
+What this fork changes relative to [nilbuild/diffity](https://github.com/nilbuild/diffity), so any
+of it can be extracted as a pointed upstream pull request later.
+
+Every branch below is a **single concern** and they are **stacked** in the order listed, each based
+on the previous. To extract one as a standalone patch against upstream:
+
+```bash
+git diff <its-base-branch>..<its-branch>
+```
+
+Nothing here is NaturalCycles-specific yet — all of it is upstreamable as-is. When that changes,
+fork-local work goes in its own section below so it never lands in an upstream patch by accident.
+
+## Upstream pull requests merged in
+
+Merged unmodified, so they can simply be dropped once upstream lands them.
+
+| Fork PR | Upstream | Author | What |
+| --- | --- | --- | --- |
+| #1 | [#30](https://github.com/nilbuild/diffity/pull/30) | @kleinjm | `cleanManagedSkills`, so the build stops wiping `~/.claude/skills` |
+| #2 | [#32](https://github.com/nilbuild/diffity/pull/32) | @sdirix | `better-sqlite3` → built-in `node:sqlite` |
+| #3 | [#31](https://github.com/nilbuild/diffity/pull/31) | @sdirix | neutralize git config that corrupts diff parsing |
+| #3 | [#26](https://github.com/nilbuild/diffity/pull/26) | @stuartsaunders | exclude untracked files from ref-range diffs |
+| #3 | [#36](https://github.com/nilbuild/diffity/pull/36) | @gustavo-depaula | ENOBUFS on `git ls-files` in large repositories |
+| #4 | [#33](https://github.com/nilbuild/diffity/pull/33) | @antoniocapelo | wrap-lines toggle, sticky file header |
+| #4 | [#35](https://github.com/nilbuild/diffity/pull/35) | @adamward459 | viewed-file state persisted across reloads |
+
+[#21](https://github.com/nilbuild/diffity/pull/21) was deliberately **not** taken: #31 covers the
+same `--no-ext-diff` more broadly, and the two call sites #21 additionally covered are handled in
+our own change on #3.
+
+## Ours, offerable upstream
+
+| Fork PR | Branch | Base | What | Notes for upstreaming |
+| --- | --- | --- | --- | --- |
+| #1 | `fix-build-skills-wipe` | `main` | `dev.ts` wiped `~/.claude/skills` on SIGINT too; `DIFFITY_SKIP_DEV_SKILLS`; regression test; root `test:scripts` | Offer as a follow-up **to #30**, whose author fixed only the `build-skills.ts` half |
+| #3 | `upstream-git-fixes` | `node-sqlite` | applies #31's `DIFF_FORMAT_ARGS` to `--name-only` and `--stat` too, where `color.ui=always` injected ANSI into parsed file names | Offer as a review comment on #31 |
+| #5 | `bind-loopback` | `upstream-ui` | server bound the wildcard interface with `ACAO: *` and no auth. `DIFFITY_BIND` (default loopback), CORS headers removed, writes require same-origin, `nosniff` | Independent; the strongest single fix |
+| #6 | `pr-base-oid` | `bind-loopback` | PR diffs used the base branch *name* against the stale local branch. Uses `baseRefOid`. `vitest` wired for `@diffity/github` | Independent |
+| #7 | `theme-system-default` | `pr-base-oid` | theme falls back to `prefers-color-scheme` and follows it until the reader chooses | Independent |
+| #8 | `ref-upstream` | `theme-system-default` | a bare local branch name that is behind its upstream resolves to the upstream; adds argv-form `git()` | Independent |
+| #9 | `pin-pr-ref` | `ref-upstream` | a `/diff` request whose `ref` disagrees with the PR base is redirected to it | Depends on #6 |
+| #10 | `argv-git` | `pin-pr-ref` | every git call in `@diffity/git` goes through argv instead of `/bin/sh -c`; a PR file named `evil$(…)` executed on open | Independent of #8 in intent, but touches the same helper |
+| #11 | `path-containment` | `argv-git` | percent-encoded `../` in `/api/tree/…` read any file; `resolveInRepo` plus inert raw responses | Independent |
+| #12 | `sanitize-markdown` | `path-containment` | `rehype-raw` had no sanitizer; adds `rehype-sanitize` and a CSP; widens the UI vitest include to `.tsx` | Independent |
+
+## Known and not yet done
+
+From the security audit, in rough priority order:
+
+- `packages/github` still interpolates `owner`/`repo` into `gh api …` shell strings, and neither is
+  validated. Delivery path is a submodule's attacker-controlled `.gitmodules` URL. (audit P2-1)
+- `detectRemote()` reads only `origin` while `gh pr view` resolves a fork's **parent**, so in a
+  fork workflow a review can be pushed to the wrong repository. (audit P2-2)
+- `~/.diffity` is created 0775/0664, and `reviews.db` holds `anchor_content` — actual source lines
+  from the code under review. Should be 0700/0600. (audit P2-4)
+- `detection.ts`'s remote regex is an unanchored substring match on `github.com`. (audit P3)
+- `git ls-files` in `tree.ts` has no `--` before its path arguments, so `?path=-x` is read as an
+  option. (audit P3)
+- `update.ts` runs an unpinned `npm install -g` with install scripts enabled. (audit P3)
+- `link-dev.ts` appends a `PATH` line to `~/.bashrc` from `npm run dev`. Should print it instead.
+- Hash-based `script-src`, computed from `index.html` at server start, would remove the
+  `'unsafe-inline'` caveat in #12.
+
+## Fork-local, do not upstream
+
+Nothing yet. Expected to land here: configurable repo resolution (clone/worktree strategies for
+reviewing a PR from outside its checkout), a severity vocabulary, and a configurable review
+signature.
