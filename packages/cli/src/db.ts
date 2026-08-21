@@ -1,3 +1,4 @@
+import { chmodSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
@@ -19,6 +20,18 @@ function loadSqlite(): { DatabaseSync: new (path: string) => DatabaseSync } {
   }
 }
 
+// The database holds `anchor_content` — the actual source lines a comment is attached to — so
+// it must not be world-readable. WAL and shared-memory siblings hold the same content.
+function restrictToOwner(dbPath: string): void {
+  for (const path of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+    try {
+      chmodSync(path, 0o600);
+    } catch {
+      // Not all siblings exist at every moment; the ones that do are what matter.
+    }
+  }
+}
+
 export function getDb(): DatabaseSync {
   if (db) {
     return db;
@@ -27,6 +40,7 @@ export function getDb(): DatabaseSync {
   const { DatabaseSync: Database } = loadSqlite();
   const dbPath = join(getDiffityDir(), 'reviews.db');
   db = new Database(dbPath);
+  restrictToOwner(dbPath);
   db.exec('PRAGMA journal_mode = WAL');
   db.exec('PRAGMA foreign_keys = ON');
   migrateDb(db);
