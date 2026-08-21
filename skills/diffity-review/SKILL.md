@@ -10,7 +10,10 @@ You are reviewing a diff and leaving inline comments using the `diffity agent` C
 
 ## Arguments
 
-- `ref` (optional): Git ref to review (e.g. `main..feature`, `HEAD~3`). Defaults to working tree changes. When both `ref` and `focus` are provided, use both (e.g. `/diffity-review main..feature security`).
+- `ref` (optional): Git ref to review (e.g. `main..feature`, `HEAD~3`). When both `ref` and `focus` are provided, use both (e.g. `/diffity-review main..feature security`).
+  With no `ref`, review **the pull request for the current branch** if there is one, and the working
+  tree otherwise — see Step 0. "Review my draft PR" with everything committed means the pull
+  request, not the empty set of uncommitted changes.
 - `focus` (optional): Focus the review on a specific area. One of: `security`, `performance`, `naming`, `errors`, `types`, `logic`. If omitted, review everything.
 
 ## CLI Reference
@@ -38,8 +41,34 @@ diffity agent tour-done --tour <id>
 ## Prerequisites
 
 1. Check that `diffity` is available: run `which diffity`. If not found, install it with `npm install -g diffity`.
+2. **Work out which repository to use.** A project directory often holds several worktrees as
+   subdirectories rather than being a repository itself, so the current directory may not be one.
+   - If the current directory is a git repository (`git rev-parse --show-toplevel` succeeds), use it.
+   - Otherwise look one level down for directories containing a `.git` entry. Exactly one → use it.
+     Several → **ask the user which one**, listing them with their current branch, and stop until
+     they answer. Guessing here reviews the wrong branch, which wastes the whole review.
+   - Pass the chosen directory to every `diffity` call as `--repo <path>`, before any positional
+     argument. Do not `cd`.
+
 
 ## Instructions
+
+### Step 0: Decide what to review
+
+Only when no `ref` argument was given:
+
+1. Ask GitHub whether the current branch has a pull request:
+   ```
+   gh pr view --json number,url,isDraft,baseRefName
+   ```
+2. If it returns one, **review the pull request**: use its URL as the ref
+   (`diffity --repo <path> --no-open <pr-url>`). diffity pins the diff to the pull request's base
+   commit, so it matches what GitHub shows — a plain working-tree diff on a branch whose work is
+   committed would be empty. A draft counts; that is the usual case for a review before marking it
+   Ready.
+3. If there is no pull request, or `gh` is unavailable, review the working tree as before.
+
+State which one you chose in your first message, so the user can correct you cheaply.
 
 ### Step 1: Ensure diffity is running for the correct ref (without opening browser)
 
