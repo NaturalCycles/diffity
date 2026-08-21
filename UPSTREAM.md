@@ -51,6 +51,8 @@ our own change on #3.
 | #17 | `session-continuity` | `project-data-dir` | open threads and walkthroughs follow the session when HEAD moves, instead of being stranded in the old one | Independent, and required for reviewing your own change |
 | #18 | `reanchor` | `session-continuity` | `agent comment` records `anchor_content`, and carrying a session forward moves each open thread to where its code went | Depends on #17 |
 | #19 | `review-standards` | `reanchor` | `review.severities` and `review.standards` in `.diffity.json`, `agent standards` to read them, and the review skill reads them first and records a reading order | Independent |
+| #20 | `repo-flag` | `review-standards` | `--repo <path>` for when the working directory is not the repository; skills look one level down and ask when ambiguous; a bare review reviews the branch's pull request rather than an empty working tree | Independent |
+| #21 | `dev-skill-sync-opt-in` | `repo-flag` | a build no longer writes `diffity-dev-*` into `~/.claude/skills` unless `DIFFITY_SYNC_DEV_SKILLS=1` | Independent; the root cause behind #1 |
 
 ## Known and not yet done
 
@@ -83,8 +85,11 @@ From the security audit, in rough priority order:
 - **`diffity review <pr-url>` as one command** with the agent's progress shown in the page. The
   own-PR loop no longer needs it — the coding agent drives `agent comment` itself — but reviewing
   *someone else's* PR still starts with two commands.
-- **Configurable repo resolution** — `cwd` / `clone` / `worktree` strategies, so a colleague's PR
-  can be reviewed without already having its checkout.
+- **Configurable repo resolution** — `clone` / `worktree` strategies, so a colleague's PR can be
+  reviewed from a directory that has no checkout at all. #20 covers "the repository is a
+  subdirectory"; this covers "there is no repository yet", which is the reviewer lane.
+- **A user-level config** (`~/.config/diffity/config.json`, lowest precedence) so `severities` and
+  `standards` do not have to be committed to every repository being reviewed.
 - **A severity vocabulary and a review signature**, both configuration rather than code.
 
 ### Fixed, not queued
