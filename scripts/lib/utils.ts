@@ -68,3 +68,18 @@ export function cleanDir(dir: string): void {
   }
   mkdirSync(dir, { recursive: true });
 }
+
+export const DEV_SKILL_PREFIX = 'diffity-dev';
+
+// Remove only the skill directories diffity manages (those named `${prefix}-*`),
+// leaving any other skills in the directory untouched. Unlike cleanDir, this is
+// safe to run against a shared location like ~/.claude/skills, which may hold
+// the user's own skills or skills installed by other tools.
+export function cleanManagedSkills(dir: string, prefix: string): void {
+  mkdirSync(dir, { recursive: true });
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory() && entry.name.startsWith(`${prefix}-`)) {
+      rmSync(join(dir, entry.name), { recursive: true, force: true });
+    }
+  }
+}
