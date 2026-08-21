@@ -1,4 +1,5 @@
 import { exec } from './exec.js';
+import type { PrBase } from './types.js';
 
 const PR_URL_REGEX = /(?:https?:\/\/)?github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/;
 
@@ -23,6 +24,19 @@ export function checkoutPr(prNumber: number): void {
   exec(`gh pr checkout ${prNumber}`);
 }
 
-export function getPrBaseRef(prNumber: number): string {
-  return exec(`gh pr view ${prNumber} --json baseRefName --jq '.baseRefName'`);
+export function parsePrBase(json: string): PrBase {
+  const { baseRefName, baseRefOid } = JSON.parse(json) as {
+    baseRefName?: string;
+    baseRefOid?: string;
+  };
+
+  if (!baseRefName || !baseRefOid) {
+    throw new Error('Pull request response is missing baseRefName or baseRefOid');
+  }
+
+  return { name: baseRefName, oid: baseRefOid };
+}
+
+export function getPrBase(prNumber: number): PrBase {
+  return parsePrBase(exec(`gh pr view ${prNumber} --json baseRefName,baseRefOid`));
 }

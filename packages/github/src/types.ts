@@ -12,6 +12,16 @@ export interface GitHubDetails {
   commentCount: number;
 }
 
+export interface PrBase {
+  /** The base branch's name, for display. */
+  name: string;
+  /**
+   * The commit the pull request is based on. The diff must be taken from this, not from the
+   * local branch of the same name, which is usually behind the remote.
+   */
+  oid: string;
+}
+
 export interface PulledThreadComment {
   body: string;
   authorName: string;

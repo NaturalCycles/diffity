@@ -4,11 +4,12 @@ import { createRequire } from 'node:module';
 import open from 'open';
 import pc from 'picocolors';
 import { isGitRepo, isValidGitRef, getRepoRoot, getRepoName, normalizeRef, WORKING_TREE_REFS } from '@diffity/git';
+import type { PrBase } from '@diffity/github';
 import {
   isGitHubPrUrl,
   parseGitHubPrUrl,
   checkoutPr,
-  getPrBaseRef,
+  getPrBase,
   isCliInstalled,
   isAuthenticated,
   detectRemote,
@@ -100,6 +101,8 @@ range syntax (main..feature, main...feature) also work.`)
       }
     }
 
+    let prBase: PrBase | null = null;
+
     if (refs.length === 1 && isGitHubPrUrl(refs[0])) {
       const parsed = parseGitHubPrUrl(refs[0]);
       if (!parsed) {
@@ -147,15 +150,14 @@ range syntax (main..feature, main...feature) also work.`)
         process.exit(1);
       }
 
-      let baseRef: string;
       try {
-        baseRef = getPrBaseRef(parsed.number);
+        prBase = getPrBase(parsed.number);
       } catch {
         console.error(pc.red(`Error: Could not determine base branch for PR #${parsed.number}.`));
         process.exit(1);
       }
 
-      refs[0] = baseRef;
+      refs[0] = prBase.oid;
     }
 
     // --base/--compare flags take precedence over positional args
@@ -219,6 +221,10 @@ range syntax (main..feature, main...feature) also work.`)
       description = `${refs[0]}..${refs[1]}`;
     } else {
       description = 'Unstaged changes';
+    }
+
+    if (prBase) {
+      description = `Changes from ${prBase.name}`;
     }
 
     let effectiveRef: string;
