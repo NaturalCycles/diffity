@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { readRepoConfig, resolveDataDir } from '../src/config.js';
+import { readRepoConfig, resolveDataDir, DEFAULT_SEVERITIES } from '../src/config.js';
 
 let repoRoot: string;
 const homeDir = '/home/someone';
@@ -80,5 +80,46 @@ describe('readRepoConfig', () => {
     mkdirSync(join(repoRoot, '.diffity.json'));
 
     expect(readRepoConfig(repoRoot)).toEqual({});
+  });
+});
+
+describe('review config', () => {
+  it('reads severities and a standards path', () => {
+    writeFileSync(
+      join(repoRoot, '.diffity.json'),
+      JSON.stringify({ review: { severities: ['blocker', 'nit'], standards: 'docs/review.md' } }),
+    );
+
+    expect(readRepoConfig(repoRoot).review).toEqual({
+      severities: ['blocker', 'nit'],
+      standards: 'docs/review.md',
+    });
+  });
+
+  it('leaves review absent when the section is missing', () => {
+    writeFileSync(join(repoRoot, '.diffity.json'), JSON.stringify({ dataDir: '.notes' }));
+
+    expect(readRepoConfig(repoRoot)).toEqual({ dataDir: '.notes' });
+  });
+
+  it('ignores an empty or wrongly typed severity list', () => {
+    writeFileSync(join(repoRoot, '.diffity.json'), JSON.stringify({ review: { severities: [] } }));
+    expect(readRepoConfig(repoRoot).review).toBeUndefined();
+
+    writeFileSync(join(repoRoot, '.diffity.json'), JSON.stringify({ review: { severities: [1, 2] } }));
+    expect(readRepoConfig(repoRoot).review).toBeUndefined();
+  });
+
+  it('keeps a valid half when the other is malformed', () => {
+    writeFileSync(
+      join(repoRoot, '.diffity.json'),
+      JSON.stringify({ review: { severities: ['P1'], standards: 42 } }),
+    );
+
+    expect(readRepoConfig(repoRoot).review).toEqual({ severities: ['P1'] });
+  });
+
+  it('offers a default vocabulary', () => {
+    expect(DEFAULT_SEVERITIES).toEqual(['P1', 'P2', 'P3']);
   });
 });

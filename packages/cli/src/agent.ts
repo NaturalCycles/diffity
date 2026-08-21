@@ -14,6 +14,9 @@ import {
   type Thread,
 } from './threads.js';
 import { createTour, addTourStep, updateTourStatus } from './tours.js';
+import { readAnchor } from './anchor.js';
+import { readRepoConfig, DEFAULT_SEVERITIES, resolveInRepo, REPO_CONFIG_FILE } from '@diffity/git';
+import { readFileSync } from 'node:fs';
 
 function requireSession() {
   if (!isGitRepo()) {
@@ -164,6 +167,8 @@ Examples:
         endLine,
         opts.body,
         { name: 'Agent', type: 'agent' },
+        // Recorded so the finding can follow its code when a later commit moves it.
+        opts.side === 'new' ? readAnchor(opts.file, opts.line, endLine) : undefined,
       );
       console.log(pc.green(`Created thread ${thread.id.slice(0, 8)}`));
     });
@@ -236,6 +241,46 @@ Examples:
         process.exit(0);
       }
       process.stdout.write(raw);
+    });
+
+  agent
+    .command('standards')
+    .description("Print the project's review standards and severity labels")
+    .option('--json', 'Output as JSON')
+    .action((opts) => {
+      if (!isGitRepo()) {
+        console.error(pc.red('Error: Not a git repository'));
+        process.exit(1);
+      }
+
+      const { review } = readRepoConfig(getRepoRoot());
+      const severities = review?.severities ?? DEFAULT_SEVERITIES;
+      let standards: { path: string; content: string } | null = null;
+
+      if (review?.standards) {
+        try {
+          standards = {
+            path: review.standards,
+            content: readFileSync(resolveInRepo(review.standards), 'utf-8'),
+          };
+        } catch {
+          console.error(pc.yellow(`Warning: cannot read ${review.standards} from ${REPO_CONFIG_FILE}`));
+        }
+      }
+
+      if (opts.json) {
+        console.log(JSON.stringify({ severities, standards }, null, 2));
+        return;
+      }
+
+      console.log(`Severities: ${severities.join(', ')}`);
+      if (standards) {
+        console.log(`Standards:  ${standards.path}`);
+        console.log('');
+        console.log(standards.content);
+      } else {
+        console.log(pc.dim(`No review standards configured in ${REPO_CONFIG_FILE}.`));
+      }
     });
 
   agent
