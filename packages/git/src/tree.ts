@@ -1,6 +1,7 @@
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+
+import { execFileLarge } from './exec';
 
 export interface TreeEntry {
   type: 'blob' | 'tree';
@@ -11,19 +12,16 @@ export interface TreeEntry {
 function getWorkingTreeFiles(dirPath?: string): string[] {
   const pathArgs = dirPath ? [dirPath + '/'] : [];
 
-  const tracked = execFileSync('git', ['ls-files', ...pathArgs], {
-    encoding: 'utf-8',
-  }).trim();
+  const tracked = execFileLarge('git', ['ls-files', ...pathArgs]);
 
-  const deleted = execFileSync('git', ['ls-files', '--deleted', ...pathArgs], {
-    encoding: 'utf-8',
-  }).trim();
+  const deleted = execFileLarge('git', ['ls-files', '--deleted', ...pathArgs]);
 
-  const untracked = execFileSync(
-    'git',
-    ['ls-files', '--others', '--exclude-standard', ...pathArgs],
-    { encoding: 'utf-8' },
-  ).trim();
+  const untracked = execFileLarge('git', [
+    'ls-files',
+    '--others',
+    '--exclude-standard',
+    ...pathArgs,
+  ]);
 
   const deletedSet = new Set(deleted ? deleted.split('\n') : []);
   const files = new Set<string>();
@@ -71,30 +69,20 @@ export function getTreeEntries(_ref = 'HEAD', dirPath?: string): TreeEntry[] {
 }
 
 export function getTreeFingerprint(): string {
-  const tracked = execFileSync('git', ['ls-files'], {
-    encoding: 'utf-8',
-  }).trim();
+  const tracked = execFileLarge('git', ['ls-files']);
 
-  const statOutput = execFileSync(
-    'git',
-    ['status', '--porcelain', '-u'],
-    { encoding: 'utf-8' },
-  ).trim();
+  const statOutput = execFileLarge('git', ['status', '--porcelain', '-u']);
 
   return `${tracked.length}:${statOutput}`;
 }
 
 export function getWorkingTreeFileContent(filePath: string): string {
-  const root = execFileSync('git', ['rev-parse', '--show-toplevel'], {
-    encoding: 'utf-8',
-  }).trim();
+  const root = execFileLarge('git', ['rev-parse', '--show-toplevel']);
   return readFileSync(join(root, filePath), 'utf-8');
 }
 
 export function getWorkingTreeRawFile(filePath: string): { data: Buffer; fullPath: string } {
-  const root = execFileSync('git', ['rev-parse', '--show-toplevel'], {
-    encoding: 'utf-8',
-  }).trim();
+  const root = execFileLarge('git', ['rev-parse', '--show-toplevel']);
   const fullPath = join(root, filePath);
   return { data: readFileSync(fullPath), fullPath };
 }
