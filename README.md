@@ -243,6 +243,7 @@ diffity list --json        # machine-readable output
 | -------------- | ------------------------------------------------------------------------- |
 | `DIFFITY_HOST` | Hostname used in the printed URL (default: `localhost`).                  |
 | `DIFFITY_BIND` | Interface the server listens on (default: `127.0.0.1`).                   |
+| `DIFFITY_DATA_DIR` | Where review notes are kept (default: `~/.diffity/<repo-hash>`).      |
 
 Useful when running diffity inside a VM or container and opening it from another machine:
 
@@ -253,6 +254,27 @@ DIFFITY_BIND=0.0.0.0 DIFFITY_HOST=diffity.local diffity
 The server has no authentication: anything that can reach it can read the diff, the
 repository's files and the review comments. Only widen `DIFFITY_BIND` on a network you
 trust.
+
+## Where review notes live
+
+Review threads, walkthroughs and sessions are kept in a SQLite database. By default that is
+`~/.diffity/<repo-hash>/reviews.db`, one per repository.
+
+A project can keep its own instead, which is what you want when several worktrees of the same
+repository each need their own notes, or when the notes should travel with the project rather
+than the machine. Commit a `.diffity.json` at the repository root:
+
+```json
+{ "dataDir": "../.diffity" }
+```
+
+Relative paths resolve against the repository root, absolute paths are used as given, and
+`DIFFITY_DATA_DIR` overrides both. A directory chosen this way is used as-is — no hashed
+subdirectory, since there is nothing to disambiguate.
+
+Point it **outside** the working tree, or add it to `.gitignore`. Otherwise the notes show up as
+untracked files in the very diff you are reviewing; diffity warns on startup when that happens.
+The database quotes the code under review, so it is created readable only by you.
 
 ## License
 

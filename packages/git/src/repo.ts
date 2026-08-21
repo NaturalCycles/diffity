@@ -1,9 +1,9 @@
 import { execFileSync, execSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { sep } from 'node:path';
 import { homedir } from 'node:os';
 import { exec } from './exec.js';
+import { readRepoConfig, resolveDataDir } from './config.js';
 import { WORKING_TREE_REFS } from './diff.js';
 import type { RepoInfo } from './types.js';
 
@@ -47,14 +47,39 @@ export function getHeadHash(): string {
 
 export function getDiffityDirPath(): string {
   const repoRoot = getRepoRoot();
-  const hash = createHash('sha256').update(repoRoot).digest('hex').slice(0, 12);
-  return join(homedir(), '.diffity', hash);
+  return resolveDataDir({
+    repoRoot,
+    homeDir: homedir(),
+    envDir: process.env.DIFFITY_DATA_DIR,
+    configDir: readRepoConfig(repoRoot).dataDir,
+  });
 }
 
 export function getDiffityDir(): string {
   const dir = getDiffityDirPath();
-  mkdirSync(dir, { recursive: true });
+  // Review notes quote the code under review, so they are not readable by other accounts.
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
   return dir;
+}
+
+/**
+ * True when the data directory sits inside the working tree without git ignoring it, which
+ * would otherwise show review notes as untracked changes in the very diff being reviewed.
+ */
+export function isDataDirUntracked(): boolean {
+  const dir = getDiffityDirPath();
+  const repoRoot = getRepoRoot();
+
+  if (!dir.startsWith(repoRoot + sep)) {
+    return false;
+  }
+
+  try {
+    execFileSync('git', ['check-ignore', '--quiet', dir], { stdio: 'pipe' });
+    return false;
+  } catch {
+    return true;
+  }
 }
 
 export function isValidGitRef(ref: string): boolean {

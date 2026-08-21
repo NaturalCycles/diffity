@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import open from 'open';
 import pc from 'picocolors';
-import { isGitRepo, isValidGitRef, getRepoRoot, getRepoName, normalizeRef, WORKING_TREE_REFS } from '@diffity/git';
+import { isGitRepo, isValidGitRef, getRepoRoot, getRepoName, normalizeRef, getDiffityDirPath, isDataDirUntracked, WORKING_TREE_REFS } from '@diffity/git';
 import type { PrBase } from '@diffity/github';
 import {
   isGitHubPrUrl,
@@ -235,6 +235,12 @@ range syntax (main..feature, main...feature) also work.`)
     }
 
     const repoRoot = getRepoRoot();
+
+    if (!opts.quiet && isDataDirUntracked()) {
+      console.log(pc.yellow(`  Note: review notes are kept in ${getDiffityDirPath()}, which git does not ignore.`));
+      console.log(pc.dim('  Add it to .gitignore so they stay out of the diff you are reviewing.'));
+    }
+
     const repoHash = createHash('sha256').update(repoRoot).digest('hex').slice(0, 12);
     const repoName = getRepoName();
 
