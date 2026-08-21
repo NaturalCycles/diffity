@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { getDb } from './db.js';
+import { getDb, queryAll, queryOne } from './db.js';
 import { unescapeMarkdown } from './unescape.js';
 
 export interface ThreadAuthor {
@@ -81,11 +81,11 @@ function getCommentsForThreads(threadIds: string[]): Map<string, ThreadComment[]
   if (threadIds.length === 0) {
     return new Map();
   }
-  const db = getDb();
   const placeholders = threadIds.map(() => '?').join(', ');
-  const rows = db.prepare(
-    `SELECT * FROM comments WHERE thread_id IN (${placeholders}) ORDER BY created_at ASC`
-  ).all(...threadIds) as CommentRow[];
+  const rows = queryAll<CommentRow>(
+    `SELECT * FROM comments WHERE thread_id IN (${placeholders}) ORDER BY created_at ASC`,
+    ...threadIds,
+  );
 
   const map = new Map<string, ThreadComment[]>();
   for (const row of rows) {
@@ -155,13 +155,12 @@ interface JoinedRow extends ThreadRow {
 }
 
 export function getThreadsForSession(sessionId: string, status?: ThreadStatus): Thread[] {
-  const db = getDb();
   const where = status
     ? 'WHERE t.session_id = ? AND t.status = ?'
     : 'WHERE t.session_id = ?';
   const params = status ? [sessionId, status] : [sessionId];
 
-  const rows = db.prepare(`
+  const rows = queryAll<JoinedRow>(`
     SELECT t.*,
            c.id AS c_id, c.author_name AS c_author_name, c.author_type AS c_author_type,
            c.body AS c_body, c.created_at AS c_created_at
@@ -169,7 +168,7 @@ export function getThreadsForSession(sessionId: string, status?: ThreadStatus): 
     LEFT JOIN comments c ON c.thread_id = t.id
     ${where}
     ORDER BY t.created_at ASC, c.created_at ASC
-  `).all(...params) as JoinedRow[];
+  `, ...params);
 
   const threads = new Map<string, Thread>();
   for (const row of rows) {
@@ -191,11 +190,10 @@ export function getThreadsForSession(sessionId: string, status?: ThreadStatus): 
 }
 
 export function getThread(idOrPrefix: string): Thread | null {
-  const db = getDb();
-  let row = db.prepare('SELECT * FROM comment_threads WHERE id = ?').get(idOrPrefix) as ThreadRow | undefined;
+  let row = queryOne<ThreadRow>('SELECT * FROM comment_threads WHERE id = ?', idOrPrefix);
 
   if (!row && idOrPrefix.length >= 8) {
-    row = db.prepare('SELECT * FROM comment_threads WHERE id LIKE ?').get(idOrPrefix + '%') as ThreadRow | undefined;
+    row = queryOne<ThreadRow>('SELECT * FROM comment_threads WHERE id LIKE ?', idOrPrefix + '%');
   }
 
   if (!row) {
@@ -267,15 +265,15 @@ export function editComment(commentId: string, body: string): void {
 
 export function deleteComment(commentId: string): void {
   const db = getDb();
-  const comment = db.prepare('SELECT thread_id FROM comments WHERE id = ?').get(commentId) as { thread_id: string } | undefined;
+  const comment = queryOne<{ thread_id: string }>('SELECT thread_id FROM comments WHERE id = ?', commentId);
   if (!comment) {
     return;
   }
 
   db.prepare('DELETE FROM comments WHERE id = ?').run(commentId);
 
-  const remaining = db.prepare('SELECT COUNT(*) as count FROM comments WHERE thread_id = ?').get(comment.thread_id) as { count: number };
-  if (remaining.count === 0) {
+  const remaining = queryOne<{ count: number }>('SELECT COUNT(*) as count FROM comments WHERE thread_id = ?', comment.thread_id);
+  if (remaining?.count === 0) {
     db.prepare('DELETE FROM comment_threads WHERE id = ?').run(comment.thread_id);
   }
 }

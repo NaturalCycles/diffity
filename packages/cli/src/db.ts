@@ -1,23 +1,50 @@
-import Database from 'better-sqlite3';
+import { createRequire } from 'node:module';
 import { join } from 'node:path';
+import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import { getDiffityDir } from '@diffity/git';
 
-let db: Database.Database | null = null;
+const require = createRequire(import.meta.url);
 
-export function getDb(): Database.Database {
+let db: DatabaseSync | null = null;
+
+// Loaded lazily: `node:sqlite` only exists on Node >= 22.13, and a static import
+// would abort the whole CLI at startup instead of showing this hint.
+function loadSqlite(): { DatabaseSync: new (path: string) => DatabaseSync } {
+  try {
+    return require('node:sqlite');
+  } catch {
+    throw new Error(
+      `diffity needs Node's built-in sqlite module, which requires Node >= 22.13 (running ${process.version}).`,
+    );
+  }
+}
+
+export function getDb(): DatabaseSync {
   if (db) {
     return db;
   }
 
+  const { DatabaseSync: Database } = loadSqlite();
   const dbPath = join(getDiffityDir(), 'reviews.db');
   db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
+  db.exec('PRAGMA journal_mode = WAL');
+  db.exec('PRAGMA foreign_keys = ON');
   migrateDb(db);
   return db;
 }
 
-function migrateDb(db: Database.Database): void {
+// node:sqlite types every row as `Record<string, SQLOutputValue>`, so the shape a
+// query returns has to be asserted. These helpers keep that assertion in one place
+// rather than at every call site.
+export function queryAll<T>(sql: string, ...params: SQLInputValue[]): T[] {
+  return getDb().prepare(sql).all(...params) as T[];
+}
+
+export function queryOne<T>(sql: string, ...params: SQLInputValue[]): T | undefined {
+  return getDb().prepare(sql).get(...params) as T | undefined;
+}
+
+function migrateDb(db: DatabaseSync): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS review_sessions (
       id TEXT PRIMARY KEY,

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { getDb } from './db.js';
+import { getDb, queryAll, queryOne } from './db.js';
 import { unescapeMarkdown } from './unescape.js';
 
 export type TourStatus = 'building' | 'ready';
@@ -96,23 +96,21 @@ export function createTour(sessionId: string, topic: string, body: string): Tour
 }
 
 export function getTour(id: string): Tour | null {
-  const db = getDb();
-  const row = db.prepare('SELECT * FROM tours WHERE id = ?').get(id) as TourRow | undefined;
+  const row = queryOne<TourRow>('SELECT * FROM tours WHERE id = ?', id);
 
   if (!row) {
     return null;
   }
 
-  const stepRows = db.prepare(
-    'SELECT * FROM tour_steps WHERE tour_id = ? ORDER BY sort_order ASC'
-  ).all(id) as TourStepRow[];
+  const stepRows = queryAll<TourStepRow>(
+    'SELECT * FROM tour_steps WHERE tour_id = ? ORDER BY sort_order ASC',
+    id,
+  );
 
   return rowToTour(row, stepRows.map(rowToTourStep));
 }
 
 export function getToursForSession(sessionId: string): Tour[] {
-  const db = getDb();
-
   interface JoinedRow extends TourRow {
     s_id: string | null;
     s_sort_order: number | null;
@@ -124,7 +122,7 @@ export function getToursForSession(sessionId: string): Tour[] {
     s_created_at: string | null;
   }
 
-  const rows = db.prepare(`
+  const rows = queryAll<JoinedRow>(`
     SELECT t.*,
            s.id AS s_id, s.sort_order AS s_sort_order, s.file_path AS s_file_path,
            s.start_line AS s_start_line, s.end_line AS s_end_line,
@@ -133,7 +131,7 @@ export function getToursForSession(sessionId: string): Tour[] {
     LEFT JOIN tour_steps s ON s.tour_id = t.id
     WHERE t.session_id = ?
     ORDER BY t.created_at ASC, s.sort_order ASC
-  `).all(sessionId) as JoinedRow[];
+  `, sessionId);
 
   const tours = new Map<string, Tour>();
   for (const row of rows) {
@@ -172,10 +170,11 @@ export function addTourStep(
   const id = randomUUID();
   const now = new Date().toISOString();
 
-  const maxRow = db.prepare(
-    'SELECT COALESCE(MAX(sort_order), 0) AS max_order FROM tour_steps WHERE tour_id = ?'
-  ).get(tourId) as { max_order: number };
-  const sortOrder = maxRow.max_order + 1;
+  const maxRow = queryOne<{ max_order: number }>(
+    'SELECT COALESCE(MAX(sort_order), 0) AS max_order FROM tour_steps WHERE tour_id = ?',
+    tourId,
+  );
+  const sortOrder = (maxRow?.max_order ?? 0) + 1;
 
   const cleanBody = unescapeMarkdown(body);
   const cleanAnnotation = unescapeMarkdown(annotation);
