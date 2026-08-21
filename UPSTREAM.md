@@ -49,6 +49,8 @@ our own change on #3.
 | #15 | `batched-review` | `diff-walkthrough` | one `POST /pulls/:n/reviews` instead of N comment posts; per-comment selection, folded replies, general comments seed the summary, event choice disabled on own PR | Independent; removes `pushComments` |
 | #16 | `project-data-dir` | `batched-review` | `DIFFITY_DATA_DIR` / `dataDir` in `.diffity.json` chooses where review notes live; warns when they sit un-ignored inside the working tree; 0600/0700 permissions (audit P2-4) | Independent |
 | #17 | `session-continuity` | `project-data-dir` | open threads and walkthroughs follow the session when HEAD moves, instead of being stranded in the old one | Independent, and required for reviewing your own change |
+| #18 | `reanchor` | `session-continuity` | `agent comment` records `anchor_content`, and carrying a session forward moves each open thread to where its code went | Depends on #17 |
+| #19 | `review-standards` | `reanchor` | `review.severities` and `review.standards` in `.diffity.json`, `agent standards` to read them, and the review skill reads them first and records a reading order | Independent |
 
 ## Known and not yet done
 
@@ -67,9 +69,8 @@ From the security audit, in rough priority order:
   `'unsafe-inline'` caveat in #12.
 - `DiffViewHandle` exposes only `scrollToFile`, so the walkthrough stepper cannot scroll to a
   stop's line, and a stop's line range is not highlighted in the diff.
-- Threads are not re-anchored when the code under them moves. `anchor_content` already stores the
-  source lines a comment was attached to, so the data is there; this matters more now that #17
-  makes findings survive commits.
+- Re-anchoring (#18) matches lines exactly, so a finding whose code was *edited* rather than moved
+  keeps its old position. Anything fuzzier risks moving a comment onto code it was not written about.
 - A review's summary has no configurable default signature.
 - The reviews API cannot reply into an *existing* GitHub thread; that needs `in_reply_to` on the
   comments endpoint.
@@ -79,13 +80,9 @@ From the security audit, in rough priority order:
 
 ## Queued
 
-- **Own-PR workflow — the remaining half.** #16 and #17 settled where notes live and made them
-  survive commits, and upstream's `diffity-resolve` skill already fixes code against open findings.
-  What is left is review *quality* on demand from whichever agent you are in: a review skill that
-  carries a severity vocabulary and a standards checklist, with the vocabulary configured rather
-  than written into the skill.
-- **`diffity review <pr-url>` as one command** — starts the server, opens the browser and launches
-  the review agent, with its progress shown in the page. Slice 2 of the original plan.
+- **`diffity review <pr-url>` as one command** with the agent's progress shown in the page. The
+  own-PR loop no longer needs it — the coding agent drives `agent comment` itself — but reviewing
+  *someone else's* PR still starts with two commands.
 - **Configurable repo resolution** — `cwd` / `clone` / `worktree` strategies, so a colleague's PR
   can be reviewed without already having its checkout.
 - **A severity vocabulary and a review signature**, both configuration rather than code.
