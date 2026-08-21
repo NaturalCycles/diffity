@@ -7,4 +7,4 @@ import { defaultSchema } from 'rehype-sanitize';
  * The default schema is GitHub's own, which keeps `class="language-…"` on `code` — the pre
  * renderer reads it to pick a highlighter.
  */
-export const markdownSanitizeSchema = defaultSchema;
+export const markdownSanitizeSchema: typeof defaultSchema = defaultSchema;
