@@ -74,6 +74,25 @@ const MIME_TYPES: Record<string, string> = {
 };
 
 /**
+ * Repository content is rendered in this origin, so nothing it contains may reach the network.
+ * `script-src` still needs 'unsafe-inline' for the inline scripts in the built index.html;
+ * markdown is sanitized separately, and every exfiltration sink is closed here.
+ */
+const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "base-uri 'none'",
+  "object-src 'none'",
+  "frame-src 'none'",
+  "frame-ancestors 'none'",
+  "form-action 'none'",
+  "img-src 'self' data:",
+  "font-src 'self' data:",
+  "style-src 'self' 'unsafe-inline'",
+  "script-src 'self' 'unsafe-inline'",
+  "connect-src 'self'",
+].join('; ');
+
+/**
  * The tree browser only ever needs raw bytes for images. Anything else — a repository's own
  * .html or .svg — would otherwise be rendered in this origin, where it can read the API.
  */
@@ -252,6 +271,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
         const pathname = url.pathname;
 
         res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Content-Security-Policy', CONTENT_SECURITY_POLICY);
 
         if (req.method === 'OPTIONS') {
           res.writeHead(204);
