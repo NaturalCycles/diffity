@@ -1,7 +1,22 @@
 import { exec, execLarge, execLines, execWithStdin } from './exec.js';
 
+/**
+ * Flags that neutralize user git config which would otherwise alter the diff
+ * format and break parsing:
+ * - `--no-color` guards against `color.ui=always` / `color.diff=always`
+ * - `--no-ext-diff` guards against a configured `diff.external` driver
+ * - `--src-prefix`/`--dst-prefix` force the standard `a/`/`b/` prefixes,
+ *   overriding `diff.mnemonicPrefix`, `diff.noprefix` and custom prefixes
+ */
+const DIFF_FORMAT_ARGS = [
+  '--no-color',
+  '--no-ext-diff',
+  '--src-prefix=a/',
+  '--dst-prefix=b/',
+];
+
 export function getDiff(args: string[] = []): string {
-  const cmd = ['git', 'diff', ...args].join(' ');
+  const cmd = ['git', 'diff', ...DIFF_FORMAT_ARGS, ...args].join(' ');
   return execLarge(cmd);
 }
 
@@ -14,7 +29,7 @@ export function getUntrackedDiff(files: string[]): string {
 
   for (const file of files) {
     try {
-      execLarge(`git diff --no-index -- /dev/null "${file}"`);
+      execLarge(`git diff ${DIFF_FORMAT_ARGS.join(' ')} --no-index -- /dev/null "${file}"`);
     } catch (err: unknown) {
       const error = err as { stdout?: string; status?: number };
       if (error.status === 1 && error.stdout) {
@@ -38,7 +53,11 @@ export function resolveDiffArgs(ref: string): RefDiffArgs {
     case 'work':
       return { type: 'args', args: ['HEAD'], includeUntracked: true };
     default:
-      return { type: 'args', args: [normalizeRef(ref)], includeUntracked: true };
+      // Bare refs (`diffity main`) diff against the working tree, so untracked
+      // files are part of the change set (#10). Ranges (`A..B`) pin both
+      // endpoints — the working tree isn't involved, so untracked files must
+      // be excluded or the diff won't match `git diff A..B`.
+      return { type: 'args', args: [normalizeRef(ref)], includeUntracked: !ref.includes('..') };
   }
 }
 
@@ -58,7 +77,7 @@ export function resolveRef(ref: string, extraArgs: string[] = []): string {
 export function getDiffFiles(ref: string): string[] {
   const resolved = resolveDiffArgs(ref);
 
-  const tracked = execLines(`git diff --name-only ${resolved.args.join(' ')}`.trim());
+  const tracked = execLines(`git diff ${DIFF_FORMAT_ARGS.join(' ')} --name-only ${resolved.args.join(' ')}`.trim());
   if (resolved.includeUntracked) {
     const untracked = getUntrackedFiles();
     return [...new Set([...tracked, ...untracked])];
@@ -67,7 +86,7 @@ export function getDiffFiles(ref: string): string[] {
 }
 
 export function getDiffStat(args: string[] = []): string {
-  const cmd = ['git', 'diff', '--stat', ...args].join(' ');
+  const cmd = ['git', 'diff', ...DIFF_FORMAT_ARGS, '--stat', ...args].join(' ');
   try {
     return execLarge(cmd);
   } catch {

@@ -86,6 +86,28 @@ describe('getDiffFiles', () => {
     git('checkout -- base.txt');
   });
 
+  it('includes untracked files for bare refs (diff against working tree)', async () => {
+    const { getDiffFiles } = await import('../src/diff.js');
+    writeFile('untracked-file.txt', 'untracked\n');
+
+    const files = getDiffFiles('main');
+    expect(files).toContain('untracked-file.txt');
+
+    execSync(`rm "${join(repoDir, 'untracked-file.txt')}"`, { stdio: 'pipe' });
+  });
+
+  it('excludes untracked files for range refs (both endpoints pinned)', async () => {
+    const { getDiffFiles } = await import('../src/diff.js');
+    writeFile('untracked-file.txt', 'untracked\n');
+
+    const files = getDiffFiles('main..feature');
+    expect(files).toContain('feature.txt');
+    expect(files).toContain('base.txt');
+    expect(files).not.toContain('untracked-file.txt');
+
+    execSync(`rm "${join(repoDir, 'untracked-file.txt')}"`, { stdio: 'pipe' });
+  });
+
   it('returns working tree files for work ref', async () => {
     const { getDiffFiles } = await import('../src/diff.js');
     writeFile('untracked-file.txt', 'untracked\n');
