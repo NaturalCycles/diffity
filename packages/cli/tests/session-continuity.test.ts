@@ -71,6 +71,69 @@ describe('a session when HEAD moves', () => {
     expect(left.map(thread => thread.id)).toEqual([dealtWith.id]);
   });
 
+  it('follows its code when a later commit moves it', async () => {
+    const { findOrCreateSession } = await import('../src/session.js');
+    const { createThread, getThreadsForSession } = await import('../src/threads.js');
+
+    writeFileSync(join(repoDir, 'moving.ts'), 'one\ntwo\nthree\n');
+    git(['add', '.']);
+    git(['commit', '-m', 'moving.ts']);
+
+    const before = findOrCreateSession('work');
+    const finding = createThread(
+      before.id,
+      'moving.ts',
+      'new',
+      2,
+      2,
+      'P2: about the second line',
+      { name: 'Agent', type: 'agent' },
+      'two',
+    );
+
+    // Two lines land above it, so the code it points at is now on line 4.
+    writeFileSync(join(repoDir, 'moving.ts'), 'inserted\nalso inserted\none\ntwo\nthree\n');
+    git(['add', '.']);
+    git(['commit', '-m', 'insert above']);
+
+    const after = findOrCreateSession('work');
+    const carried = getThreadsForSession(after.id).find(thread => thread.id === finding.id);
+
+    expect(carried?.startLine).toBe(4);
+    expect(carried?.endLine).toBe(4);
+  });
+
+  it('leaves a finding where it is when its code was edited rather than moved', async () => {
+    const { findOrCreateSession } = await import('../src/session.js');
+    const { createThread, getThreadsForSession } = await import('../src/threads.js');
+
+    writeFileSync(join(repoDir, 'edited.ts'), 'keep\ntarget\nkeep\n');
+    git(['add', '.']);
+    git(['commit', '-m', 'edited.ts']);
+
+    const before = findOrCreateSession('work');
+    const finding = createThread(
+      before.id,
+      'edited.ts',
+      'new',
+      2,
+      2,
+      'P3: about the target',
+      { name: 'Agent', type: 'agent' },
+      'target',
+    );
+
+    writeFileSync(join(repoDir, 'edited.ts'), 'keep\ntarget changed\nkeep\n');
+    git(['add', '.']);
+    git(['commit', '-m', 'edit the target']);
+
+    const after = findOrCreateSession('work');
+    const carried = getThreadsForSession(after.id).find(thread => thread.id === finding.id);
+
+    expect(carried).toBeDefined();
+    expect(carried?.startLine).toBe(2);
+  });
+
   it('returns the same session while HEAD stays put', async () => {
     const { findOrCreateSession } = await import('../src/session.js');
 

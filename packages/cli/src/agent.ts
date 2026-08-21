@@ -14,6 +14,7 @@ import {
   type Thread,
 } from './threads.js';
 import { createTour, addTourStep, updateTourStatus } from './tours.js';
+import { readAnchor } from './anchor.js';
 
 function requireSession() {
   if (!isGitRepo()) {
@@ -164,6 +165,8 @@ Examples:
         endLine,
         opts.body,
         { name: 'Agent', type: 'agent' },
+        // Recorded so the finding can follow its code when a later commit moves it.
+        opts.side === 'new' ? readAnchor(opts.file, opts.line, endLine) : undefined,
       );
       console.log(pc.green(`Created thread ${thread.id.slice(0, 8)}`));
     });

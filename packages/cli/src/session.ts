@@ -2,7 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { getHeadHash, getDiffityDir } from '@diffity/git';
-import { getDb, queryOne } from './db.js';
+import { getDb, queryAll, queryOne } from './db.js';
+import { reanchorInWorkingTree } from './anchor.js';
+import { updateThreadLines } from './threads.js';
 
 export interface Session {
   id: string;
@@ -71,6 +73,32 @@ export function carryForward(fromSessionId: string, toSessionId: string): void {
     toSessionId,
     fromSessionId,
   );
+
+  reanchorThreads(toSessionId);
+}
+
+/**
+ * A finding that outlives the commit it was written against points at a line that has since
+ * moved. Only the new side is re-anchored: a comment on a removed line has nothing to follow.
+ */
+function reanchorThreads(sessionId: string): void {
+  const threads = queryAll<{
+    id: string;
+    file_path: string;
+    side: string;
+    start_line: number;
+    anchor_content: string | null;
+  }>(
+    "SELECT id, file_path, side, start_line, anchor_content FROM comment_threads WHERE session_id = ? AND status = 'open' AND side = 'new' AND anchor_content IS NOT NULL",
+    sessionId,
+  );
+
+  for (const thread of threads) {
+    const moved = reanchorInWorkingTree(thread.file_path, thread.anchor_content!, thread.start_line);
+    if (moved && moved.startLine !== thread.start_line) {
+      updateThreadLines(thread.id, moved.startLine, moved.endLine);
+    }
+  }
 }
 
 export function getCurrentSession(): Session | null {

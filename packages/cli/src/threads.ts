@@ -101,6 +101,15 @@ function getCommentsForThread(threadId: string): ThreadComment[] {
   return map.get(threadId) ?? [];
 }
 
+export function updateThreadLines(threadId: string, startLine: number, endLine: number): void {
+  const db = getDb();
+  db.prepare('UPDATE comment_threads SET start_line = ?, end_line = ? WHERE id = ?').run(
+    startLine,
+    endLine,
+    threadId,
+  );
+}
+
 export function createThread(
   sessionId: string,
   filePath: string,
