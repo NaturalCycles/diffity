@@ -45,6 +45,7 @@ our own change on #3.
 | #10 | `argv-git` | `pin-pr-ref` | every git call in `@diffity/git` goes through argv instead of `/bin/sh -c`; a PR file named `evil$(…)` executed on open | Independent of #8 in intent, but touches the same helper |
 | #11 | `path-containment` | `argv-git` | percent-encoded `../` in `/api/tree/…` read any file; `resolveInRepo` plus inert raw responses | Independent |
 | #12 | `sanitize-markdown` | `path-containment` | `rehype-raw` had no sanitizer; adds `rehype-sanitize` and a CSP; widens the UI vitest include to `.tsx` | Independent |
+| #14 | `diff-walkthrough` | `sanitize-markdown` | the diff page reads the session's tour and reorders the file list by it; flat numbered sidebar, stepper, order-aware keyboard navigation; review tours hand off to `/diff` | Independent, and the feature this fork exists for — offer it once it has been lived with |
 
 ## Known and not yet done
 
@@ -63,6 +64,11 @@ From the security audit, in rough priority order:
 - `link-dev.ts` appends a `PATH` line to `~/.bashrc` from `npm run dev`. Should print it instead.
 - Hash-based `script-src`, computed from `index.html` at server start, would remove the
   `'unsafe-inline'` caveat in #12.
+- `DiffViewHandle` exposes only `scrollToFile`, so the walkthrough stepper cannot scroll to a
+  stop's line, and a stop's line range is not highlighted in the diff.
+- `npm run typecheck -w @diffity/ui` reports four `TS6059` errors on upstream `main` as well:
+  `tsconfig.json` includes `.react-router/types/**` while `rootDir` is `src`. Not wired into
+  `npm test`, so it fails silently.
 
 ## Fork-local, do not upstream
 
