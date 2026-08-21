@@ -1,6 +1,6 @@
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { exec } from './exec.js';
-import type { PrComment, PushResult, PulledThread } from './types.js';
+import type { PrComment, PulledThread, ReviewResult, ReviewSubmission } from './types.js';
 
 export function getFiles(owner: string, repo: string, prNumber: number): Set<string> {
   try {
@@ -114,61 +114,98 @@ function isDuplicate(existing: ExistingComment[], comment: PrComment): boolean {
   );
 }
 
-export function pushComments(
+interface ReviewCommentPayload {
+  path: string;
+  side: string;
+  line: number;
+  body: string;
+  start_line?: number;
+  start_side?: string;
+}
+
+function toReviewComment(comment: PrComment): ReviewCommentPayload {
+  const payload: ReviewCommentPayload = {
+    path: comment.filePath,
+    side: comment.side,
+    line: comment.endLine,
+    body: comment.body,
+  };
+
+  if (comment.startLine && comment.startLine !== comment.endLine) {
+    payload.start_line = comment.startLine;
+    payload.start_side = comment.side;
+  }
+
+  return payload;
+}
+
+/**
+ * Submits one review holding every comment, rather than posting them one at a time: the author
+ * gets a single notification, a partial failure cannot leave half a review on the pull request,
+ * and the summary body has somewhere to live.
+ *
+ * GitHub does not deduplicate, so comments already on the pull request are dropped first.
+ */
+export function createReview(
   owner: string,
   repo: string,
   prNumber: number,
   headSha: string,
-  comments: PrComment[],
-): PushResult {
+  submission: ReviewSubmission,
+): ReviewResult {
   const prFiles = getFiles(owner, repo, prNumber);
   const existing = getComments(owner, repo, prNumber);
 
-  let pushed = 0;
-  let skipped = 0;
-  let failed = 0;
   const errors: string[] = [];
+  const comments: ReviewCommentPayload[] = [];
+  let skipped = 0;
 
-  for (const comment of comments) {
+  for (const comment of submission.comments) {
     if (!prFiles.has(comment.filePath)) {
-      failed++;
       errors.push(`${comment.filePath} — not in PR diff (push your changes first)`);
       continue;
     }
-
     if (isDuplicate(existing, comment)) {
       skipped++;
       continue;
     }
-
-    try {
-      const payload: Record<string, unknown> = {
-        body: comment.body,
-        commit_id: headSha,
-        path: comment.filePath,
-        side: comment.side,
-        line: comment.endLine,
-      };
-      if (comment.startLine && comment.startLine !== comment.endLine) {
-        payload.start_line = comment.startLine;
-        payload.start_side = comment.side;
-      }
-      execSync(
-        `gh api repos/${owner}/${repo}/pulls/${prNumber}/comments --method POST --input -`,
-        {
-          input: JSON.stringify(payload),
-          encoding: 'utf-8',
-          stdio: 'pipe',
-        },
-      );
-      pushed++;
-    } catch (err) {
-      failed++;
-      const msg = err instanceof Error ? err.message : String(err);
-      const ghLine = msg.split('\n').find(l => l.includes('gh:'));
-      errors.push(`${comment.filePath}:${comment.endLine} — ${ghLine ? ghLine.trim() : 'GitHub API error'}`);
-    }
+    comments.push(toReviewComment(comment));
   }
 
-  return { pushed, skipped, failed, errors };
+  const dropped = errors.length;
+  const body = submission.body.trim();
+
+  if (comments.length === 0 && !body) {
+    return { submitted: 0, skipped, failed: dropped, errors, reviewUrl: null };
+  }
+
+  try {
+    const raw = execFileSync(
+      'gh',
+      ['api', `repos/${owner}/${repo}/pulls/${prNumber}/reviews`, '--method', 'POST', '--input', '-'],
+      {
+        input: JSON.stringify({ commit_id: headSha, event: submission.event, body, comments }),
+        encoding: 'utf-8',
+        stdio: 'pipe',
+      },
+    );
+    const review = JSON.parse(raw) as { html_url?: string };
+    return {
+      submitted: comments.length,
+      skipped,
+      failed: dropped,
+      errors,
+      reviewUrl: review.html_url ?? null,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const ghLine = msg.split('\n').find(line => line.includes('gh:'));
+    return {
+      submitted: 0,
+      skipped,
+      failed: dropped + comments.length,
+      errors: [...errors, ghLine ? ghLine.trim() : 'GitHub rejected the review'],
+      reviewUrl: null,
+    };
+  }
 }

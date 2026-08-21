@@ -41,9 +41,10 @@ import {
 import {
   detectRemote as detectGitHubRemote,
   fetchDetails as fetchGitHubDetails,
-  pushComments as pushGitHubComments,
+  createReview as createGitHubReview,
   pullComments as pullGitHubComments,
   type PrComment,
+  type ReviewEvent,
 } from '@diffity/github';
 import { findOrCreateSession } from './session.js';
 import { createThread, addReply, getThreadsForSession } from './threads.js';
@@ -78,6 +79,8 @@ const MIME_TYPES: Record<string, string> = {
  * `script-src` still needs 'unsafe-inline' for the inline scripts in the built index.html;
  * markdown is sanitized separately, and every exfiltration sink is closed here.
  */
+const REVIEW_EVENTS = new Set(['COMMENT', 'APPROVE', 'REQUEST_CHANGES']);
+
 const CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
   "base-uri 'none'",
@@ -499,7 +502,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           return;
         }
 
-        if (pathname === '/api/github/push-comments' && req.method === 'POST') {
+        if (pathname === '/api/github/create-review' && req.method === 'POST') {
           const details = githubRemote ? fetchGitHubDetails(githubRemote.owner, githubRemote.repo) : null;
           if (!githubRemote || !details?.headSha) {
             sendError(res, 400, 'No GitHub PR detected');
@@ -515,17 +518,19 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             return;
           }
           const body = JSON.parse(await readBody(req));
-          const comments = body.comments as PrComment[];
-          if (!Array.isArray(comments) || comments.length === 0) {
-            sendError(res, 400, 'No comments provided');
+          const comments = (body.comments ?? []) as PrComment[];
+          const summary = typeof body.body === 'string' ? body.body : '';
+          const event = REVIEW_EVENTS.has(body.event) ? (body.event as ReviewEvent) : 'COMMENT';
+          if (!Array.isArray(comments) || (comments.length === 0 && !summary.trim())) {
+            sendError(res, 400, 'A review needs a summary or at least one comment');
             return;
           }
-          const result = pushGitHubComments(
+          const result = createGitHubReview(
             githubRemote.owner,
             githubRemote.repo,
             details.prNumber,
             details.headSha,
-            comments,
+            { event, body: summary, comments },
           );
           sendJson(res, result);
           return;

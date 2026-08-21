@@ -49,6 +49,7 @@ export function fetchDetails(owner: string, repo: string): GitHubDetails | null 
     prCreatedAt: pr.createdAt,
     headSha: pr.headSha,
     commentCount,
+    viewerDidAuthor: !!pr.authorLogin && pr.authorLogin === getViewerLogin(),
   };
 }
 
@@ -58,11 +59,27 @@ interface PrData {
   url: string;
   headSha: string;
   createdAt: string;
+  authorLogin: string | null;
+}
+
+// gh has no `viewerDidAuthor` field, so authorship is settled by comparing logins. The
+// authenticated user cannot change while the process lives, so it is asked for once.
+let viewerLogin: string | null | undefined;
+
+function getViewerLogin(): string | null {
+  if (viewerLogin === undefined) {
+    try {
+      viewerLogin = exec('gh api user --jq .login') || null;
+    } catch {
+      viewerLogin = null;
+    }
+  }
+  return viewerLogin;
 }
 
 function getPr(): PrData | null {
   try {
-    const json = exec('gh pr view --json number,title,url,headRefOid,createdAt');
+    const json = exec('gh pr view --json number,title,url,headRefOid,createdAt,author');
     const data = JSON.parse(json);
     if (data.number && data.url && data.headRefOid) {
       return {
@@ -71,6 +88,7 @@ function getPr(): PrData | null {
         url: data.url,
         headSha: data.headRefOid,
         createdAt: data.createdAt,
+        authorLogin: data.author?.login ?? null,
       };
     }
     return null;

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { toast } from 'sonner';
@@ -6,9 +6,18 @@ import { GitHubIcon } from '../icons/github-icon';
 import { UploadIcon } from '../icons/upload-icon';
 import { DownloadIcon } from '../icons/download-icon';
 import { XIcon } from '../icons/x-icon';
-import { pushCommentsToGitHub, pullCommentsFromGitHub, type GitHubDetails, type PrCommentPayload } from '../../lib/api';
+import {
+  createReviewOnGitHub,
+  pullCommentsFromGitHub,
+  type GitHubDetails,
+  type ReviewEvent,
+} from '../../lib/api';
 import type { CommentThread } from '../comments/types';
-import { GENERAL_THREAD_FILE_PATH, isThreadResolved } from '../comments/types';
+import {
+  isSubmittable,
+  summaryFromGeneralThreads,
+  threadToPayload,
+} from '../../lib/review-submission';
 
 dayjs.extend(relativeTime);
 
@@ -20,18 +29,49 @@ interface GitHubDialogProps {
   onClose: () => void;
 }
 
+const EVENT_LABELS: Record<ReviewEvent, string> = {
+  COMMENT: 'Comment',
+  APPROVE: 'Approve',
+  REQUEST_CHANGES: 'Request changes',
+};
+
+function lineLabel(thread: CommentThread): string {
+  return thread.startLine === thread.endLine
+    ? `${thread.startLine}`
+    : `${thread.startLine}-${thread.endLine}`;
+}
+
 export function GitHubDialog(props: GitHubDialogProps) {
   const { details, threads, sessionId, onPulled, onClose } = props;
   const [commentCount, setCommentCount] = useState(details.commentCount);
-  const [pushing, setPushing] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [pulling, setPulling] = useState(false);
+  const [event, setEvent] = useState<ReviewEvent>('COMMENT');
 
-  const unresolvedFileThreads = threads.filter(
-    t => !isThreadResolved(t) && t.filePath !== GENERAL_THREAD_FILE_PATH,
-  );
-  const pushableThreads = unresolvedFileThreads.filter(t => t.comments.length === 1);
-  const multiCommentCount = unresolvedFileThreads.length - pushableThreads.length;
-  const localCount = unresolvedFileThreads.length;
+  const submittable = useMemo(() => threads.filter(isSubmittable), [threads]);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [summary, setSummary] = useState('');
+  const [summaryEdited, setSummaryEdited] = useState(false);
+
+  // Everything open is selected by default, including threads arriving from the agent while
+  // the dialog is open; deselecting is the deliberate act.
+  useEffect(() => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      for (const thread of submittable) {
+        if (!prev.has(`-${thread.id}`)) {
+          next.add(thread.id);
+        }
+      }
+      return next;
+    });
+  }, [submittable]);
+
+  useEffect(() => {
+    if (!summaryEdited) {
+      setSummary(summaryFromGeneralThreads(threads));
+    }
+  }, [threads, summaryEdited]);
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -43,38 +83,60 @@ export function GitHubDialog(props: GitHubDialogProps) {
     return () => window.removeEventListener('keydown', handleKey);
   }, [onClose]);
 
-  const handlePush = async () => {
-    if (pushableThreads.length === 0) {
+  const chosen = submittable.filter(thread => selected.has(thread.id));
+  const canSubmit = chosen.length > 0 || summary.trim().length > 0;
+
+  const toggle = (id: string) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+        // Remembered so the default-select effect does not re-add it.
+        next.add(`-${id}`);
+      } else {
+        next.delete(`-${id}`);
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const toggleAll = () => {
+    if (chosen.length === submittable.length) {
+      setSelected(new Set(submittable.map(thread => `-${thread.id}`)));
       return;
     }
-    setPushing(true);
+    setSelected(new Set(submittable.map(thread => thread.id)));
+  };
+
+  const handleSubmit = async () => {
+    if (!canSubmit) {
+      return;
+    }
+    setSubmitting(true);
     try {
-      const comments: PrCommentPayload[] = pushableThreads.map(t => ({
-        filePath: t.filePath,
-        side: t.side === 'old' ? 'LEFT' as const : 'RIGHT' as const,
-        startLine: t.startLine !== t.endLine ? t.startLine : null,
-        endLine: t.endLine,
-        body: t.comments[0].body,
-      }));
-      const result = await pushCommentsToGitHub(comments);
+      const result = await createReviewOnGitHub({
+        event,
+        body: summary,
+        comments: chosen.map(threadToPayload),
+      });
+
       if (result.failed > 0) {
-        const pushedMsg = result.pushed > 0 ? `${result.pushed} pushed, ` : '';
-        toast.error(`${pushedMsg}${result.failed} failed`, {
+        toast.error(`Review not submitted — ${result.failed} comment${result.failed !== 1 ? 's' : ''} rejected`, {
           description: result.errors.join('\n'),
         });
-      } else if (result.pushed === 0 && result.skipped > 0) {
-        toast.info('All comments already exist on the PR');
       } else {
-        const skippedMsg = result.skipped > 0 ? ` (${result.skipped} already existed)` : '';
-        toast.success(`Pushed ${result.pushed} comment${result.pushed !== 1 ? 's' : ''} to PR${skippedMsg}`);
+        const skipped = result.skipped > 0 ? ` (${result.skipped} already on the PR)` : '';
+        toast.success(`Submitted ${result.submitted} comment${result.submitted !== 1 ? 's' : ''} as one review${skipped}`);
+        setCommentCount(prev => prev + result.submitted);
+        onClose();
       }
-      setCommentCount(prev => prev + result.pushed);
     } catch (err) {
-      toast.error('Failed to push comments', {
+      toast.error('Failed to submit review', {
         description: err instanceof Error ? err.message : 'Unknown error',
       });
     } finally {
-      setPushing(false);
+      setSubmitting(false);
     }
   };
 
@@ -103,7 +165,7 @@ export function GitHubDialog(props: GitHubDialogProps) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
       <div
-        className="bg-bg rounded-xl shadow-lg w-full max-w-sm mx-4 font-sans"
+        className="bg-bg rounded-xl shadow-lg w-full max-w-lg mx-4 font-sans max-h-[85vh] flex flex-col"
         onClick={e => e.stopPropagation()}
       >
         <div className="flex items-start justify-between px-4 pt-4 pb-2">
@@ -126,38 +188,115 @@ export function GitHubDialog(props: GitHubDialogProps) {
           </button>
         </div>
 
-        <div className="px-4 pb-4 pt-2 space-y-2">
-          <div className="flex items-center justify-between py-2.5 px-3 bg-bg-secondary rounded-lg">
-            <div>
-              <div className="text-xs font-medium text-text">
-                {pushableThreads.length > 0
-                  ? `${pushableThreads.length} comment${pushableThreads.length !== 1 ? 's' : ''} to push`
-                  : `${localCount} local comment${localCount !== 1 ? 's' : ''}`}
-              </div>
-              <div className="text-[11px] text-text-muted mt-0.5">
-                {pushableThreads.length > 0 && multiCommentCount > 0
-                  ? `${multiCommentCount} thread${multiCommentCount !== 1 ? 's' : ''} with replies can't be pushed`
-                  : pushableThreads.length > 0
-                    ? 'Single comments, ready to push'
-                    : localCount > 0
-                      ? 'Threads with replies can\'t be pushed'
-                      : 'No comments to push'}
-              </div>
+        <div className="px-4 pb-4 pt-2 space-y-3 overflow-y-auto">
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[11px] font-medium uppercase tracking-wider text-text-secondary">
+                Summary
+              </span>
+              <span className="text-[11px] text-text-muted">Markdown</span>
             </div>
-            {pushableThreads.length > 0 && (
-              <button
-                onClick={handlePush}
-                disabled={pushing}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-accent text-white hover:bg-accent-hover transition-colors cursor-pointer disabled:opacity-50 shrink-0"
-              >
-                {pushing ? (
-                  <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                ) : (
-                  <UploadIcon className="w-3 h-3" />
-                )}
-                Push to PR
-              </button>
+            <textarea
+              className="w-full h-20 px-2.5 py-2 border border-border rounded-md bg-bg text-xs outline-none focus:border-accent focus:ring-1 focus:ring-accent/20 resize-y placeholder:text-text-muted"
+              placeholder="What the reviewer should take away. General comments land here."
+              value={summary}
+              onChange={e => {
+                setSummary(e.target.value);
+                setSummaryEdited(true);
+              }}
+            />
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[11px] font-medium uppercase tracking-wider text-text-secondary">
+                Comments
+              </span>
+              {submittable.length > 0 && (
+                <button
+                  className="text-[11px] text-accent hover:underline cursor-pointer"
+                  onClick={toggleAll}
+                >
+                  {chosen.length === submittable.length ? 'Deselect all' : 'Select all'}
+                </button>
+              )}
+            </div>
+            {submittable.length === 0 ? (
+              <div className="text-xs text-text-muted py-2">
+                No open comments. A summary on its own still makes a review.
+              </div>
+            ) : (
+              <ul className="border border-border rounded-md divide-y divide-border max-h-56 overflow-y-auto">
+                {submittable.map(thread => (
+                  <li key={thread.id} className="flex gap-2 px-2.5 py-2">
+                    <input
+                      type="checkbox"
+                      checked={selected.has(thread.id)}
+                      onChange={() => toggle(thread.id)}
+                      className="accent-accent cursor-pointer w-3 h-3 mt-0.5 shrink-0"
+                      aria-label={`Include ${thread.filePath}:${lineLabel(thread)}`}
+                    />
+                    <button
+                      className="min-w-0 flex-1 text-left cursor-pointer"
+                      onClick={() => toggle(thread.id)}
+                    >
+                      <div className="flex items-baseline gap-1.5">
+                        <span className="text-[11px] font-medium text-text truncate">
+                          {thread.filePath}
+                        </span>
+                        <span className="text-[11px] text-text-muted tabular-nums shrink-0">
+                          {lineLabel(thread)}
+                        </span>
+                        {thread.comments.length > 1 && (
+                          <span className="text-[10px] text-text-muted shrink-0">
+                            +{thread.comments.length - 1} repl{thread.comments.length === 2 ? 'y' : 'ies'}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[11px] text-text-secondary line-clamp-2">
+                        {thread.comments[0]?.body}
+                      </div>
+                    </button>
+                  </li>
+                ))}
+              </ul>
             )}
+          </div>
+
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 flex-1">
+              {(Object.keys(EVENT_LABELS) as ReviewEvent[]).map(value => {
+                const blocked = value !== 'COMMENT' && details.viewerDidAuthor;
+                return (
+                  <button
+                    key={value}
+                    className={`px-2 py-1 text-[11px] rounded-md border cursor-pointer disabled:cursor-not-allowed disabled:opacity-40 ${
+                      event === value
+                        ? 'border-accent bg-accent/10 text-accent'
+                        : 'border-border bg-bg hover:bg-hover text-text-secondary'
+                    }`}
+                    onClick={() => setEvent(value)}
+                    disabled={blocked}
+                    title={blocked ? 'GitHub does not allow this on your own pull request' : undefined}
+                    aria-pressed={event === value}
+                  >
+                    {EVENT_LABELS[value]}
+                  </button>
+                );
+              })}
+            </div>
+            <button
+              onClick={handleSubmit}
+              disabled={submitting || !canSubmit}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-accent text-white hover:bg-accent-hover transition-colors cursor-pointer disabled:opacity-50 shrink-0"
+            >
+              {submitting ? (
+                <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              ) : (
+                <UploadIcon className="w-3 h-3" />
+              )}
+              Submit {chosen.length > 0 ? `${chosen.length} ` : ''}as one review
+            </button>
           </div>
 
           <div className="flex items-center justify-between py-2.5 px-3 bg-bg-secondary rounded-lg">
