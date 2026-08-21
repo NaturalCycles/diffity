@@ -76,6 +76,40 @@ export function getHost(): string {
   return process.env.DIFFITY_HOST?.trim() || 'localhost';
 }
 
+// The server exposes the diff, the repository's files and the review comments with no
+// authentication, so it must not be reachable beyond this machine unless asked for.
+export function getBindHost(): string {
+  return process.env.DIFFITY_BIND?.trim() || '127.0.0.1';
+}
+
+const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+function isLoopbackBind(host: string): boolean {
+  return LOOPBACK_HOSTNAMES.has(host) || host === '::1';
+}
+
+// A cross-site page cannot forge these, and same-origin fetches from the UI always satisfy
+// them. Navigations are unaffected: they are GET, and Sec-Fetch-Site is `none` when the URL
+// is typed rather than followed.
+function isSameOriginRequest(req: IncomingMessage): boolean {
+  const site = req.headers['sec-fetch-site'];
+  if (typeof site === 'string' && site !== 'same-origin') {
+    return false;
+  }
+
+  const origin = req.headers.origin;
+  if (!origin) {
+    return true;
+  }
+
+  try {
+    const { hostname } = new URL(origin);
+    return LOOPBACK_HOSTNAMES.has(hostname) || hostname === getHost();
+  } catch {
+    return false;
+  }
+}
+
 interface ServerOptions {
   port: number;
   portIsExplicit?: boolean;
@@ -178,16 +212,16 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
         const url = new URL(req.url || '/', `http://${getHost()}:${port}`);
         const pathname = url.pathname;
 
-        res.setHeader('Access-Control-Allow-Origin', '*');
-        res.setHeader(
-          'Access-Control-Allow-Methods',
-          'GET, POST, PATCH, DELETE, OPTIONS',
-        );
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
 
         if (req.method === 'OPTIONS') {
           res.writeHead(204);
           res.end();
+          return;
+        }
+
+        if (req.method !== 'GET' && req.method !== 'HEAD' && !isSameOriginRequest(req)) {
+          sendError(res, 403, 'Cross-origin request rejected');
           return;
         }
 
@@ -598,7 +632,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
         retries++;
         server.close();
         currentPort++;
-        setTimeout(() => server.listen(currentPort), 200);
+        setTimeout(() => server.listen(currentPort, getBindHost()), 200);
       } else if (err.code === 'EADDRINUSE' && portIsExplicit) {
         reject(new Error(`Port ${port} is already in use`));
       } else {
@@ -610,6 +644,11 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
     server.on('listening', () => {
       const addr = server.address();
       if (addr && typeof addr !== 'string') {
+        if (!isLoopbackBind(getBindHost())) {
+          console.warn(
+            `  Warning: listening on ${getBindHost()}:${addr.port} — the diff, the repository files and the review comments are readable by anyone who can reach this machine.`,
+          );
+        }
         if (effectiveRef) {
           findOrCreateSession(effectiveRef);
         }
@@ -630,6 +669,6 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
       }
     });
 
-    server.listen(currentPort);
+    server.listen(currentPort, getBindHost());
   });
 }

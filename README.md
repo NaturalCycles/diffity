@@ -242,12 +242,17 @@ diffity list --json        # machine-readable output
 | Variable       | Description                                                               |
 | -------------- | ------------------------------------------------------------------------- |
 | `DIFFITY_HOST` | Hostname used in the printed URL (default: `localhost`).                  |
+| `DIFFITY_BIND` | Interface the server listens on (default: `127.0.0.1`).                   |
 
 Useful when running diffity inside a VM or container and opening it from another machine:
 
 ```bash
-DIFFITY_HOST=diffity.local diffity
+DIFFITY_BIND=0.0.0.0 DIFFITY_HOST=diffity.local diffity
 ```
+
+The server has no authentication: anything that can reach it can read the diff, the
+repository's files and the review comments. Only widen `DIFFITY_BIND` on a network you
+trust.
 
 ## License
 
