@@ -4,6 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useDiff } from '../../hooks/use-diff';
 import { useInfo } from '../../hooks/use-info';
 import { useTheme } from '../../hooks/use-theme';
+import { useWrapLines } from '../../hooks/use-wrap-lines';
 import { useKeyboard } from '../../hooks/use-keyboard';
 import { useReviewThreads } from '../../hooks/use-review-threads';
 import { useCommentActions } from '../../hooks/use-comment-actions';
@@ -33,6 +34,7 @@ export function DiffPage() {
   const [hideWhitespace, setHideWhitespace] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const { theme, toggleTheme } = useTheme(initialTheme);
+  const { wrapLines, toggleWrapLines } = useWrapLines();
   const { data: diff, error } = useDiff(hideWhitespace, refParam);
   const { data: info } = useInfo(refParam);
   const [activeFile, setActiveFile] = useState<string | null>(null);
@@ -334,6 +336,8 @@ export function DiffPage() {
         onHideWhitespaceChange={setHideWhitespace}
         theme={theme}
         onToggleTheme={toggleTheme}
+        wrapLines={wrapLines}
+        onToggleWrapLines={toggleWrapLines}
         onShowHelp={() => setShowHelp(true)}
         diff={diff || undefined}
         diffRef={refParam}
