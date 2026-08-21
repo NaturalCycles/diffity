@@ -26,6 +26,16 @@ export function readAnchor(filePath: string, startLine: number, endLine: number)
  * would move a comment onto code it was not written about. When the same lines appear more than
  * once, the occurrence nearest to where the comment used to be wins.
  */
+/** Enough of a fingerprint to trust a nearest-match: more than one line, or a substantial one. */
+const MIN_DISTINCTIVE_CHARS = 12;
+
+function isDistinctive(anchorLines: string[]): boolean {
+  if (anchorLines.length > 1) {
+    return true;
+  }
+  return anchorLines[0].replace(/\s+/g, '').length >= MIN_DISTINCTIVE_CHARS;
+}
+
 export function reanchor(
   anchorContent: string,
   fileLines: string[],
@@ -44,6 +54,13 @@ export function reanchor(
   }
 
   if (matches.length === 0) {
+    return null;
+  }
+
+  // Nearest-match is only safe when the anchor identifies the code. A short one-liner like `}`
+  // occurs everywhere, so if it matches in several places the finding stays where it was rather
+  // than being reattached to something it was not written about.
+  if (matches.length > 1 && !isDistinctive(anchorLines)) {
     return null;
   }
 

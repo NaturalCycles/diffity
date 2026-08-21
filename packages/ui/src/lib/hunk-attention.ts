@@ -71,8 +71,10 @@ export function isWhitespaceOnlyHunk(hunk: DiffHunk): boolean {
     return false;
   }
 
-  const added = changed.filter(line => line.type === 'add').map(line => withoutWhitespace(line.content)).sort();
-  const removed = changed.filter(line => line.type === 'delete').map(line => withoutWhitespace(line.content)).sort();
+  // Compared in order, not as a multiset: the same lines coming back in a different order is a
+  // change, and sorting first would call it formatting.
+  const added = changed.filter(line => line.type === 'add').map(line => withoutWhitespace(line.content));
+  const removed = changed.filter(line => line.type === 'delete').map(line => withoutWhitespace(line.content));
 
   return (
     added.length > 0 &&

@@ -1,17 +1,8 @@
 import { execFileSync, execSync } from 'node:child_process';
 import { exec } from './exec.js';
 import type { PrComment, PulledThread, ReviewResult, ReviewSubmission } from './types.js';
+import { commentableLines, isAlreadyCommented } from './comment-targets.js';
 
-export function getFiles(owner: string, repo: string, prNumber: number): Set<string> {
-  try {
-    const raw = exec(
-      `gh api repos/${owner}/${repo}/pulls/${prNumber}/files --jq '.[].filename'`,
-    );
-    return new Set(raw.split('\n').filter(Boolean));
-  } catch {
-    return new Set();
-  }
-}
 
 interface ExistingComment {
   path: string;
@@ -105,14 +96,6 @@ export function pullComments(owner: string, repo: string, prNumber: number): Pul
   }
 }
 
-function isDuplicate(existing: ExistingComment[], comment: PrComment): boolean {
-  return existing.some(e =>
-    e.path === comment.filePath &&
-    e.line === comment.endLine &&
-    e.side === comment.side &&
-    e.body === comment.body,
-  );
-}
 
 interface ReviewCommentPayload {
   path: string;
@@ -153,7 +136,7 @@ export function createReview(
   headSha: string,
   submission: ReviewSubmission,
 ): ReviewResult {
-  const prFiles = getFiles(owner, repo, prNumber);
+  const commentable = commentableLines(getPatch(owner, repo, prNumber));
   const existing = getComments(owner, repo, prNumber);
 
   const errors: string[] = [];
@@ -161,11 +144,20 @@ export function createReview(
   let skipped = 0;
 
   for (const comment of submission.comments) {
-    if (!prFiles.has(comment.filePath)) {
+    const sides = commentable.get(comment.filePath);
+
+    if (!sides) {
       errors.push(`${comment.filePath} — not in PR diff (push your changes first)`);
       continue;
     }
-    if (isDuplicate(existing, comment)) {
+    // The whole review is one request, so a single unpostable line would reject all of it.
+    if (!sides[comment.side].has(comment.endLine)) {
+      errors.push(
+        `${comment.filePath}:${comment.endLine} — outside the lines this PR changed, so the forge will not take a comment there`,
+      );
+      continue;
+    }
+    if (isAlreadyCommented(existing, comment)) {
       skipped++;
       continue;
     }
@@ -207,5 +199,17 @@ export function createReview(
       errors: [...errors, ghLine ? ghLine.trim() : 'GitHub rejected the review'],
       reviewUrl: null,
     };
+  }
+}
+
+function getPatch(owner: string, repo: string, prNumber: number): string {
+  try {
+    return execFileSync('gh', ['pr', 'diff', String(prNumber), '--repo', `${owner}/${repo}`, '--patch'], {
+      encoding: 'utf-8',
+      stdio: 'pipe',
+      maxBuffer: 50 * 1024 * 1024,
+    });
+  } catch {
+    return '';
   }
 }

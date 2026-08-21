@@ -123,6 +123,19 @@ function migrateDb(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_tours_session ON tours(session_id);
     CREATE INDEX IF NOT EXISTS idx_tour_steps_tour ON tour_steps(tour_id);
   `);
+
+  // The schema above is create-only, so a column added later needs its own step. Sessions were
+  // identified by ref and commit alone, which two repositories sharing a data directory can
+  // collide on -- `work` and `master` are not unique names.
+  addColumn(db, 'review_sessions', 'repo_root', 'TEXT');
+}
+
+function addColumn(db: DatabaseSync, table: string, column: string, type: string): void {
+  const existing = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (existing.some(row => row.name === column)) {
+    return;
+  }
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
 }
 
 export function closeDb(): void {

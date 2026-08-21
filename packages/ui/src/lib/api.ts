@@ -37,6 +37,11 @@ export interface GitHubRemote {
   repo: string;
 }
 
+export interface Suppressed {
+  files: number;
+  lines: number;
+}
+
 export interface PrReview {
   author: string;
   isBot: boolean;

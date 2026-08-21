@@ -32,12 +32,19 @@ describe('reanchor', () => {
     expect(reanchor('function third() {', file, 4)).toBeNull();
   });
 
-  it('takes the occurrence nearest to where the comment was', () => {
-    const duplicated = ['  return 1;', 'x', '  return 1;', 'y', '  return 1;'];
+  it('takes the occurrence nearest to where the comment was, when the anchor identifies the code', () => {
+    const anchor = 'const total = computeTotal(items);';
+    const duplicated = [anchor, 'x', anchor, 'y', anchor];
 
-    expect(reanchor('  return 1;', duplicated, 3)?.startLine).toBe(3);
-    expect(reanchor('  return 1;', duplicated, 5)?.startLine).toBe(5);
-    expect(reanchor('  return 1;', duplicated, 1)?.startLine).toBe(1);
+    expect(reanchor(anchor, duplicated, 3)?.startLine).toBe(3);
+    expect(reanchor(anchor, duplicated, 5)?.startLine).toBe(5);
+    expect(reanchor(anchor, duplicated, 1)?.startLine).toBe(1);
+  });
+
+  it('refuses nearest-match when the anchor is too short to identify anything', () => {
+    const duplicated = ['  return 1;', 'x', '  return 1;'];
+
+    expect(reanchor('  return 1;', duplicated, 3)).toBeNull();
   });
 
   it('refuses an empty anchor rather than matching everywhere', () => {
@@ -94,5 +101,31 @@ describe('countLines', () => {
 
     expect(countLines('')).toBe(0);
     expect(countLines('\n')).toBe(1);
+  });
+})
+
+describe('reanchor refuses an ambiguous anchor', () => {
+  const file = ['function a() {', '  work();', '}', '', 'function b() {', '  work();', '}'];
+
+  it('will not move a short anchor that matches in several places', async () => {
+    const { reanchor } = await import('../src/anchor.js');
+
+    // `}` occurs twice, and the line it was written against is gone. Picking the nearest would
+    // silently reattach the finding to a different function.
+    expect(reanchor('}', file, 3)).toBeNull();
+    expect(reanchor('  work();', file, 2)).toBeNull();
+  });
+
+  it('accepts a short anchor when it is the only match', async () => {
+    const { reanchor } = await import('../src/anchor.js');
+
+    expect(reanchor('  work();', ['pad', '  work();'], 1)).toEqual({ startLine: 2, endLine: 2 });
+  });
+
+  it('accepts an ambiguous but distinctive multi-line anchor', async () => {
+    const { reanchor } = await import('../src/anchor.js');
+    const twice = ['function b() {', '  work();', '}', 'gap', 'function b() {', '  work();', '}'];
+
+    expect(reanchor('function b() {\n  work();', twice, 5)?.startLine).toBe(5);
   });
 })

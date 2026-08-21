@@ -156,3 +156,28 @@ describe('hunkIntersectsRanges', () => {
     expect(hunkIntersectsRanges(target, undefined)).toBe(false);
   });
 });
+
+describe('whitespace-only judgement and reordering', () => {
+  it('does not call a reordering whitespace-only', () => {
+    // The same two lines come back in the other order: that is a change, not formatting.
+    const reordered = hunk([
+      line('delete', 'first();'),
+      line('delete', 'second();'),
+      line('add', 'second();'),
+      line('add', 'first();'),
+    ]);
+
+    expect(isWhitespaceOnlyHunk(reordered)).toBe(false);
+  });
+
+  it('still sees a genuine reindent of several lines', () => {
+    const reindented = hunk([
+      line('delete', 'first();'),
+      line('delete', 'second();'),
+      line('add', '  first();'),
+      line('add', '  second();'),
+    ]);
+
+    expect(isWhitespaceOnlyHunk(reindented)).toBe(true);
+  });
+})

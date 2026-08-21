@@ -88,6 +88,27 @@ export function DiffPage() {
   const diffPaths = useMemo(() => (diff ? diff.files.map(file => getFilePath(file)) : []), [diff]);
   const tourStops = useMemo(() => stopsByPath(activeTour, diffPaths), [activeTour, diffPaths]);
 
+  // Naming the amount matters: a filtered diff disagrees with the forge's own counts, and after
+  // the stale-base episode an unexplained disagreement is the last thing this page should show.
+  const whitespaceNotice = useMemo(() => {
+    if (!hideWhitespace) {
+      return null;
+    }
+    const base = info?.description ?? '';
+    const suppressed = (diff as { suppressed?: { files: number; lines: number } } | undefined)?.suppressed;
+    if (!suppressed || (suppressed.files === 0 && suppressed.lines === 0)) {
+      return `${base} · whitespace hidden`;
+    }
+    const parts: string[] = [];
+    if (suppressed.files > 0) {
+      parts.push(`${suppressed.files} file${suppressed.files === 1 ? '' : 's'}`);
+    }
+    if (suppressed.lines > 0) {
+      parts.push(`${suppressed.lines} line${suppressed.lines === 1 ? '' : 's'}`);
+    }
+    return `${base} · whitespace hidden (${parts.join(', ')} suppressed)`;
+  }, [hideWhitespace, info?.description, diff]);
+
   const focusRangesByFile = useMemo(() => {
     const ranges = new Map<string, { startLine: number; endLine: number }[]>();
     for (const step of activeTour?.steps ?? []) {
@@ -417,7 +438,7 @@ export function DiffPage() {
         onScrollToThread={handleScrollToThread}
         repoName={info?.name || null}
         branch={info?.branch || null}
-        description={hideWhitespace ? `${info?.description ?? ''} · whitespace hidden` : info?.description || null}
+        description={whitespaceNotice ?? info?.description ?? null}
         githubDetails={githubDetails}
         reviewInProgress={!!info?.review?.inProgress}
         sessionId={sessionId}

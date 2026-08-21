@@ -38,6 +38,17 @@ afterAll(() => {
 });
 
 describe('diff fingerprint', () => {
+  it('ignores an unrelated commit for a working-tree diff', async () => {
+    const { computeDiffFingerprint } = await import('../src/fingerprint.js');
+
+    const before = computeDiffFingerprint(null, [], false);
+    commit('unrelated.txt', 'nothing to do with the diff\n');
+
+    // A working-tree diff already changes its own stat when its content changes; a commit
+    // elsewhere must not claim it went stale.
+    expect(computeDiffFingerprint(null, [], false)).toBe(before);
+  });
+
   it('changes when a commit rewrites the same number of lines', async () => {
     const { computeDiffFingerprint } = await import('../src/fingerprint.js');
 

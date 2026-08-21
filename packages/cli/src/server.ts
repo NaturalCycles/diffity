@@ -13,6 +13,7 @@ import { parseDiff, type ParsedDiff } from '@diffity/parser';
 import {
   getDiff,
   getDiffStat,
+  getDiffStatForRef,
   getUntrackedFiles,
   getUntrackedDiff,
   getRepoInfo,
@@ -47,6 +48,7 @@ import {
 } from '@diffity/github';
 import { findOrCreateSession } from './session.js';
 import { computeDiffFingerprint } from './fingerprint.js';
+import { parseDiffStatSummary } from './diff-stat.js';
 import { getReviewRun } from './review-run.js';
 import { createThread, addReply, getThreadsForSession } from './threads.js';
 import { handleReviewRoute } from './review-routes.js';
@@ -237,6 +239,29 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
 
   const includeUntracked = diffArgs.length === 0;
 
+  /**
+   * How much whitespace hiding removed. A filtered diff renders fewer files and lines than the
+   * forge shows, so the page has to be able to name the difference rather than leave the reader
+   * to wonder why the numbers disagree.
+   */
+  function suppressedByWhitespace(
+    hiding: boolean,
+    filtered: ParsedDiff,
+    ref: string | null,
+  ): { files: number; lines: number } | null {
+    if (!hiding) {
+      return null;
+    }
+
+    const unfiltered = parseDiffStatSummary(ref ? getDiffStatForRef(ref) : getDiffStat(diffArgs));
+    const shownLines = filtered.stats.totalAdditions + filtered.stats.totalDeletions;
+
+    return {
+      files: Math.max(0, unfiltered.files - filtered.stats.filesChanged),
+      lines: Math.max(0, unfiltered.insertions + unfiltered.deletions - shownLines),
+    };
+  }
+
   function enrichWithLineCounts(diff: ParsedDiff, baseRef: string): ParsedDiff {
     for (const file of diff.files) {
       if (file.status === 'added' || file.isBinary) {
@@ -423,25 +448,19 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
         if (pathname === '/api/diff') {
           const ref = url.searchParams.get('ref');
           const whitespace = url.searchParams.get('whitespace');
-          const extraArgs = whitespace === 'hide' ? ['-w'] : [];
+          const hiding = whitespace === 'hide';
+          const extraArgs = hiding ? ['-w'] : [];
           const baseRef = ref ? resolveBaseRef(ref) : 'HEAD';
 
           if (ref) {
-            sendJson(
-              res,
-              enrichWithLineCounts(
-                parseDiff(resolveRef(ref, extraArgs)),
-                baseRef,
-              ),
-            );
+            const diff = enrichWithLineCounts(parseDiff(resolveRef(ref, extraArgs)), baseRef);
+            sendJson(res, { ...diff, suppressed: suppressedByWhitespace(hiding, diff, ref) });
             return;
           }
 
-          const args = whitespace === 'hide' ? [...diffArgs, '-w'] : diffArgs;
-          sendJson(
-            res,
-            enrichWithLineCounts(parseDiff(getFullDiff(args)), baseRef),
-          );
+          const args = hiding ? [...diffArgs, '-w'] : diffArgs;
+          const diff = enrichWithLineCounts(parseDiff(getFullDiff(args)), baseRef);
+          sendJson(res, { ...diff, suppressed: suppressedByWhitespace(hiding, diff, null) });
           return;
         }
 

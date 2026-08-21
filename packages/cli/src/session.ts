@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { getHeadHash, getDiffityDir } from '@diffity/git';
+import { getHeadHash, getDiffityDir, getRepoRoot } from '@diffity/git';
 import { getDb, queryAll, queryOne } from './db.js';
 import { reanchorInWorkingTree } from './anchor.js';
 import { carryReviewRun } from './review-run.js';
@@ -21,10 +21,13 @@ export function findOrCreateSession(ref: string): Session {
   const db = getDb();
   const headHash = getHeadHash();
 
+  const repoRoot = getRepoRoot();
+
   const existing = queryOne<{ id: string; ref: string; head_hash: string }>(
-    'SELECT id, ref, head_hash FROM review_sessions WHERE ref = ? AND head_hash = ?',
+    'SELECT id, ref, head_hash FROM review_sessions WHERE ref = ? AND head_hash = ? AND repo_root IS ?',
     ref,
     headHash,
+    repoRoot,
   );
 
   if (existing) {
@@ -37,14 +40,15 @@ export function findOrCreateSession(ref: string): Session {
   // one. Anything still open has to come with it: the whole point of reviewing your own
   // change is to act on the findings, and acting on them moves HEAD.
   const previous = queryOne<{ id: string }>(
-    'SELECT id FROM review_sessions WHERE ref = ? ORDER BY created_at DESC, rowid DESC LIMIT 1',
+    'SELECT id FROM review_sessions WHERE ref = ? AND repo_root IS ? ORDER BY created_at DESC, rowid DESC LIMIT 1',
     ref,
+    repoRoot,
   );
 
   const id = randomUUID();
   db.prepare(
-    'INSERT INTO review_sessions (id, ref, head_hash) VALUES (?, ?, ?)'
-  ).run(id, ref, headHash);
+    'INSERT INTO review_sessions (id, ref, head_hash, repo_root) VALUES (?, ?, ?, ?)'
+  ).run(id, ref, headHash, repoRoot);
 
   if (previous) {
     carryForward(previous.id, id);
@@ -113,8 +117,8 @@ export function resolveSessionId(sessionId: string | null | undefined): string {
     return getCurrentSession()?.id ?? '';
   }
 
-  const known = queryOne<{ ref: string }>(
-    'SELECT ref FROM review_sessions WHERE id = ?',
+  const known = queryOne<{ ref: string; repo_root: string | null }>(
+    'SELECT ref, repo_root FROM review_sessions WHERE id = ?',
     sessionId,
   );
   if (!known) {
@@ -122,8 +126,9 @@ export function resolveSessionId(sessionId: string | null | undefined): string {
   }
 
   const newest = queryOne<{ id: string }>(
-    'SELECT id FROM review_sessions WHERE ref = ? ORDER BY created_at DESC, rowid DESC LIMIT 1',
+    'SELECT id FROM review_sessions WHERE ref = ? AND repo_root IS ? ORDER BY created_at DESC, rowid DESC LIMIT 1',
     known.ref,
+    known.repo_root,
   );
 
   return newest?.id ?? sessionId;

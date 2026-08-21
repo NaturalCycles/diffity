@@ -3,8 +3,8 @@ import { getDiffStat, getDiffStatForRef, getHeadHash, getUntrackedFiles } from '
 
 /**
  * A diffstat only counts lines, so a commit that rewrites the same number of them produces an
- * identical stat and the diff would look unchanged. Including the head commit makes any new
- * commit visible, while the stat still catches edits to the working tree, where HEAD does not move.
+ * identical stat and the diff would look unchanged. For a ref-based diff the head commit is
+ * folded in to make that visible.
  */
 export function computeDiffFingerprint(
   ref: string | null,
@@ -22,5 +22,10 @@ export function computeDiffFingerprint(
     }
   }
 
-  return createHash('sha1').update(`${getHeadHash()}\n${stat}`).digest('hex');
+  // The head only matters for a ref-based diff, where a new commit changes what the range means
+  // without necessarily changing the stat. A working-tree diff changes its own stat whenever its
+  // content changes, so folding the head in there would call it stale after any commit at all.
+  const head = ref ? getHeadHash() : '';
+
+  return createHash('sha1').update(`${head}\n${stat}`).digest('hex');
 }
