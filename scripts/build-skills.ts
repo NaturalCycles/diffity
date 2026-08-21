@@ -30,8 +30,10 @@ writeFile(
 );
 console.log(`Skills hash: ${skillsHash}`);
 
-if (process.env.DIFFITY_SKIP_DEV_SKILLS || !homeDir) {
-  console.log('Skipped dev skills sync');
+// Opt-in: a build should not write into the user's home directory unless asked. The dev skills
+// exist to drive the `diffity-dev` binary from this checkout, which is not what most builds want.
+if (!process.env.DIFFITY_SYNC_DEV_SKILLS || !homeDir) {
+  console.log('Skipped dev skills sync (set DIFFITY_SYNC_DEV_SKILLS=1 to install them)');
 } else {
   cleanManagedSkills(globalClaudeSkillsDir, DEV_SKILL_PREFIX);
   for (const skill of skills) {

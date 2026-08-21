@@ -244,6 +244,7 @@ diffity list --json        # machine-readable output
 | `DIFFITY_HOST` | Hostname used in the printed URL (default: `localhost`).                  |
 | `DIFFITY_BIND` | Interface the server listens on (default: `127.0.0.1`).                   |
 | `DIFFITY_DATA_DIR` | Where review notes are kept (default: `~/.diffity/<repo-hash>`).      |
+| `DIFFITY_SYNC_DEV_SKILLS` | Set to `1` to have a build install the `diffity-dev-*` skills into `~/.claude/skills`. |
 
 Useful when running diffity inside a VM or container and opening it from another machine:
 
