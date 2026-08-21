@@ -278,6 +278,10 @@ export function fetchTour(tourId: string): Promise<Tour> {
   return apiFetch(`/api/tours/${tourId}`);
 }
 
+export function fetchTours(sessionId: string): Promise<Tour[]> {
+  return apiFetch(`/api/tours?session=${encodeURIComponent(sessionId)}`);
+}
+
 export interface TreeEntryResponse {
   type: 'blob' | 'tree';
   path: string;

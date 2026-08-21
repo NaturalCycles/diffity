@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { DiffFile } from '@diffity/parser';
+import { getFilePath } from '../../lib/diff-utils';
 import { FileTree } from '../tree/file-tree';
 import type { FileTreeHandle } from '../tree/file-tree';
 import { SidebarIcon } from '../icons/sidebar-icon';
@@ -8,6 +9,9 @@ import { XIcon } from '../icons/x-icon';
 import { CommentIcon } from '../icons/comment-icon';
 import { CollapseAllIcon } from '../icons/collapse-all-icon';
 import { ExpandAllIcon } from '../icons/expand-all-icon';
+import { ListOrderedIcon } from '../icons/list-ordered-icon';
+import { ReviewOrderList } from '../diff/review-order-list';
+import type { TourFileStop } from '../../lib/tour-order';
 
 interface SidebarProps {
   files: DiffFile[];
@@ -16,6 +20,12 @@ interface SidebarProps {
   commentCountsByFile: Map<string, number>;
   onFileClick: (path: string) => void;
   onCommentedFileClick: (path: string) => void;
+  /** Absent when no walkthrough exists for this diff, which hides the ordering toggle. */
+  reviewOrder?: {
+    stops: Map<string, TourFileStop>;
+    enabled: boolean;
+    onToggle: () => void;
+  };
 }
 
 export function Sidebar(props: SidebarProps) {
@@ -26,6 +36,7 @@ export function Sidebar(props: SidebarProps) {
     commentCountsByFile,
     onFileClick,
     onCommentedFileClick,
+    reviewOrder,
   } = props;
   const fileTreeRef = useRef<FileTreeHandle>(null);
   const [search, setSearch] = useState('');
@@ -33,6 +44,7 @@ export function Sidebar(props: SidebarProps) {
   const [commentedFilesOnly, setCommentedFilesOnly] = useState(false);
   const [allExpanded, setAllExpanded] = useState(true);
 
+  const inReviewOrder = !!reviewOrder?.enabled;
   const commentedFileCount = commentCountsByFile.size;
   const commentedFileCountLabel = commentedFileCount > 99 ? '99+' : String(commentedFileCount);
   const countLabel = useMemo(() => {
@@ -50,6 +62,17 @@ export function Sidebar(props: SidebarProps) {
       setCommentedFilesOnly(false);
     }
   }, [commentedFileCount, commentedFilesOnly]);
+
+  const visibleFiles = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    return files.filter(file => {
+      const path = getFilePath(file);
+      if (commentedFilesOnly && !commentCountsByFile.has(path)) {
+        return false;
+      }
+      return !needle || path.toLowerCase().includes(needle);
+    });
+  }, [files, search, commentedFilesOnly, commentCountsByFile]);
 
   const handleTreeFileClick = (path: string) => {
     if (commentedFilesOnly && commentCountsByFile.has(path)) {
@@ -77,29 +100,43 @@ export function Sidebar(props: SidebarProps) {
     <aside className="w-72 min-w-72 border-r border-border bg-bg-secondary flex flex-col overflow-hidden">
       <div className="flex items-center justify-between px-3 py-2.5 border-b border-border">
         <span className="text-xs font-medium text-text-secondary flex items-center gap-2 uppercase tracking-wider">
-          Files
+          {inReviewOrder ? 'Review order' : 'Files'}
           <span className="inline-flex items-center justify-center min-w-5 h-5 px-1.5 bg-bg-tertiary rounded-full text-[10px] font-semibold text-text-muted">
             {countLabel}
           </span>
         </span>
         <div className="flex items-center gap-0.5">
-          <button
-            className="p-1 rounded-md text-text-muted hover:text-text hover:bg-hover cursor-pointer"
-            onClick={() => {
-              if (allExpanded) {
-                fileTreeRef.current?.collapseAll();
-              } else {
-                fileTreeRef.current?.expandAll();
-              }
-            }}
-            title={allExpanded ? 'Collapse all' : 'Expand all'}
-          >
-            {allExpanded ? (
-              <CollapseAllIcon className="w-3.5 h-3.5" />
-            ) : (
-              <ExpandAllIcon className="w-3.5 h-3.5" />
-            )}
-          </button>
+          {reviewOrder && (
+            <button
+              className={`p-1 rounded-md cursor-pointer ${
+                inReviewOrder ? 'text-accent bg-accent/10' : 'text-text-muted hover:text-text hover:bg-hover'
+              }`}
+              onClick={reviewOrder.onToggle}
+              title={inReviewOrder ? 'Sort files alphabetically' : 'Sort files in review order'}
+              aria-pressed={inReviewOrder}
+            >
+              <ListOrderedIcon className="w-3.5 h-3.5" />
+            </button>
+          )}
+          {!inReviewOrder && (
+            <button
+              className="p-1 rounded-md text-text-muted hover:text-text hover:bg-hover cursor-pointer"
+              onClick={() => {
+                if (allExpanded) {
+                  fileTreeRef.current?.collapseAll();
+                } else {
+                  fileTreeRef.current?.expandAll();
+                }
+              }}
+              title={allExpanded ? 'Collapse all' : 'Expand all'}
+            >
+              {allExpanded ? (
+                <CollapseAllIcon className="w-3.5 h-3.5" />
+              ) : (
+                <ExpandAllIcon className="w-3.5 h-3.5" />
+              )}
+            </button>
+          )}
           <button
             className="p-1 rounded-md text-text-muted hover:text-text hover:bg-hover cursor-pointer"
             onClick={() => setCollapsed(true)}
@@ -153,17 +190,28 @@ export function Sidebar(props: SidebarProps) {
           </button>
         )}
       </div>
-      <FileTree
-        ref={fileTreeRef}
-        files={files}
-        search={search}
-        activeFile={activeFile}
-        reviewedFiles={reviewedFiles}
-        commentCountsByFile={commentCountsByFile}
-        commentedFilesOnly={commentedFilesOnly}
-        onFileClick={handleTreeFileClick}
-        onExpandedStateChange={setAllExpanded}
-      />
+      {inReviewOrder ? (
+        <ReviewOrderList
+          files={visibleFiles}
+          stops={reviewOrder!.stops}
+          activeFile={activeFile}
+          reviewedFiles={reviewedFiles}
+          commentCountsByFile={commentCountsByFile}
+          onFileClick={handleTreeFileClick}
+        />
+      ) : (
+        <FileTree
+          ref={fileTreeRef}
+          files={files}
+          search={search}
+          activeFile={activeFile}
+          reviewedFiles={reviewedFiles}
+          commentCountsByFile={commentCountsByFile}
+          commentedFilesOnly={commentedFilesOnly}
+          onFileClick={handleTreeFileClick}
+          onExpandedStateChange={setAllExpanded}
+        />
+      )}
     </aside>
   );
 }
