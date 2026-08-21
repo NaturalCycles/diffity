@@ -68,3 +68,28 @@ export function cleanDir(dir: string): void {
   }
   mkdirSync(dir, { recursive: true });
 }
+
+export const DEV_SKILL_PREFIX = 'diffity-dev';
+
+// `dir` holds skills this repo does not own, so only our own prefixed entries may be removed —
+// never the directory itself.
+export function removePrefixedDirs(dir: string, prefix: string): string[] {
+  if (!prefix) {
+    throw new Error('removePrefixedDirs requires a non-empty prefix');
+  }
+
+  if (!existsSync(dir)) {
+    return [];
+  }
+
+  const removed: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !entry.name.startsWith(prefix)) {
+      continue;
+    }
+    rmSync(join(dir, entry.name), { recursive: true, force: true });
+    removed.push(entry.name);
+  }
+
+  return removed;
+}

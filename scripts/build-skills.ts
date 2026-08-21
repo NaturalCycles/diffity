@@ -1,7 +1,7 @@
 import { createHash } from 'crypto';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { readSkills, renderSkill, writeFile, cleanDir } from './lib/utils.js';
+import { readSkills, renderSkill, writeFile, cleanDir, removePrefixedDirs, DEV_SKILL_PREFIX } from './lib/utils.js';
 import { claudeCode } from './lib/transformers/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -30,8 +30,12 @@ writeFile(
 );
 console.log(`Skills hash: ${skillsHash}`);
 
-cleanDir(globalClaudeSkillsDir);
-for (const skill of skills) {
-  claudeCode(skill, homeDir, { binary: 'diffity-dev', namePrefix: 'diffity-dev', slashPrefix: '/diffity-dev-', installHint: 'run `npm run dev` from the diffity repo root to link the CLI' });
+if (process.env.DIFFITY_SKIP_DEV_SKILLS || !homeDir) {
+  console.log('Skipped dev skills sync');
+} else {
+  removePrefixedDirs(globalClaudeSkillsDir, DEV_SKILL_PREFIX);
+  for (const skill of skills) {
+    claudeCode(skill, homeDir, { binary: DEV_SKILL_PREFIX, namePrefix: DEV_SKILL_PREFIX, slashPrefix: `/${DEV_SKILL_PREFIX}-`, installHint: 'run `npm run dev` from the diffity repo root to link the CLI' });
+  }
+  console.log(`Synced ${skills.length} dev skills to ~/.claude/skills/`);
 }
-console.log(`Synced ${skills.length} dev skills to ~/.claude/skills/`);
