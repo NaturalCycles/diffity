@@ -12,7 +12,6 @@ import { dirname } from 'node:path';
 import { parseDiff, type ParsedDiff } from '@diffity/parser';
 import {
   getDiff,
-  getDiffStatForRef,
   getDiffStat,
   getUntrackedFiles,
   getUntrackedDiff,
@@ -47,6 +46,8 @@ import {
   type ReviewEvent,
 } from '@diffity/github';
 import { findOrCreateSession } from './session.js';
+import { computeDiffFingerprint } from './fingerprint.js';
+import { getReviewRun } from './review-run.js';
 import { createThread, addReply, getThreadsForSession } from './threads.js';
 import { handleReviewRoute } from './review-routes.js';
 import { handleTourRoute } from './tour-routes.js';
@@ -397,20 +398,9 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
 
         if (pathname === '/api/diff-fingerprint') {
           const ref = url.searchParams.get('ref');
-          let stat: string;
-          if (ref) {
-            stat = getDiffStatForRef(ref);
-          } else {
-            stat = getDiffStat(diffArgs);
-            if (includeUntracked) {
-              stat += '\n' + getUntrackedFiles().join('\n');
-            }
-          }
-          const hash = createHash('sha1')
-            .update(stat)
-            .digest('hex')
-            .slice(0, 12);
-          sendJson(res, { fingerprint: hash });
+          sendJson(res, {
+            fingerprint: computeDiffFingerprint(ref, diffArgs, includeUntracked),
+          });
           return;
         }
 
@@ -486,6 +476,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             description: refDescription,
             capabilities,
             sessionId,
+            review: sessionId ? getReviewRun(sessionId) : null,
             github: githubRemote,
             editor: editorAvailable,
           });

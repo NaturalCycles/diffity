@@ -8,12 +8,13 @@ import {
   type TourStatus,
 } from './tours.js';
 import { sendJson, sendError, withJsonBody } from './http-utils.js';
+import { resolveSessionId } from './session.js';
 
 export function handleTourRoute(req: IncomingMessage, res: ServerResponse, pathname: string, url: URL): boolean {
   if (pathname === '/api/tours' && req.method === 'GET') {
-    const sid = url.searchParams.get('session');
+    const sid = resolveSessionId(url.searchParams.get('session'));
     if (!sid) {
-      sendError(res, 400, 'Missing session parameter');
+      sendError(res, 400, 'No review session');
       return true;
     }
     const tours = getToursForSession(sid);

@@ -47,6 +47,12 @@ export interface GitHubDetails {
   viewerDidAuthor: boolean;
 }
 
+export interface ReviewRun {
+  inProgress: boolean;
+  startedAt: string | null;
+  note: string;
+}
+
 export interface RepoInfo {
   name: string;
   branch: string;
@@ -56,6 +62,7 @@ export interface RepoInfo {
   sessionId?: string | null;
   github?: GitHubRemote | null;
   editor?: 'vscode' | null;
+  review?: ReviewRun | null;
 }
 
 export interface Commit {

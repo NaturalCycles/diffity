@@ -113,6 +113,13 @@ function migrateDb(db: DatabaseSync): void {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS review_runs (
+      session_id TEXT PRIMARY KEY REFERENCES review_sessions(id),
+      started_at TEXT NOT NULL,
+      finished_at TEXT,
+      note TEXT NOT NULL DEFAULT ''
+    );
+
     CREATE INDEX IF NOT EXISTS idx_tours_session ON tours(session_id);
     CREATE INDEX IF NOT EXISTS idx_tour_steps_tour ON tour_steps(tour_id);
   `);

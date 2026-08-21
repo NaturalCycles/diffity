@@ -17,6 +17,7 @@ import { DiffView, type DiffViewHandle } from './diff-view';
 import { Sidebar } from '../layout/sidebar';
 import { ShortcutModal } from '../layout/shortcut-modal';
 import { StaleDiffBanner } from '../layout/stale-diff-banner';
+import { ReviewProgressBanner } from '../layout/review-progress-banner';
 import { CheckCircleIcon } from '../icons/check-circle-icon';
 import { PageLoader } from '../layout/skeleton';
 import { useDiffStaleness } from '../../hooks/use-diff-staleness';
@@ -417,10 +418,14 @@ export function DiffPage() {
         branch={info?.branch || null}
         description={hideWhitespace ? `${info?.description ?? ''} · whitespace hidden` : info?.description || null}
         githubDetails={githubDetails}
+        reviewInProgress={!!info?.review?.inProgress}
         sessionId={sessionId}
         onGitHubPulled={() => queryClient.invalidateQueries({ queryKey: ['threads'] })}
       />
       {isStale && <StaleDiffBanner onRefresh={handleRefreshDiff} />}
+      {info?.review?.inProgress && (
+        <ReviewProgressBanner review={info.review} findings={threads.length} />
+      )}
       {activeTour && (
         <TourStepper
           tour={activeTour}

@@ -15,6 +15,7 @@ import {
 } from './threads.js';
 import { createTour, addTourStep, updateTourStatus } from './tours.js';
 import { readAnchor } from './anchor.js';
+import { startReviewRun, finishReviewRun } from './review-run.js';
 import { readRepoConfig, DEFAULT_SEVERITIES, resolveInRepo, REPO_CONFIG_FILE } from '@diffity/git';
 import { readFileSync } from 'node:fs';
 
@@ -241,6 +242,25 @@ Examples:
         process.exit(0);
       }
       process.stdout.write(raw);
+    });
+
+  agent
+    .command('review-start')
+    .description('Announce that a review is under way, so the page can say so')
+    .option('--note <text>', 'What is being reviewed', '')
+    .action((opts) => {
+      const session = requireSession();
+      startReviewRun(session.id, opts.note);
+      console.log(pc.green('Review marked as in progress'));
+    });
+
+  agent
+    .command('review-done')
+    .description('Announce that the review is finished')
+    .action(() => {
+      const session = requireSession();
+      finishReviewRun(session.id);
+      console.log(pc.green('Review marked as finished'));
     });
 
   agent

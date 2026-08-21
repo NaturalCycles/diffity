@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { getHeadHash, getDiffityDir } from '@diffity/git';
 import { getDb, queryAll, queryOne } from './db.js';
 import { reanchorInWorkingTree } from './anchor.js';
+import { carryReviewRun } from './review-run.js';
 import { updateThreadLines } from './threads.js';
 
 export interface Session {
@@ -74,6 +75,7 @@ export function carryForward(fromSessionId: string, toSessionId: string): void {
     fromSessionId,
   );
 
+  carryReviewRun(fromSessionId, toSessionId);
   reanchorThreads(toSessionId);
 }
 
@@ -99,6 +101,32 @@ function reanchorThreads(sessionId: string): void {
       updateThreadLines(thread.id, moved.startLine, moved.endLine);
     }
   }
+}
+
+/**
+ * The session a request is about. A browser tab holds whichever id it loaded with, and a commit
+ * since then will have carried the threads into a newer session for the same ref — so honouring a
+ * stale id literally would tell the tab the review is empty.
+ */
+export function resolveSessionId(sessionId: string | null | undefined): string {
+  if (!sessionId) {
+    return getCurrentSession()?.id ?? '';
+  }
+
+  const known = queryOne<{ ref: string }>(
+    'SELECT ref FROM review_sessions WHERE id = ?',
+    sessionId,
+  );
+  if (!known) {
+    return sessionId;
+  }
+
+  const newest = queryOne<{ id: string }>(
+    'SELECT id FROM review_sessions WHERE ref = ? ORDER BY created_at DESC, rowid DESC LIMIT 1',
+    known.ref,
+  );
+
+  return newest?.id ?? sessionId;
 }
 
 export function getCurrentSession(): Session | null {
