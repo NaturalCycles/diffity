@@ -50,6 +50,22 @@ export function execFileLarge(command: string, args: string[]): string {
   }).trim();
 }
 
+/**
+ * Runs git without a shell. Preferred over the string forms for anything whose arguments
+ * come from a ref, a path or a search term.
+ */
+export function git(args: string[]): string {
+  return execFileLarge('git', args);
+}
+
+export function gitLines(args: string[]): string[] {
+  const output = git(args);
+  if (!output) {
+    return [];
+  }
+  return output.split('\n');
+}
+
 export function execLines(cmd: string): string[] {
   const output = exec(cmd);
   if (!output) {

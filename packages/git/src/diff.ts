@@ -1,4 +1,4 @@
-import { exec, execLarge, execLines, execWithStdin } from './exec.js';
+import { exec, execLarge, execLines, execWithStdin, git } from './exec.js';
 
 /**
  * Flags that neutralize user git config which would otherwise alter the diff
@@ -120,6 +120,48 @@ export function getMergeBase(a: string, b: string): string {
   return exec(`git merge-base ${a} ${b}`);
 }
 
+function isLocalBranch(ref: string): boolean {
+  try {
+    git(['show-ref', '--verify', '--quiet', `refs/heads/${ref}`]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getUpstream(ref: string): string | null {
+  try {
+    return git(['rev-parse', '--abbrev-ref', '--symbolic-full-name', `${ref}@{upstream}`]) || null;
+  } catch {
+    return null;
+  }
+}
+
+function isBehind(ref: string, other: string): boolean {
+  return Number(git(['rev-list', '--count', `${ref}..${other}`])) > 0;
+}
+
+/**
+ * "What changed since master" means since the master everyone else has, not since the copy
+ * in this checkout — which is usually behind, and every commit it is missing would otherwise
+ * show up as part of the change set.
+ *
+ * Only bare local branch names are redirected: a range, a tag or a commit is taken as pinned
+ * on purpose.
+ */
+export function resolveThroughUpstream(ref: string): string {
+  if (!isLocalBranch(ref)) {
+    return ref;
+  }
+
+  const upstream = getUpstream(ref);
+  if (!upstream) {
+    return ref;
+  }
+
+  return isBehind(ref, upstream) ? upstream : ref;
+}
+
 export function normalizeRef(ref: string): string {
   if (ref.includes('...')) {
     return ref;
@@ -131,7 +173,7 @@ export function normalizeRef(ref: string): string {
     const base = getMergeBase(left, right);
     return `${base}..${right}`;
   }
-  return getMergeBase(ref, 'HEAD');
+  return getMergeBase(resolveThroughUpstream(ref), 'HEAD');
 }
 
 export const WORKING_TREE_REFS = new Set(['work', '.', 'staged', 'unstaged']);
@@ -155,7 +197,7 @@ export function resolveBaseRef(ref: string): string {
     return getMergeBase(left, right);
   }
 
-  return getMergeBase(ref, 'HEAD');
+  return getMergeBase(resolveThroughUpstream(ref), 'HEAD');
 }
 
 export function getFileContent(path: string, ref = 'HEAD'): string {
