@@ -126,6 +126,7 @@ range syntax (main..feature, main...feature) also work.`)
     }
 
     let prBase: PrBase | null = null;
+    let parsedPrNumber: number | undefined;
 
     if (refs.length === 1 && isGitHubPrUrl(refs[0])) {
       const parsed = parseGitHubPrUrl(refs[0]);
@@ -181,6 +182,7 @@ range syntax (main..feature, main...feature) also work.`)
         process.exit(1);
       }
 
+      parsedPrNumber = parsed.number;
       refs[0] = prBase.oid;
     }
 
@@ -316,6 +318,7 @@ range syntax (main..feature, main...feature) also work.`)
         description,
         effectiveRef,
         pinnedRef: prBase?.oid,
+        prNumber: parsedPrNumber,
         version: pkg.version,
         registryInfo: { repoRoot, repoHash, repoName },
       });

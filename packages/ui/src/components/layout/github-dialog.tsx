@@ -14,6 +14,7 @@ import {
 } from '../../lib/api';
 import type { CommentThread } from '../comments/types';
 import {
+  canSubmitReview,
   isSubmittable,
   summaryFromGeneralThreads,
   threadToPayload,
@@ -86,7 +87,12 @@ export function GitHubDialog(props: GitHubDialogProps) {
   }, [onClose]);
 
   const chosen = submittable.filter(thread => selected.has(thread.id));
-  const canSubmit = !reviewInProgress && (chosen.length > 0 || summary.trim().length > 0);
+  const canSubmit = canSubmitReview({
+    event,
+    comments: chosen.length,
+    summary,
+    reviewInProgress,
+  });
 
   const toggle = (id: string) => {
     setSelected(prev => {
@@ -304,7 +310,11 @@ export function GitHubDialog(props: GitHubDialogProps) {
               ) : (
                 <UploadIcon className="w-3 h-3" />
               )}
-              Submit {chosen.length > 0 ? `${chosen.length} ` : ''}as one review
+              {chosen.length > 0
+                ? `Submit ${chosen.length} as one review`
+                : event === 'COMMENT'
+                  ? 'Submit as one review'
+                  : `Submit ${EVENT_LABELS[event].toLowerCase()}`}
             </button>
           </div>
 

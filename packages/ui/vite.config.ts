@@ -8,7 +8,6 @@ const isTest = !!process.env.VITEST;
 
 export default defineConfig({
   plugins: isTest ? [tailwindcss()] : [tailwindcss(), reactRouter()],
-  esbuild: { jsx: "automatic", jsxImportSource: "react" },
   test: {
     include: ["tests/**/*.test.{ts,tsx}"],
     // Component tests render for real: a render-time ReferenceError has nothing else catching it.

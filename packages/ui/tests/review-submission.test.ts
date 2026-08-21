@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  canSubmitReview,
   isGeneral,
   isSubmittable,
   summaryFromGeneralThreads,
@@ -103,5 +104,25 @@ describe('summaryFromGeneralThreads', () => {
   it('recognises a general thread', () => {
     expect(isGeneral(thread({ filePath: GENERAL_THREAD_FILE_PATH }))).toBe(true);
     expect(isGeneral(thread())).toBe(false);
+  });
+});
+
+describe('canSubmitReview', () => {
+  it('needs something to say for a plain comment', () => {
+    expect(canSubmitReview({ event: 'COMMENT', comments: 0, summary: '' })).toBe(false);
+    expect(canSubmitReview({ event: 'COMMENT', comments: 0, summary: '   ' })).toBe(false);
+    expect(canSubmitReview({ event: 'COMMENT', comments: 1, summary: '' })).toBe(true);
+    expect(canSubmitReview({ event: 'COMMENT', comments: 0, summary: 'looks fine' })).toBe(true);
+  });
+
+  it('lets a verdict stand on its own', () => {
+    // An approval with nothing attached is a normal thing to send, and the forge accepts it.
+    expect(canSubmitReview({ event: 'APPROVE', comments: 0, summary: '' })).toBe(true);
+    expect(canSubmitReview({ event: 'REQUEST_CHANGES', comments: 0, summary: '' })).toBe(true);
+  });
+
+  it('refuses anything while a review is still running', () => {
+    expect(canSubmitReview({ event: 'APPROVE', comments: 0, summary: '', reviewInProgress: true })).toBe(false);
+    expect(canSubmitReview({ event: 'COMMENT', comments: 5, summary: 'x', reviewInProgress: true })).toBe(false);
   });
 });

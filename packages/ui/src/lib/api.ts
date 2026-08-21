@@ -37,6 +37,14 @@ export interface GitHubRemote {
   repo: string;
 }
 
+export interface PrReview {
+  author: string;
+  isBot: boolean;
+  state: string;
+  body: string;
+  submittedAt: string;
+}
+
 export interface GitHubDetails {
   prNumber: number;
   prTitle: string;
@@ -45,6 +53,8 @@ export interface GitHubDetails {
   headSha: string;
   commentCount: number;
   viewerDidAuthor: boolean;
+  prBody: string;
+  reviews: PrReview[];
 }
 
 export interface ReviewRun {
