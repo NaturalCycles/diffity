@@ -1,4 +1,4 @@
-import { exec } from './exec.js';
+import { git } from './exec.js';
 import type { Commit } from './types.js';
 
 interface CommitQuery {
@@ -10,12 +10,12 @@ interface CommitQuery {
 export function getRecentCommits(query: CommitQuery): Commit[] {
   const { count, skip = 0, search } = query;
 
-  const args = [`-n ${count}`, `--skip=${skip}`, '--format="%H|%h|%s|%cr"'];
+  const args = ['log', '-n', String(count), `--skip=${skip}`, '--format=%H|%h|%s|%cr'];
   if (search) {
     args.push(`--grep=${search}`, '-i');
   }
 
-  const output = exec(`git log ${args.join(' ')}`);
+  const output = git(args);
 
   if (!output) {
     return [];

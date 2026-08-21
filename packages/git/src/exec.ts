@@ -58,6 +58,15 @@ export function git(args: string[]): string {
   return execFileLarge('git', args);
 }
 
+export function gitWithStdin(args: string[], input: string): string {
+  return execFileSync('git', args, {
+    encoding: 'utf-8',
+    stdio: STDIO,
+    input,
+    maxBuffer: MAX_BUFFER,
+  });
+}
+
 export function gitLines(args: string[]): string[] {
   const output = git(args);
   if (!output) {
