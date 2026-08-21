@@ -260,20 +260,20 @@ export function FileBlock(props: FileBlockProps) {
 
     requestAnimationFrame(processChunk);
 
-    const hunkAttention = useMemo(
+    return () => {
+      cancelled = true;
+    };
+  }, [file, highlightLine]);
+
+  const hunkAttention = useMemo(
     () => file.hunks.map(hunk => classifyHunk(file, hunk)),
     [file],
   );
 
   const isHunkFocused = useCallback(
-    (hunk: typeof file.hunks[number]) => hunkIntersectsRanges(hunk, focusRanges),
+    (hunk: DiffHunk) => hunkIntersectsRanges(hunk, focusRanges),
     [focusRanges],
   );
-
-  return () => {
-      cancelled = true;
-    };
-  }, [file, highlightLine]);
 
   const gaps = useMemo(() => {
     if (isNewFile) {

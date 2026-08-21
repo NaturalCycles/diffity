@@ -111,7 +111,7 @@ export function renderLineWithComments(
 
 export function HunkBlock(props: HunkBlockProps) {
   const {
-    hunk, syntaxMap, expandControls, topExpansionLines, bottomExpansionLines, expansionSyntaxMap,
+    hunk, attentionClass = '', attentionTitle, syntaxMap, expandControls, topExpansionLines, bottomExpansionLines, expansionSyntaxMap,
     threads, pendingSelection, currentAuthor, isLineSelected,
     onLineMouseDown, onLineMouseEnter, onCommentClick,
     onAddThread, onReply, onResolve, onUnresolve, onDeleteComment, onDeleteThread,

@@ -279,7 +279,7 @@ export function renderSplitRows(
 
 export function HunkBlockSplit(props: HunkBlockSplitProps) {
   const {
-    hunk, syntaxMap, expandControls, topExpansionLines, bottomExpansionLines, expansionSyntaxMap,
+    hunk, attentionClass = '', attentionTitle, syntaxMap, expandControls, topExpansionLines, bottomExpansionLines, expansionSyntaxMap,
     threads, pendingSelection, currentAuthor, isLineSelected,
     onLineMouseDown, onLineMouseEnter, onCommentClick,
     onAddThread, onReply, onResolve, onUnresolve, onEditComment, onDeleteComment, onDeleteThread,
