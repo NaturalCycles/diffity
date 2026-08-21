@@ -1,15 +1,11 @@
-import { exec, execSilent } from './exec.js';
+import { exec, execSilent, gh } from './exec.js';
+import { parseRemoteUrl } from './remote.js';
 import { getReviews } from './reviews.js';
 import type { GitHubRemote, GitHubDetails } from './types.js';
 
 export function getRemote(): { owner: string; repo: string } | null {
   try {
-    const url = exec('git remote get-url origin');
-    const match = url.match(/github\.com[:/]([^/]+)\/([^/.]+)/);
-    if (match) {
-      return { owner: match[1], repo: match[2] };
-    }
-    return null;
+    return parseRemoteUrl(exec('git remote get-url origin'));
   } catch {
     return null;
   }
@@ -36,7 +32,7 @@ export function fetchDetails(owner: string, repo: string, prNumber?: number): Gi
     return null;
   }
 
-  const pr = getPr(prNumber);
+  const pr = getPr(owner, repo, prNumber);
   if (!pr) {
     return null;
   }
@@ -73,7 +69,7 @@ let viewerLogin: string | null | undefined;
 function getViewerLogin(): string | null {
   if (viewerLogin === undefined) {
     try {
-      viewerLogin = exec('gh api user --jq .login') || null;
+      viewerLogin = gh(['api', 'user', '--jq', '.login']) || null;
     } catch {
       viewerLogin = null;
     }
@@ -85,10 +81,16 @@ function getViewerLogin(): string | null {
  * Without a number, gh resolves the pull request from the current branch — which fails on a
  * detached checkout, and a merged pull request has no branch left to check out.
  */
-function getPr(prNumber?: number): PrData | null {
+function getPr(owner: string, repo: string, prNumber?: number): PrData | null {
   try {
-    const target = prNumber ? `${prNumber} ` : '';
-    const json = exec(`gh pr view ${target}--json number,title,url,headRefOid,createdAt,author,body`);
+    // Pinned to the repository the local remote names. Left to itself, gh resolves a fork's
+    // parent, which is how a review can be aimed at the wrong repository entirely.
+    const args = ['pr', 'view'];
+    if (prNumber) {
+      args.push(String(prNumber));
+    }
+    args.push('--repo', `${owner}/${repo}`, '--json', 'number,title,url,headRefOid,createdAt,author,body');
+    const json = gh(args);
     const data = JSON.parse(json);
     if (data.number && data.url && data.headRefOid) {
       return {
@@ -109,9 +111,12 @@ function getPr(prNumber?: number): PrData | null {
 
 function getReviewCommentCount(owner: string, repo: string, prNumber: number): number {
   try {
-    const raw = exec(
-      `gh api repos/${owner}/${repo}/pulls/${prNumber}/comments --jq 'length'`,
-    );
+    const raw = gh([
+      'api',
+      `repos/${owner}/${repo}/pulls/${prNumber}/comments`,
+      '--jq',
+      'length',
+    ]);
     return parseInt(raw, 10) || 0;
   } catch {
     return 0;

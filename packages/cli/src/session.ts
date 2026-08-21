@@ -36,11 +36,26 @@ export function findOrCreateSession(ref: string): Session {
     return session;
   }
 
+  // A session written before sessions recorded their repository has no repo_root. Adopt it
+  // instead of starting a fresh one, or upgrading would strand every finding it holds.
+  const legacy = queryOne<{ id: string; ref: string; head_hash: string }>(
+    'SELECT id, ref, head_hash FROM review_sessions WHERE ref = ? AND head_hash = ? AND repo_root IS NULL',
+    ref,
+    headHash,
+  );
+
+  if (legacy) {
+    db.prepare('UPDATE review_sessions SET repo_root = ? WHERE id = ?').run(repoRoot, legacy.id);
+    const session: Session = { id: legacy.id, ref: legacy.ref, headHash: legacy.head_hash };
+    writeFileSync(sessionFilePath(), JSON.stringify(session));
+    return session;
+  }
+
   // A session is identified by the commit as well as the ref, so committing creates a new
   // one. Anything still open has to come with it: the whole point of reviewing your own
   // change is to act on the findings, and acting on them moves HEAD.
   const previous = queryOne<{ id: string }>(
-    'SELECT id FROM review_sessions WHERE ref = ? AND repo_root IS ? ORDER BY created_at DESC, rowid DESC LIMIT 1',
+    'SELECT id FROM review_sessions WHERE ref = ? AND (repo_root IS ? OR repo_root IS NULL) ORDER BY created_at DESC, rowid DESC LIMIT 1',
     ref,
     repoRoot,
   );

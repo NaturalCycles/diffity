@@ -1,4 +1,4 @@
-import { writeFileSync, readFileSync, chmodSync, unlinkSync, existsSync, mkdirSync } from 'fs';
+import { writeFileSync, chmodSync, unlinkSync, existsSync, mkdirSync } from 'fs';
 import { resolve, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { execSync } from 'child_process';
@@ -41,12 +41,9 @@ if (!pathIncludes) {
   const exportLine = `export PATH="${binDir}:$PATH"`;
 
   if (existsSync(profilePath)) {
-    const content = readFileSync(profilePath, 'utf-8');
-    if (!content.includes(binDir)) {
-      writeFileSync(profilePath, content + `\n# diffity dev CLI\n${exportLine}\n`);
-      console.log(`\nAdded .bin to PATH in ~/${profileName}`);
-      console.log(`Run: source ~/${profileName}`);
-    }
+    // Printed rather than appended: a build should not edit a shell profile on the way past.
+    console.log(`\nAdd this to ~/${profileName}:`);
+    console.log(`  ${exportLine}`);
   } else {
     console.log(`\nAdd this to your shell profile:`);
     console.log(`  ${exportLine}`);

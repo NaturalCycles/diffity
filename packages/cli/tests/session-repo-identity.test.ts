@@ -87,3 +87,25 @@ describe('two repositories sharing one data directory', () => {
     expect(getThreadsForSession(after.id).map(t => t.id)).toContain(finding.id);
   });
 });
+
+describe('a session created before sessions recorded their repository', () => {
+  it('is adopted rather than stranded, so an upgrade keeps its findings', async () => {
+    const { findOrCreateSession } = await import('../src/session.js');
+    const { createThread, getThreadsForSession } = await import('../src/threads.js');
+    const { getDb } = await import('../src/db.js');
+
+    process.chdir(repoA);
+    const legacy = findOrCreateSession('legacy-ref');
+    const finding = createThread(legacy.id, 'a.txt', 'new', 1, 1, 'written before the upgrade', {
+      name: 'Agent',
+      type: 'agent',
+    });
+    // What the database looks like for a session written by an older build.
+    getDb().prepare('UPDATE review_sessions SET repo_root = NULL WHERE id = ?').run(legacy.id);
+
+    const afterUpgrade = findOrCreateSession('legacy-ref');
+
+    expect(afterUpgrade.id).toBe(legacy.id);
+    expect(getThreadsForSession(afterUpgrade.id).map(t => t.id)).toEqual([finding.id]);
+  });
+})

@@ -1,5 +1,5 @@
-import { execFileSync, execSync } from 'node:child_process';
-import { exec } from './exec.js';
+import { execFileSync } from 'node:child_process';
+import { gh } from './exec.js';
 import type { PrComment, PulledThread, ReviewResult, ReviewSubmission } from './types.js';
 import { commentableLines, isAlreadyCommented } from './comment-targets.js';
 
@@ -13,10 +13,11 @@ interface ExistingComment {
 
 export function getComments(owner: string, repo: string, prNumber: number): ExistingComment[] {
   try {
-    const json = execSync(
-      `gh api repos/${owner}/${repo}/pulls/${prNumber}/comments --paginate`,
-      { encoding: 'utf-8', stdio: 'pipe', maxBuffer: 10 * 1024 * 1024 },
-    ).trim();
+    const json = gh([
+      'api',
+      `repos/${owner}/${repo}/pulls/${prNumber}/comments`,
+      '--paginate',
+    ]);
     if (!json) {
       return [];
     }
@@ -53,10 +54,11 @@ interface GitHubCommentRaw {
 
 export function pullComments(owner: string, repo: string, prNumber: number): PulledThread[] {
   try {
-    const json = execSync(
-      `gh api repos/${owner}/${repo}/pulls/${prNumber}/comments --paginate`,
-      { encoding: 'utf-8', stdio: 'pipe', maxBuffer: 10 * 1024 * 1024 },
-    ).trim();
+    const json = gh([
+      'api',
+      `repos/${owner}/${repo}/pulls/${prNumber}/comments`,
+      '--paginate',
+    ]);
     if (!json) {
       return [];
     }

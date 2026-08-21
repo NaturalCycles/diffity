@@ -10,7 +10,8 @@ export interface TreeEntry {
 }
 
 function getWorkingTreeFiles(dirPath?: string): string[] {
-  const pathArgs = dirPath ? [dirPath + '/'] : [];
+  // `--` or a path beginning with a dash is read as an option.
+  const pathArgs = dirPath ? ['--', dirPath + '/'] : [];
 
   const tracked = execFileLarge('git', ['ls-files', ...pathArgs]);
 

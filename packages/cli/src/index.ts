@@ -18,6 +18,7 @@ import {
 } from '@diffity/github';
 import { startServer, getHost } from './server.js';
 import { registerAgentCommands } from './agent.js';
+import { shouldOpenExisting } from './reuse.js';
 import { findInstanceForRepo, findAvailablePort, deregisterInstance, killInstance, checkInstanceHealth } from './registry.js';
 import { registerOpenCommand } from './commands/open.js';
 import { registerListCommand } from './commands/list.js';
@@ -291,16 +292,25 @@ range syntax (main..feature, main...feature) also work.`)
         }
         const url = `http://${getHost()}:${existing.port}/diff?${urlParams.toString()}`;
 
+        const openExisting = shouldOpenExisting({
+          existingRef: existing.ref,
+          requestedRef: effectiveRef,
+          openFlag: opts.open !== false,
+        });
+
         if (!opts.quiet) {
           console.log('');
           console.log(pc.bold('  diffity'));
           console.log(`  ${pc.dim('Already running for this repo')}`);
           console.log('');
           console.log(`  ${pc.green('→')} ${pc.cyan(url)}`);
+          if (!openExisting && opts.open !== false) {
+            console.log(`  ${pc.dim('Already open in your browser')}`);
+          }
           console.log('');
         }
 
-        if (opts.open !== false) {
+        if (openExisting) {
           await open(url);
         }
         return;

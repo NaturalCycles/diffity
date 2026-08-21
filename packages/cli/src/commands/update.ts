@@ -15,7 +15,7 @@ export function registerUpdateCommand(program: Command, version: string, skillsH
         }
         console.log(`${pc.dim(`Current: ${version}`)} → ${pc.bold(registry)}`);
         console.log(pc.dim('Updating...'));
-        execSync('npm install -g diffity@latest', { stdio: 'inherit' });
+        execSync('npm install -g --ignore-scripts diffity@latest', { stdio: 'inherit' });
         console.log(pc.green(`Updated to ${registry}.`));
 
         try {
@@ -27,7 +27,7 @@ export function registerUpdateCommand(program: Command, version: string, skillsH
           }
         } catch {}
       } catch {
-        console.error(pc.red('Failed to update. Try running: npm install -g diffity@latest'));
+        console.error(pc.red('Failed to update. Try running: npm install -g --ignore-scripts diffity@latest'));
         process.exit(1);
       }
     });

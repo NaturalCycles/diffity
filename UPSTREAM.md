@@ -3,14 +3,17 @@
 What this fork changes relative to [nilbuild/diffity](https://github.com/nilbuild/diffity), so any
 of it can be extracted as a pointed upstream pull request later.
 
-Every branch below is a **single concern** and they are **stacked** in the order listed, each based
-on the previous. To extract one as a standalone patch against upstream:
+## How this fork is arranged
 
-```bash
-git diff <its-base-branch>..<its-branch>
-```
+- **`main`** is a pristine mirror of `upstream/main`. Upstream updates land here first
+  (`git merge upstream/main`), then flow to `develop`. Nothing is committed to it directly.
+- **`develop`** is the working version — what the `diffity` on PATH is built from. The worktree at
+  `~/nc/diffity-fork/diffity` stays parked on it; feature work happens in a second worktree so
+  switching branches cannot rebuild the tool while someone is using it.
+- **Branches are kept after merging**, because each one is the extraction unit. To offer a change
+  upstream: `git diff <its-base>..<its-branch>`.
 
-Nothing here is NaturalCycles-specific yet — all of it is upstreamable as-is. When that changes,
+Nothing here is NaturalCycles-specific — all of it is upstreamable as-is. When that changes,
 fork-local work goes in its own section below so it never lands in an upstream patch by accident.
 
 ## Upstream pull requests merged in
@@ -55,58 +58,74 @@ our own change on #3.
 | #21 | `dev-skill-sync-opt-in` | `repo-flag` | a build no longer writes `diffity-dev-*` into `~/.claude/skills` unless `DIFFITY_SYNC_DEV_SKILLS=1` | Independent; the root cause behind #1 |
 | #22 | `attention` | `dev-skill-sync-opt-in` | walkthrough line ranges highlight; rule-decided dimming of imports/whitespace/generated hunks, never model-decided; whitespace hiding on by default with disclosure; jsdom component tests | Independent |
 | #23 | `review-progress` | `attention` | `agent review-start`/`review-done`, a banner while a review runs and a submit guard; stale-session resolution; head-aware staleness; merged-PR checkout fallback | Independent |
+| #24 | `pr-context` | `review-progress` | the pull request's description and existing reviews shown above the diff; a bare verdict may be submitted; details resolve by PR number so a detached checkout still works | Independent |
+| — | `shift-select` | `develop` | shift-click a second line to comment on the span, in both renderers | Independent |
+| — | `thread-anchoring` | `develop` | a comment whose range runs past the rendered lines attaches to the last one that exists instead of vanishing; `agent comment` trims a range to the file | Independent |
+| — | `review-fixes` | `develop` | acted on the self-review: session repo identity, ambiguous re-anchoring refused, ordered whitespace comparison, ref-only staleness, whitespace suppression counts, positional dedupe, comment lines validated before submitting | Independent |
+| — | `security-and-coverage` | `develop` | argv-form `gh` with validated owner/repo, anchored remote parsing, `gh pr view` pinned to the local remote, `ls-files --`, `--ignore-scripts` on update, `link-dev` prints instead of editing a profile, no duplicate browser tab, HTTP-level route tests | Independent |
+
+Branches after #24 were merged straight into `develop` rather than through a pull request.
 
 ## Known and not yet done
 
-From the security audit, in rough priority order:
-
-- `packages/github` still interpolates `owner`/`repo` into `gh api …` shell strings, and neither is
-  validated. Delivery path is a submodule's attacker-controlled `.gitmodules` URL. (audit P2-1)
-- `detectRemote()` reads only `origin` while `gh pr view` resolves a fork's **parent**, so in a
-  fork workflow a review can be pushed to the wrong repository. (audit P2-2)
-- `detection.ts`'s remote regex is an unanchored substring match on `github.com`. (audit P3)
-- `git ls-files` in `tree.ts` has no `--` before its path arguments, so `?path=-x` is read as an
-  option. (audit P3)
-- `update.ts` runs an unpinned `npm install -g` with install scripts enabled. (audit P3)
-- `link-dev.ts` appends a `PATH` line to `~/.bashrc` from `npm run dev`. Should print it instead.
+- `createReview` has never submitted a review end to end. The payload shape is verified against
+  GitHub's documentation, the comment lines are validated before sending, and the 400 our own
+  route returns is tested — but nothing has ever been posted from this fork.
 - Hash-based `script-src`, computed from `index.html` at server start, would remove the
-  `'unsafe-inline'` caveat in #12.
-- `DiffViewHandle` exposes only `scrollToFile`, so the walkthrough stepper cannot scroll to a
-  stop's line, and a stop's line range is not highlighted in the diff.
-- Re-anchoring (#18) matches lines exactly, so a finding whose code was *edited* rather than moved
-  keeps its old position. Anything fuzzier risks moving a comment onto code it was not written about.
-- A review's summary has no configurable default signature.
-- The reviews API cannot reply into an *existing* GitHub thread; that needs `in_reply_to` on the
+  `'unsafe-inline'` caveat in the CSP. The sanitizer is what keeps injected script out of the DOM
+  in the meantime.
+- Re-anchoring matches lines exactly and refuses an ambiguous short anchor, so a finding whose code
+  was *edited* keeps its old position. Anything fuzzier risks moving a comment onto code it was not
+  written about.
+- The reviews API cannot reply into an *existing* forge thread; that needs `in_reply_to` on the
   comments endpoint.
-- `npm run typecheck -w @diffity/ui` reports four `TS6059` errors on upstream `main` as well:
+- A review's summary has no configurable default signature.
+- `npm run typecheck -w @diffity/ui` reports four `TS6059` errors, present on upstream `main` too:
   `tsconfig.json` includes `.react-router/types/**` while `rootDir` is `src`. Not wired into
   `npm test`, so it fails silently.
+- PR mode trusts `gh pr checkout` to bring a branch current, and it has been observed reporting
+  "already up to date" against a stale `origin/<branch>`. A `git fetch` of the head ref before
+  checkout would settle it.
+- `server.ts` now has HTTP-level tests covering the security surface and the diff routes, but the
+  forge routes (`/api/github/*`) are still only exercised by hand.
+
+### Done since the audit
+
+Every P1 and P2 from the security review is closed: loopback bind and no CORS wildcard, argv-form
+git *and* `gh` with validated owner/repo, anchored remote parsing, path containment with inert raw
+responses, sanitized markdown behind a CSP, 0600/0700 data files, `gh pr view` pinned to the local
+remote so a fork cannot be aimed at its parent, `ls-files --`, `--ignore-scripts` on update, and
+`link-dev` no longer editing a shell profile.
 
 ## Queued
 
-- **`diffity review <pr-url>` as one command** with the agent's progress shown in the page. The
-  own-PR loop no longer needs it — the coding agent drives `agent comment` itself — but reviewing
-  *someone else's* PR still starts with two commands.
-- **Configurable repo resolution** — `clone` / `worktree` strategies, so a colleague's PR can be
-  reviewed from a directory that has no checkout at all. #20 covers "the repository is a
-  subdirectory"; this covers "there is no repository yet", which is the reviewer lane.
-- **A user-level config** (`~/.config/diffity/config.json`, lowest precedence) so `severities` and
-  `standards` do not have to be committed to every repository being reviewed.
-- **The pull request's description and its existing forge comments** shown in the page. `pullComments`
-  already imports inline review threads, but the PR body and review bodies (a bot summary, an
-  "lgtm") are nowhere, and they are what a reviewer wants before reading code.
 - **Move detection** — verbatim moves dim, moved-and-edited highlight, with a nested diff of the
-  move. The remaining half of the attention work in #22, and the bigger prize.
+  move. The remaining half of the attention work, and the bigger prize.
+- **Configurable repo resolution** — `clone` / `worktree` strategies, so a colleague's pull request
+  can be reviewed from a directory that has no checkout at all. `--repo` covers "the repository is
+  a subdirectory"; this covers "there is no repository yet", which is the reviewer lane.
+- **A user-level config** (`~/.config/diffity/config.json`, lowest precedence) so `severities` and
+  `standards` need not be committed to every repository being reviewed.
 - **`scrollToLine`** so the walkthrough stepper lands on a stop's lines rather than the top of its
-  file; there are no per-line DOM anchors yet.
-- **A severity vocabulary and a review signature**, both configuration rather than code.
+  file. There are no per-line DOM anchors yet, so this is a real change.
+- **`diffity review <pr-url>` as one command** with the agent's progress shown in the page. The
+  own-PR loop no longer needs it; reviewing someone else's still starts with two commands.
 
 ### Lessons paid for
 
-- `vite build` does not typecheck, and until #22 nothing in this repo executed a component, so two
-  render-time `ReferenceError`s reached the browser. Scripted edits to TSX must assert that they
+- `vite build` does not typecheck, and nothing executed a component until the jsdom harness, so
+  three render-time crashes reached the browser. Scripted edits to TSX must assert that they
   applied — counting occurrences is not proof — and a typecheck filtered through
   `grep … || echo clean` can report success while errors exist.
+- **A schema addition needs a migration test, not just a migration.** Adding `repo_root` to
+  sessions was three lines; keeping the existing findings visible was fifteen, and skipping them
+  stranded every thread in the database until a legacy session was adopted instead of abandoned.
+- A test that has never been seen to fail proves nothing. The security assertions in
+  `server-routes.test.ts` were mutation-checked: dropping `'wasm-unsafe-eval'` and loosening
+  `frame-src` must turn them red.
+- Verify what a command *stored*, not what it *reported*. The first range clamp printed a
+  reassuring warning and still wrote 25-27 on a 26-line file, because a trailing newline counts as
+  a line in `split('\n')`.
 
 ### Fixed, not queued
 
