@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 
 import { execFileLarge } from './exec';
 
@@ -76,13 +76,26 @@ export function getTreeFingerprint(): string {
   return `${tracked.length}:${statOutput}`;
 }
 
-export function getWorkingTreeFileContent(filePath: string): string {
+/**
+ * Paths arrive from the URL, where `..` survives percent-encoding, so they cannot be joined
+ * onto the repository root and read as-is.
+ */
+export function resolveInRepo(filePath: string): string {
   const root = execFileLarge('git', ['rev-parse', '--show-toplevel']);
-  return readFileSync(join(root, filePath), 'utf-8');
+  const fullPath = resolve(root, filePath);
+
+  if (fullPath !== root && !fullPath.startsWith(root + sep)) {
+    throw new Error(`Path escapes the repository: ${filePath}`);
+  }
+
+  return fullPath;
+}
+
+export function getWorkingTreeFileContent(filePath: string): string {
+  return readFileSync(resolveInRepo(filePath), 'utf-8');
 }
 
 export function getWorkingTreeRawFile(filePath: string): { data: Buffer; fullPath: string } {
-  const root = execFileLarge('git', ['rev-parse', '--show-toplevel']);
-  const fullPath = join(root, filePath);
+  const fullPath = resolveInRepo(filePath);
   return { data: readFileSync(fullPath), fullPath };
 }

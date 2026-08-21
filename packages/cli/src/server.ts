@@ -35,6 +35,7 @@ import {
   getTreeFingerprint,
   getWorkingTreeFileContent,
   getWorkingTreeRawFile,
+  resolveInRepo,
   WORKING_TREE_REFS,
 } from '@diffity/git';
 import {
@@ -71,6 +72,38 @@ const MIME_TYPES: Record<string, string> = {
   '.ico': 'image/x-icon',
   '.pdf': 'application/pdf',
 };
+
+/**
+ * The tree browser only ever needs raw bytes for images. Anything else — a repository's own
+ * .html or .svg — would otherwise be rendered in this origin, where it can read the API.
+ */
+const INLINE_RAW_TYPES = new Set([
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.gif',
+  '.webp',
+  '.avif',
+  '.ico',
+  '.svg',
+]);
+
+function rawFileHeaders(ext: string): Record<string, string> {
+  const headers: Record<string, string> = {
+    'X-Content-Type-Options': 'nosniff',
+    // An <img> never runs an SVG's scripts, but navigating straight to the URL would.
+    'Content-Security-Policy': "default-src 'none'; sandbox",
+  };
+
+  if (INLINE_RAW_TYPES.has(ext) && MIME_TYPES[ext]) {
+    headers['Content-Type'] = MIME_TYPES[ext];
+    return headers;
+  }
+
+  headers['Content-Type'] = 'application/octet-stream';
+  headers['Content-Disposition'] = 'attachment';
+  return headers;
+}
 
 export function getHost(): string {
   return process.env.DIFFITY_HOST?.trim() || 'localhost';
@@ -286,7 +319,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
               return;
             }
             const repoRoot = getRepoInfo().root;
-            const fullPath = filePath ? join(repoRoot, filePath) : repoRoot;
+            const fullPath = filePath ? resolveInRepo(filePath) : repoRoot;
             const gotoArg = line ? `${fullPath}:${line}` : fullPath;
             execFile('code', [repoRoot, '--goto', gotoArg], { timeout: 5000 }, () => {});
             sendJson(res, { ok: true });
@@ -588,9 +621,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           );
           try {
             const { data } = getWorkingTreeRawFile(filePath);
-            const ext = extname(filePath);
-            const mime = MIME_TYPES[ext] || 'application/octet-stream';
-            res.writeHead(200, { 'Content-Type': mime });
+            res.writeHead(200, rawFileHeaders(extname(filePath)));
             res.end(data);
           } catch {
             sendError(res, 404, `File not found: ${filePath}`);
