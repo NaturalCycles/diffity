@@ -47,6 +47,8 @@ our own change on #3.
 | #12 | `sanitize-markdown` | `path-containment` | `rehype-raw` had no sanitizer; adds `rehype-sanitize` and a CSP; widens the UI vitest include to `.tsx` | Independent |
 | #14 | `diff-walkthrough` | `sanitize-markdown` | the diff page reads the session's tour and reorders the file list by it; flat numbered sidebar, stepper, order-aware keyboard navigation; review tours hand off to `/diff` | Independent, and the feature this fork exists for — offer it once it has been lived with |
 | #15 | `batched-review` | `diff-walkthrough` | one `POST /pulls/:n/reviews` instead of N comment posts; per-comment selection, folded replies, general comments seed the summary, event choice disabled on own PR | Independent; removes `pushComments` |
+| #16 | `project-data-dir` | `batched-review` | `DIFFITY_DATA_DIR` / `dataDir` in `.diffity.json` chooses where review notes live; warns when they sit un-ignored inside the working tree; 0600/0700 permissions (audit P2-4) | Independent |
+| #17 | `session-continuity` | `project-data-dir` | open threads and walkthroughs follow the session when HEAD moves, instead of being stranded in the old one | Independent, and required for reviewing your own change |
 
 ## Known and not yet done
 
@@ -56,8 +58,6 @@ From the security audit, in rough priority order:
   validated. Delivery path is a submodule's attacker-controlled `.gitmodules` URL. (audit P2-1)
 - `detectRemote()` reads only `origin` while `gh pr view` resolves a fork's **parent**, so in a
   fork workflow a review can be pushed to the wrong repository. (audit P2-2)
-- `~/.diffity` is created 0775/0664, and `reviews.db` holds `anchor_content` — actual source lines
-  from the code under review. Should be 0700/0600. (audit P2-4)
 - `detection.ts`'s remote regex is an unanchored substring match on `github.com`. (audit P3)
 - `git ls-files` in `tree.ts` has no `--` before its path arguments, so `?path=-x` is read as an
   option. (audit P3)
@@ -67,24 +67,34 @@ From the security audit, in rough priority order:
   `'unsafe-inline'` caveat in #12.
 - `DiffViewHandle` exposes only `scrollToFile`, so the walkthrough stepper cannot scroll to a
   stop's line, and a stop's line range is not highlighted in the diff.
+- Threads are not re-anchored when the code under them moves. `anchor_content` already stores the
+  source lines a comment was attached to, so the data is there; this matters more now that #17
+  makes findings survive commits.
+- A review's summary has no configurable default signature.
+- The reviews API cannot reply into an *existing* GitHub thread; that needs `in_reply_to` on the
+  comments endpoint.
 - `npm run typecheck -w @diffity/ui` reports four `TS6059` errors on upstream `main` as well:
   `tsconfig.json` includes `.react-router/types/**` while `rootDir` is `src`. Not wired into
   `npm test`, so it fails silently.
 
 ## Queued
 
-- **Own-PR workflow.** Reviewing *your own* draft before marking it Ready: start diffity from
-  whichever agent you are in, have it write findings, edit/add/remove them by hand, then have the
-  agent fix the code against them. The `diffity-resolve` skill already covers the fixing half, so
-  this is mostly assembly — except for where review state lives. A session is keyed on the
-  repository root (`~/.diffity/<repoHash>/reviews.db`), so each worktree gets its own; findings
-  written while reviewing a PR in one worktree are invisible from another checkout of the same
-  branch. Decide whether review notes should follow the *branch or PR* rather than the checkout.
+- **Own-PR workflow — the remaining half.** #16 and #17 settled where notes live and made them
+  survive commits, and upstream's `diffity-resolve` skill already fixes code against open findings.
+  What is left is review *quality* on demand from whichever agent you are in: a review skill that
+  carries a severity vocabulary and a standards checklist, with the vocabulary configured rather
+  than written into the skill.
 - **`diffity review <pr-url>` as one command** — starts the server, opens the browser and launches
   the review agent, with its progress shown in the page. Slice 2 of the original plan.
 - **Configurable repo resolution** — `cwd` / `clone` / `worktree` strategies, so a colleague's PR
   can be reviewed without already having its checkout.
 - **A severity vocabulary and a review signature**, both configuration rather than code.
+
+### Fixed, not queued
+
+- **Syntax highlighting** stopped working because the CSP added in #12 omitted
+  `'wasm-unsafe-eval'`, and shiki compiles an oniguruma WebAssembly module. Fixed on
+  `sanitize-markdown` and merged through the stack.
 
 ## Fork-local, do not upstream
 
