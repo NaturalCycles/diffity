@@ -53,6 +53,8 @@ our own change on #3.
 | #19 | `review-standards` | `reanchor` | `review.severities` and `review.standards` in `.diffity.json`, `agent standards` to read them, and the review skill reads them first and records a reading order | Independent |
 | #20 | `repo-flag` | `review-standards` | `--repo <path>` for when the working directory is not the repository; skills look one level down and ask when ambiguous; a bare review reviews the branch's pull request rather than an empty working tree | Independent |
 | #21 | `dev-skill-sync-opt-in` | `repo-flag` | a build no longer writes `diffity-dev-*` into `~/.claude/skills` unless `DIFFITY_SYNC_DEV_SKILLS=1` | Independent; the root cause behind #1 |
+| #22 | `attention` | `dev-skill-sync-opt-in` | walkthrough line ranges highlight; rule-decided dimming of imports/whitespace/generated hunks, never model-decided; whitespace hiding on by default with disclosure; jsdom component tests | Independent |
+| #23 | `review-progress` | `attention` | `agent review-start`/`review-done`, a banner while a review runs and a submit guard; stale-session resolution; head-aware staleness; merged-PR checkout fallback | Independent |
 
 ## Known and not yet done
 
@@ -90,7 +92,21 @@ From the security audit, in rough priority order:
   subdirectory"; this covers "there is no repository yet", which is the reviewer lane.
 - **A user-level config** (`~/.config/diffity/config.json`, lowest precedence) so `severities` and
   `standards` do not have to be committed to every repository being reviewed.
+- **The pull request's description and its existing forge comments** shown in the page. `pullComments`
+  already imports inline review threads, but the PR body and review bodies (a bot summary, an
+  "lgtm") are nowhere, and they are what a reviewer wants before reading code.
+- **Move detection** — verbatim moves dim, moved-and-edited highlight, with a nested diff of the
+  move. The remaining half of the attention work in #22, and the bigger prize.
+- **`scrollToLine`** so the walkthrough stepper lands on a stop's lines rather than the top of its
+  file; there are no per-line DOM anchors yet.
 - **A severity vocabulary and a review signature**, both configuration rather than code.
+
+### Lessons paid for
+
+- `vite build` does not typecheck, and until #22 nothing in this repo executed a component, so two
+  render-time `ReferenceError`s reached the browser. Scripted edits to TSX must assert that they
+  applied — counting occurrences is not proof — and a typecheck filtered through
+  `grep … || echo clean` can report success while errors exist.
 
 ### Fixed, not queued
 
