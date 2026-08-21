@@ -88,7 +88,9 @@ const CONTENT_SECURITY_POLICY = [
   "img-src 'self' data:",
   "font-src 'self' data:",
   "style-src 'self' 'unsafe-inline'",
-  "script-src 'self' 'unsafe-inline'",
+  // 'wasm-unsafe-eval' is what the syntax highlighter needs: shiki compiles an oniguruma
+  // WebAssembly module, which CSP treats as script compilation. It permits WASM only, not eval.
+  "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'",
   "connect-src 'self'",
 ].join('; ');
 
