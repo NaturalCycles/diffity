@@ -46,6 +46,7 @@ our own change on #3.
 | #11 | `path-containment` | `argv-git` | percent-encoded `../` in `/api/tree/…` read any file; `resolveInRepo` plus inert raw responses | Independent |
 | #12 | `sanitize-markdown` | `path-containment` | `rehype-raw` had no sanitizer; adds `rehype-sanitize` and a CSP; widens the UI vitest include to `.tsx` | Independent |
 | #14 | `diff-walkthrough` | `sanitize-markdown` | the diff page reads the session's tour and reorders the file list by it; flat numbered sidebar, stepper, order-aware keyboard navigation; review tours hand off to `/diff` | Independent, and the feature this fork exists for — offer it once it has been lived with |
+| #15 | `batched-review` | `diff-walkthrough` | one `POST /pulls/:n/reviews` instead of N comment posts; per-comment selection, folded replies, general comments seed the summary, event choice disabled on own PR | Independent; removes `pushComments` |
 
 ## Known and not yet done
 
@@ -69,6 +70,21 @@ From the security audit, in rough priority order:
 - `npm run typecheck -w @diffity/ui` reports four `TS6059` errors on upstream `main` as well:
   `tsconfig.json` includes `.react-router/types/**` while `rootDir` is `src`. Not wired into
   `npm test`, so it fails silently.
+
+## Queued
+
+- **Own-PR workflow.** Reviewing *your own* draft before marking it Ready: start diffity from
+  whichever agent you are in, have it write findings, edit/add/remove them by hand, then have the
+  agent fix the code against them. The `diffity-resolve` skill already covers the fixing half, so
+  this is mostly assembly — except for where review state lives. A session is keyed on the
+  repository root (`~/.diffity/<repoHash>/reviews.db`), so each worktree gets its own; findings
+  written while reviewing a PR in one worktree are invisible from another checkout of the same
+  branch. Decide whether review notes should follow the *branch or PR* rather than the checkout.
+- **`diffity review <pr-url>` as one command** — starts the server, opens the browser and launches
+  the review agent, with its progress shown in the page. Slice 2 of the original plan.
+- **Configurable repo resolution** — `cwd` / `clone` / `worktree` strategies, so a colleague's PR
+  can be reviewed without already having its checkout.
+- **A severity vocabulary and a review signature**, both configuration rather than code.
 
 ## Fork-local, do not upstream
 
