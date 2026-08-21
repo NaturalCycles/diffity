@@ -179,6 +179,8 @@ interface ServerOptions {
    * from. A `ref` in the URL that disagrees is corrected rather than honoured.
    */
   pinnedRef?: string;
+  /** Set in pull-request mode, so details still resolve on a detached checkout. */
+  prNumber?: number;
   version?: string;
   registryInfo?: {
     repoRoot: string;
@@ -230,6 +232,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
     version,
     registryInfo,
     pinnedRef,
+    prNumber,
   } = options;
 
   const includeUntracked = diffArgs.length === 0;
@@ -488,13 +491,13 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             sendJson(res, null);
             return;
           }
-          const details = fetchGitHubDetails(githubRemote.owner, githubRemote.repo);
+          const details = fetchGitHubDetails(githubRemote.owner, githubRemote.repo, prNumber);
           sendJson(res, details);
           return;
         }
 
         if (pathname === '/api/github/create-review' && req.method === 'POST') {
-          const details = githubRemote ? fetchGitHubDetails(githubRemote.owner, githubRemote.repo) : null;
+          const details = githubRemote ? fetchGitHubDetails(githubRemote.owner, githubRemote.repo, prNumber) : null;
           if (!githubRemote || !details?.headSha) {
             sendError(res, 400, 'No GitHub PR detected');
             return;
@@ -512,8 +515,13 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           const comments = (body.comments ?? []) as PrComment[];
           const summary = typeof body.body === 'string' ? body.body : '';
           const event = REVIEW_EVENTS.has(body.event) ? (body.event as ReviewEvent) : 'COMMENT';
-          if (!Array.isArray(comments) || (comments.length === 0 && !summary.trim())) {
-            sendError(res, 400, 'A review needs a summary or at least one comment');
+          if (!Array.isArray(comments)) {
+            sendError(res, 400, 'comments must be an array');
+            return;
+          }
+          // A verdict carries its own meaning; only a plain comment needs something in it.
+          if (event === 'COMMENT' && comments.length === 0 && !summary.trim()) {
+            sendError(res, 400, 'A comment review needs a summary or at least one comment');
             return;
           }
           const result = createGitHubReview(
@@ -532,7 +540,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             sendError(res, 400, 'No GitHub repo detected');
             return;
           }
-          const details = fetchGitHubDetails(githubRemote.owner, githubRemote.repo);
+          const details = fetchGitHubDetails(githubRemote.owner, githubRemote.repo, prNumber);
           if (!details) {
             sendError(res, 400, 'No GitHub PR detected');
             return;

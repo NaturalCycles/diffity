@@ -175,7 +175,7 @@ export function createReview(
   const dropped = errors.length;
   const body = submission.body.trim();
 
-  if (comments.length === 0 && !body) {
+  if (comments.length === 0 && !body && submission.event === 'COMMENT') {
     return { submitted: 0, skipped, failed: dropped, errors, reviewUrl: null };
   }
 

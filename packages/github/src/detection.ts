@@ -1,4 +1,5 @@
 import { exec, execSilent } from './exec.js';
+import { getReviews } from './reviews.js';
 import type { GitHubRemote, GitHubDetails } from './types.js';
 
 export function getRemote(): { owner: string; repo: string } | null {
@@ -30,12 +31,12 @@ export function detectRemote(): GitHubRemote | null {
   return remote;
 }
 
-export function fetchDetails(owner: string, repo: string): GitHubDetails | null {
+export function fetchDetails(owner: string, repo: string, prNumber?: number): GitHubDetails | null {
   if (!isCliInstalled() || !isAuthenticated()) {
     return null;
   }
 
-  const pr = getPr();
+  const pr = getPr(prNumber);
   if (!pr) {
     return null;
   }
@@ -50,6 +51,8 @@ export function fetchDetails(owner: string, repo: string): GitHubDetails | null 
     headSha: pr.headSha,
     commentCount,
     viewerDidAuthor: !!pr.authorLogin && pr.authorLogin === getViewerLogin(),
+    prBody: pr.body,
+    reviews: getReviews(owner, repo, pr.number),
   };
 }
 
@@ -60,6 +63,7 @@ interface PrData {
   headSha: string;
   createdAt: string;
   authorLogin: string | null;
+  body: string;
 }
 
 // gh has no `viewerDidAuthor` field, so authorship is settled by comparing logins. The
@@ -77,9 +81,14 @@ function getViewerLogin(): string | null {
   return viewerLogin;
 }
 
-function getPr(): PrData | null {
+/**
+ * Without a number, gh resolves the pull request from the current branch — which fails on a
+ * detached checkout, and a merged pull request has no branch left to check out.
+ */
+function getPr(prNumber?: number): PrData | null {
   try {
-    const json = exec('gh pr view --json number,title,url,headRefOid,createdAt,author');
+    const target = prNumber ? `${prNumber} ` : '';
+    const json = exec(`gh pr view ${target}--json number,title,url,headRefOid,createdAt,author,body`);
     const data = JSON.parse(json);
     if (data.number && data.url && data.headRefOid) {
       return {
@@ -89,6 +98,7 @@ function getPr(): PrData | null {
         headSha: data.headRefOid,
         createdAt: data.createdAt,
         authorLogin: data.author?.login ?? null,
+        body: data.body ?? '',
       };
     }
     return null;

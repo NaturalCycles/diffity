@@ -18,6 +18,7 @@ import { Sidebar } from '../layout/sidebar';
 import { ShortcutModal } from '../layout/shortcut-modal';
 import { StaleDiffBanner } from '../layout/stale-diff-banner';
 import { ReviewProgressBanner } from '../layout/review-progress-banner';
+import { PullRequestPanel } from '../layout/pull-request-panel';
 import { CheckCircleIcon } from '../icons/check-circle-icon';
 import { PageLoader } from '../layout/skeleton';
 import { useDiffStaleness } from '../../hooks/use-diff-staleness';
@@ -423,6 +424,7 @@ export function DiffPage() {
         onGitHubPulled={() => queryClient.invalidateQueries({ queryKey: ['threads'] })}
       />
       {isStale && <StaleDiffBanner onRefresh={handleRefreshDiff} />}
+      <PullRequestPanel details={githubDetails} />
       {info?.review?.inProgress && (
         <ReviewProgressBanner review={info.review} findings={threads.length} />
       )}

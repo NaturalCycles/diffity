@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, cleanup, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { GitHubDialog } from '../src/components/layout/github-dialog';
 import type { GitHubDetails } from '../src/lib/api';
 import type { CommentThread } from '../src/components/comments/types';
@@ -28,11 +29,11 @@ function thread(id: string): CommentThread {
   };
 }
 
-function renderDialog(reviewInProgress: boolean) {
+function renderDialog(reviewInProgress: boolean, threads = [thread('t1')]) {
   return render(
     <GitHubDialog
       details={details}
-      threads={[thread('t1')]}
+      threads={threads}
       sessionId="s1"
       reviewInProgress={reviewInProgress}
       onPulled={vi.fn()}
@@ -44,7 +45,7 @@ function renderDialog(reviewInProgress: boolean) {
 function submitButton(): HTMLButtonElement {
   const found = screen
     .getAllByRole('button')
-    .find(button => /as one review/i.test(button.textContent ?? ''));
+    .find(button => /^submit/i.test((button.textContent ?? '').trim()));
   if (!found) {
     throw new Error('submit button not found');
   }
@@ -66,5 +67,30 @@ describe('submitting while a review is still running', () => {
 
     expect(submitButton().disabled).toBe(false);
     expect(screen.queryByText(/still in progress/i)).toBeNull();
+  });
+});
+
+describe('approving with nothing attached', () => {
+  it('is allowed once the comments are deselected', async () => {
+    const user = userEvent.setup();
+    renderDialog(false);
+
+    await user.click(screen.getByRole('button', { name: /deselect all/i }));
+    // A plain comment with nothing in it says nothing, so it stays refused...
+    expect(submitButton().disabled).toBe(true);
+
+    // ...but a verdict stands on its own.
+    await user.click(screen.getByRole('button', { name: /^approve$/i }));
+    expect(submitButton().disabled).toBe(false);
+    expect(submitButton().textContent).toMatch(/approve/i);
+  });
+
+  it('is allowed with no findings at all', async () => {
+    const user = userEvent.setup();
+    renderDialog(false, []);
+
+    expect(submitButton().disabled).toBe(true);
+    await user.click(screen.getByRole('button', { name: /^approve$/i }));
+    expect(submitButton().disabled).toBe(false);
   });
 });

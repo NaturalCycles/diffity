@@ -1,6 +1,6 @@
 import type { CommentThread } from '../components/comments/types';
 import { GENERAL_THREAD_FILE_PATH, isThreadResolved } from '../components/comments/types';
-import type { PrCommentPayload } from './api';
+import type { PrCommentPayload, ReviewEvent } from './api';
 
 /**
  * A thread's replies are part of the same finding, so they are folded into the one comment
@@ -38,4 +38,25 @@ export function summaryFromGeneralThreads(threads: CommentThread[]): string {
     .filter(isGeneral)
     .flatMap(thread => thread.comments.map(comment => comment.body))
     .join('\n\n');
+}
+
+/**
+ * A plain comment needs something to say. A verdict does not: an approval with nothing attached
+ * is a normal thing to send, and the forge accepts it.
+ */
+export function canSubmitReview(input: {
+  event: ReviewEvent;
+  comments: number;
+  summary: string;
+  reviewInProgress?: boolean;
+}): boolean {
+  if (input.reviewInProgress) {
+    return false;
+  }
+
+  if (input.event !== 'COMMENT') {
+    return true;
+  }
+
+  return input.comments > 0 || input.summary.trim().length > 0;
 }
