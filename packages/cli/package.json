@@ -9,7 +9,9 @@
   "scripts": {
     "build": "tsx build.ts",
     "dev": "tsx src/index.ts",
-    "dev:watch": "tsx build.ts --watch"
+    "dev:watch": "tsx build.ts --watch",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "commander": "^14.0.3",
@@ -45,6 +47,7 @@
     "@types/node": "^25.5.0",
     "esbuild": "^0.27.0",
     "tsx": "^4.21.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0"
   }
 }
