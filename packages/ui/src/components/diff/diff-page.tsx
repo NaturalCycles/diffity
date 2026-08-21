@@ -7,6 +7,9 @@ import { useTheme } from '../../hooks/use-theme';
 import { useWrapLines } from '../../hooks/use-wrap-lines';
 import { useKeyboard } from '../../hooks/use-keyboard';
 import { useReviewThreads } from '../../hooks/use-review-threads';
+import { useTours } from '../../hooks/use-tours';
+import { pickActiveTour, orderPathsByTour, stopsByPath } from '../../lib/tour-order';
+import { TourStepper } from './tour-stepper';
 import { useCommentActions } from '../../hooks/use-comment-actions';
 import { Toolbar } from '../layout/toolbar';
 import { DiffView, type DiffViewHandle } from './diff-view';
@@ -73,6 +76,23 @@ export function DiffPage() {
   const threads = reviewsEnabled && serverThreads ? serverThreads : [];
   const commentActions = useCommentActions(sessionId, reviewsEnabled);
   const commentCountsByFile = useMemo(() => buildThreadCountsByFile(threads), [threads]);
+
+  const { data: tours } = useTours(reviewsEnabled ? sessionId : null);
+  const activeTour = useMemo(() => pickActiveTour(tours), [tours]);
+  const [reviewOrderEnabled, setReviewOrderEnabled] = useState(true);
+  const [tourStepIndex, setTourStepIndex] = useState(0);
+
+  const diffPaths = useMemo(() => (diff ? diff.files.map(file => getFilePath(file)) : []), [diff]);
+  const tourStops = useMemo(() => stopsByPath(activeTour, diffPaths), [activeTour, diffPaths]);
+
+  const orderedDiff = useMemo(() => {
+    if (!diff || !activeTour || !reviewOrderEnabled || activeTour.steps.length === 0) {
+      return diff;
+    }
+    const order = orderPathsByTour(diffPaths, activeTour.steps.map(step => step.filePath));
+    const byPath = new Map(diff.files.map(file => [getFilePath(file), file]));
+    return { ...diff, files: order.map(path => byPath.get(path)!) };
+  }, [diff, activeTour, reviewOrderEnabled, diffPaths]);
 
   const filesWithComments = useMemo(() => {
     return new Set(commentCountsByFile.keys());
@@ -190,21 +210,31 @@ export function DiffPage() {
   }, []);
 
   const getCurrentFilePath = useCallback((): string | null => {
-    if (!diff) {
+    if (!orderedDiff) {
       return null;
     }
-    return getFilePath(diff.files[currentFileIdx.current]);
-  }, [diff]);
+    return getFilePath(orderedDiff.files[currentFileIdx.current]);
+  }, [orderedDiff]);
 
   const navigateFile = useCallback((direction: number) => {
-    if (!diff) {
+    if (!orderedDiff) {
       return;
     }
-    const nextIdx = Math.max(0, Math.min(diff.files.length - 1, currentFileIdx.current + direction));
+    const nextIdx = Math.max(0, Math.min(orderedDiff.files.length - 1, currentFileIdx.current + direction));
     currentFileIdx.current = nextIdx;
-    const path = getFilePath(diff.files[nextIdx]);
+    const path = getFilePath(orderedDiff.files[nextIdx]);
     diffViewRef.current?.scrollToFile(path);
-  }, [diff]);
+  }, [orderedDiff]);
+
+  const handleTourStepChange = useCallback((index: number) => {
+    const steps = activeTour ? [...activeTour.steps].sort((a, b) => a.sortOrder - b.sortOrder) : [];
+    if (steps.length === 0) {
+      return;
+    }
+    const clamped = Math.max(0, Math.min(steps.length - 1, index));
+    setTourStepIndex(clamped);
+    diffViewRef.current?.scrollToFile(steps[clamped].filePath);
+  }, [activeTour]);
 
   const navigateHunk = useCallback((direction: number) => {
     const hunks = getHunkHeaders();
@@ -239,10 +269,10 @@ export function DiffPage() {
       }
     },
     onCollapseAll: () => {
-      if (!diff) {
+      if (!orderedDiff) {
         return;
       }
-      const allPaths = diff.files.map((f) => getFilePath(f));
+      const allPaths = orderedDiff.files.map((f) => getFilePath(f));
       const anyExpanded = allPaths.some((p) => !collapsedFiles.has(p));
       manuallyToggledRef.current = new Set();
       if (anyExpanded) {
@@ -380,18 +410,34 @@ export function DiffPage() {
         onGitHubPulled={() => queryClient.invalidateQueries({ queryKey: ['threads'] })}
       />
       {isStale && <StaleDiffBanner onRefresh={handleRefreshDiff} />}
+      {activeTour && (
+        <TourStepper
+          tour={activeTour}
+          stepIndex={tourStepIndex}
+          onStepChange={handleTourStepChange}
+        />
+      )}
       <div className="flex flex-1 overflow-hidden">
         <Sidebar
-          files={diff?.files || []}
+          files={orderedDiff?.files || []}
           activeFile={activeFile}
           reviewedFiles={reviewedFiles}
           commentCountsByFile={commentCountsByFile}
           onFileClick={handleSidebarFileClick}
           onCommentedFileClick={handleSidebarCommentedFileClick}
+          reviewOrder={
+            activeTour && activeTour.steps.length > 0
+              ? {
+                  stops: tourStops,
+                  enabled: reviewOrderEnabled,
+                  onToggle: () => setReviewOrderEnabled(prev => !prev),
+                }
+              : undefined
+          }
         />
-        {diff ? (
+        {orderedDiff ? (
           <DiffView
-            diff={diff}
+            diff={orderedDiff}
             viewMode={viewMode}
             theme={theme}
             collapsedFiles={collapsedFiles}
