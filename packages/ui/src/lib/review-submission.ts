@@ -13,6 +13,7 @@ export function threadToPayload(thread: CommentThread): PrCommentPayload {
     : first.body;
 
   return {
+    threadId: thread.id,
     filePath: thread.filePath,
     side: thread.side === 'old' ? 'LEFT' : 'RIGHT',
     startLine: thread.startLine !== thread.endLine ? thread.startLine : null,
@@ -59,4 +60,9 @@ export function canSubmitReview(input: {
   }
 
   return input.comments > 0 || input.summary.trim().length > 0;
+}
+
+/** Already on the pull request, so resending has to be asked for rather than assumed. */
+export function wasSubmitted(thread: CommentThread): boolean {
+  return !!thread.submittedAt;
 }

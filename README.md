@@ -20,7 +20,10 @@ It works with Claude Code, Cursor, Codex, and any AI coding agent.
 | [Browse project files](#browse-project-files) | Explore your repo and comment on any file for AI to resolve |
 | [Guided code tours](#guided-code-tours) | Walk through your codebase step by step with highlighted code |
 | [Learn any topic](#learn-any-topic) | Project-driven learning for programming languages, tools, and frameworks |
-| [GitHub PRs](#github-prs) | Pull down a PR, review it locally, push comments back to GitHub |
+| [GitHub PRs](#github-prs) | Pull down a PR, review it locally, submit one review back |
+| [Reading order](#reading-a-diff-in-the-order-it-makes-sense) | Read a diff in the order it makes sense, not alphabetically |
+| [Attention](#what-gets-your-attention) | Highlight what matters, dim what a rule can prove is mechanical |
+| [Review state](#while-a-review-is-running) | See when a review is still running, and what has already been sent |
 | [Multiple projects](#multiple-projects) | Run it in multiple repos at once, each gets its own port |
 
 ## See your diffs
@@ -83,10 +86,10 @@ Leave comments on any line — when you're done, run `/diffity-resolve` to have 
 
 ### `/diffity-review`
 
-Your agent reviews the diff and leaves inline comments in the viewer. Uses severity tags (`[must-fix]`, `[suggestion]`, `[nit]`, `[question]`) so you can triage by importance. Supports refs, focus areas, and natural language:
+Your agent reviews the diff and leaves inline comments in the viewer, prefixed with severities so you can triage by importance — `P1`/`P2`/`P3` by default, or whatever the project configures (see [Review standards](#review-standards)). It reads the project's own standards first, records a reading order for the diff, and announces itself as running so you do not approve while findings are still arriving. Supports refs, focus areas, and natural language:
 
 ```
-/diffity-review                             # review working tree changes
+/diffity-review                             # the branch's pull request, or the working tree
 /diffity-review main                        # review what you're merging into main
 /diffity-review main..feature               # review what you're merging into main
 /diffity-review identify security issues    # focus on security issues
@@ -191,9 +194,23 @@ Pass a GitHub PR URL to view and review pull requests locally:
 diffity https://github.com/owner/repo/pull/123
 ```
 
-This checks out the PR, opens the diff against its base branch, and lets you leave comments in the viewer. Requires the [`gh` CLI](https://cli.github.com/) installed and authenticated (`gh auth login`), and the current repo must match the PR's repository.
+This checks out the PR and opens the diff against **the commit the pull request is based on**, so the file and line counts match what the forge shows rather than drifting with your local base branch. A merged pull request works too: its branch is usually deleted, so the head is fetched from `refs/pull/<n>/head`. Requires the [`gh` CLI](https://cli.github.com/) installed and authenticated (`gh auth login`), and the current repo must match the PR's repository.
 
-You can push your comments (including AI review comments) back to GitHub as PR review comments, and pull existing GitHub comments into the viewer. Both are available from the viewer UI.
+Above the diff you get the pull request's description and every review already on it, so you are not re-deriving intent from the code or repeating a point someone else has made.
+
+### Submitting a review
+
+The forge dialog is a composer, not a push button:
+
+- a checkbox per finding, so you send the ones you agree with. Everything open starts selected; deselecting is remembered, so a finding your agent writes while the dialog is open cannot slip into a set you have already curated
+- replies on a finding are folded into the one comment the forge will hold
+- general comments seed the summary, which you can edit
+- **Comment**, **Approve** or **Request changes** — and an approval needs nothing attached, since a verdict stands on its own. Approve and Request changes are disabled on your own pull request, which the forge refuses anyway
+- everything goes as **one review**: one notification for the author, a summary that has somewhere to live, and no half-posted review if something fails
+
+A comment on a line the pull request does not touch is caught before anything is sent, because the whole review is a single request and one unpostable line would reject all of it. Findings already sent are marked *already on the pull request* and left unselected.
+
+Existing inline comments can be pulled into the viewer from the same dialog.
 
 The skills work with PR URLs too:
 
@@ -204,6 +221,79 @@ The skills work with PR URLs too:
 ```
 
 Passing a PR URL to `/diffity-tour` locks it to review mode — the agent reads the PR's description, commits, and diff to build a guided walkthrough that you can use before approving or merging.
+
+## Reading a diff in the order it makes sense
+
+A diff arrives alphabetically, which is rarely the order it should be read in. When a walkthrough
+exists for the change, the file list is **reordered** to follow it: the file that explains the rest
+first, the mechanical ones last, everything the walkthrough does not mention below a divider. Each
+file carries the walkthrough's one-line note on why it is read at that point, a stepper walks the
+stops, and `A-Z` in the sidebar header returns to the alphabetical tree.
+
+A walkthrough is recorded by an agent (`/diffity-review` does it as its last step, and
+`/diffity-tour` builds one on request), so this costs you nothing to use.
+
+## What gets your attention
+
+Two mechanisms, with the decider deliberately different for each.
+
+**Highlighted** — the lines a walkthrough points at are tinted. An agent can only ever *add*
+attention this way, never take it away.
+
+**Dimmed** — decided by rules, never by a model, because dimming asserts that something needs
+*less* attention. A hunk recedes when every line it touches is an import, when its added and
+removed lines are the same lines with different whitespace, or when the file is generated. It comes
+back on hover, stays selectable and commentable, and carries the reason, so you can always find out
+why rather than having to trust it.
+
+Files where indentation is syntax — `.py`, `.yml`, `.yaml`, `.md`, `Makefile` and friends — are
+never whitespace-dimmed, because a reindent there can change behaviour.
+
+Whitespace hiding is **on by default** and remembered: it is the formatter's business, not yours.
+Because a filtered diff shows fewer lines than the forge does, the header says so and names the
+amount — `whitespace hidden (2 files, 18 lines suppressed)`.
+
+## Commenting
+
+Click a line to comment on it. **Shift-click** a second line to extend the comment across the span,
+the way the forge does it — within one file and one side, since a range spanning both sides of a
+diff is not something that can be commented on. Dragging down the gutter also selects a range.
+
+## While a review is running
+
+An agent announces a review before it starts writing and again when it finishes. While one is open
+the page carries a banner with the count of findings so far, and **submitting is blocked** — the
+difference between "nothing found" and "not finished looking" is the difference between approving a
+change and approving it too early.
+
+A finding survives the commits you make in response to it: when HEAD moves, open findings and the
+walkthrough follow into the new session, and a finding whose code merely *moved* is re-anchored to
+it. A finding whose code was **edited** keeps its old position rather than being guessed onto
+something it was not written about.
+
+## The agent CLI
+
+Skills drive these; they are listed because they are the whole interface an agent needs.
+
+```
+diffity agent standards [--json]        # the project's severities and standards document
+diffity agent diff                      # the unified diff for this session
+diffity agent list [--status open|resolved|dismissed] [--json]
+diffity agent review-start [--note <text>]
+diffity agent review-done
+diffity agent comment --file <path> --line <n> [--end-line <n>] [--side new|old] --body <text>
+diffity agent general-comment --body <text>
+diffity agent reply <id> --body <text>
+diffity agent resolve <id> [--summary <text>]
+diffity agent dismiss <id> [--reason <text>]
+diffity agent tour-start --topic <text> [--body <text>] [--json]
+diffity agent tour-step --tour <id> --file <path> --line <n> [--end-line <n>] --body <text> [--annotation <text>]
+diffity agent tour-done --tour <id>
+diffity agent tour-delete [<id>]        # correct a walkthrough instead of adding another
+```
+
+A comment's line range is trimmed to the file's length, and you are told when that happens: a range
+running past the end would otherwise be counted and highlighted with nothing to show.
 
 ## Multiple projects
 
@@ -235,7 +325,11 @@ diffity list --json        # machine-readable output
 --unified          Unified view (default: split)
 --quiet            Minimal terminal output
 --new              Stop existing instance and start fresh
+--repo <path>      Repository to work on, when the current directory is not one
 ```
+
+`--repo` is for the common case where a project directory holds several worktrees as
+subdirectories rather than being a repository itself. It must come before a positional argument.
 
 ## Environment variables
 

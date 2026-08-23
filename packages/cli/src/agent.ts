@@ -13,7 +13,7 @@ import {
   type ThreadStatus,
   type Thread,
 } from './threads.js';
-import { createTour, addTourStep, updateTourStatus } from './tours.js';
+import { createTour, addTourStep, updateTourStatus, deleteTour, deleteToursForSession } from './tours.js';
 import { readAnchor, clampToFile, countWorkingTreeLines } from './anchor.js';
 import { startReviewRun, finishReviewRun } from './review-run.js';
 import { readRepoConfig, DEFAULT_SEVERITIES, resolveInRepo, REPO_CONFIG_FILE } from '@diffity/git';
@@ -349,6 +349,21 @@ Examples:
         return;
       }
       console.log(pc.green(`Added step ${step.sortOrder} to tour`));
+    });
+
+  agent
+    .command('tour-delete')
+    .description('Remove a walkthrough, or all of them for this session')
+    .argument('[tour-id]', 'Walkthrough to remove; omit to remove every one in this session')
+    .action((tourId?: string) => {
+      const session = requireSession();
+      if (tourId) {
+        deleteTour(tourId);
+        console.log(pc.green(`Removed walkthrough ${tourId.slice(0, 8)}`));
+        return;
+      }
+      deleteToursForSession(session.id);
+      console.log(pc.green('Removed every walkthrough in this session'));
     });
 
   agent

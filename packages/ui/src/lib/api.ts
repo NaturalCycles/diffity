@@ -232,6 +232,7 @@ export async function fetchFileContent(filePath: string, ref?: string): Promise<
 }
 
 export interface PrCommentPayload {
+  threadId?: string;
   filePath: string;
   side: 'LEFT' | 'RIGHT';
   startLine: number | null;
@@ -251,6 +252,7 @@ export type ReviewEvent = 'COMMENT' | 'APPROVE' | 'REQUEST_CHANGES';
 
 export interface CreateReviewResult {
   submitted: number;
+  submittedThreadIds: string[];
   skipped: number;
   failed: number;
   errors: string[];

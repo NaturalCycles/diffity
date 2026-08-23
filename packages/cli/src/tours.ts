@@ -200,3 +200,21 @@ export function updateTourStatus(tourId: string, status: TourStatus): void {
   const db = getDb();
   db.prepare('UPDATE tours SET status = ? WHERE id = ?').run(status, tourId);
 }
+
+/**
+ * A walkthrough can be wrong — a mistaken step, a body mangled on the way in — and until now the
+ * only remedy was to add another and rely on the newest winning, leaving the bad one behind.
+ */
+export function deleteTour(tourId: string): void {
+  const db = getDb();
+  db.prepare('DELETE FROM tour_steps WHERE tour_id = ?').run(tourId);
+  db.prepare('DELETE FROM tours WHERE id = ?').run(tourId);
+}
+
+export function deleteToursForSession(sessionId: string): void {
+  const db = getDb();
+  db.prepare(
+    'DELETE FROM tour_steps WHERE tour_id IN (SELECT id FROM tours WHERE session_id = ?)',
+  ).run(sessionId);
+  db.prepare('DELETE FROM tours WHERE session_id = ?').run(sessionId);
+}

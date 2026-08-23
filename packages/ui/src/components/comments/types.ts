@@ -27,6 +27,8 @@ export interface CommentThread {
   status: ThreadStatus;
   anchorContent?: string;
   updatedAt?: string;
+  /** Set once this finding has been sent to the forge. Sending is not resolving. */
+  submittedAt?: string | null;
   sessionId?: string;
 }
 

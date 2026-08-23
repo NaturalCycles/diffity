@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
   createTour,
+  deleteTour,
   getTour,
   getToursForSession,
   addTourStep,
@@ -57,6 +58,12 @@ export function handleTourRoute(req: IncomingMessage, res: ServerResponse, pathn
   }
 
   const tourMatch = pathname.match(/^\/api\/tours\/([^/]+)$/);
+  if (tourMatch && req.method === 'DELETE') {
+    deleteTour(tourMatch[1]);
+    sendJson(res, { ok: true });
+    return true;
+  }
+
   if (tourMatch && req.method === 'GET') {
     const tour = getTour(tourMatch[1]);
     if (!tour) {
