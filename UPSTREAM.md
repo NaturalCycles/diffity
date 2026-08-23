@@ -7,11 +7,19 @@ of it can be extracted as a pointed upstream pull request later.
 
 - **`main`** is a pristine mirror of `upstream/main`. Upstream updates land here first
   (`git merge upstream/main`), then flow to `develop`. Nothing is committed to it directly.
-- **`develop`** is the working version — what the `diffity` on PATH is built from. The worktree at
-  `~/nc/diffity-fork/diffity` stays parked on it; feature work happens in a second worktree so
-  switching branches cannot rebuild the tool while someone is using it.
-- **Branches are kept after merging**, because each one is the extraction unit. To offer a change
-  upstream: `git diff <its-base>..<its-branch>`.
+- **`develop`** is the default branch and the working version — what the `diffity` on PATH is built
+  from. The worktree at `~/nc/diffity-fork/diffity` stays parked on it; feature work happens in a
+  second worktree so switching branches cannot rebuild the tool while someone is using it.
+- **Squash merge only**, through a pull request, matching the other NaturalCycles repositories.
+  Nothing is merged into `develop` locally. After a squash lands, a local `develop` is refreshed with
+  `git fetch && git reset --hard origin/develop` rather than merged — the branch commits are not its
+  ancestors.
+- **The squashed commit is the extraction unit.** One commit per concern, so offering a change
+  upstream is `git show <sha>` rather than a branch diff. Head branches are deleted on merge, which
+  is fine for that reason; the table below records the commit each change landed as.
+
+Everything up to and including PR #24 was merged with merge commits, before this arrangement — that
+part of the history is mixed, and those branches still exist.
 
 Nothing here is NaturalCycles-specific — all of it is upstreamable as-is. When that changes,
 fork-local work goes in its own section below so it never lands in an upstream patch by accident.
