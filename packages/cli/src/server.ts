@@ -522,6 +522,39 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           return;
         }
 
+        // One file, so a page that knows only one file moved can replace only that one — reloading
+        // the whole diff to see it costs the reader their collapse states and their place.
+        if (pathname === '/api/diff/file') {
+          const ref = url.searchParams.get('ref');
+          const requested = url.searchParams.get('path');
+          if (!requested) {
+            sendError(res, 400, 'Missing path');
+            return;
+          }
+          const hiding = url.searchParams.get('whitespace') === 'hide';
+          const extraArgs = hiding ? ['-w'] : [];
+          const baseRef = ref ? resolveBaseRef(ref) : 'HEAD';
+
+          // Containment is checked before the path reaches git as a pathspec; the absolute form it
+          // returns is what git is given, since a pathspec outside the repository is a way out of it.
+          let contained: string;
+          try {
+            contained = resolveInRepo(requested);
+          } catch {
+            sendError(res, 400, 'Path is outside the repository');
+            return;
+          }
+
+          const raw = ref
+            ? resolveRef(ref, [...extraArgs, '--', contained])
+            : getFullDiff([...(hiding ? [...diffArgs, '-w'] : diffArgs), '--', contained]);
+          const parsed = enrichWithLineCounts(parseDiff(raw), baseRef);
+          // Null rather than an empty diff: the file may no longer differ at all, which the page
+          // has to be able to tell from "here it is, unchanged".
+          sendJson(res, { file: parsed.files[0] ?? null });
+          return;
+        }
+
         if (pathname === '/api/diff') {
           const ref = url.searchParams.get('ref');
           const whitespace = url.searchParams.get('whitespace');

@@ -14,6 +14,9 @@ import { TOUR_NOT_STARTED, clampTourStep } from '../../lib/tour-navigation';
 import { liveStatusOptions } from '../../queries/live';
 import { readReadingPosition, writeReadingPosition } from '../../lib/reading-position';
 import { staleMessage } from '../../lib/stale-files';
+import { patchDiffFile } from '../../lib/patch-diff-file';
+import { fetchDiffFile } from '../../lib/api';
+import { diffOptions } from '../../queries/diff';
 import { tourMarks, marksByPath, focusRangesFromMarks, type TourFocusRange } from '../../lib/tour-marks';
 import { TourStepper } from './tour-stepper';
 import { useCommentActions } from '../../hooks/use-comment-actions';
@@ -39,6 +42,7 @@ import {
 } from '../../lib/viewed-storage';
 import { fetchGitHubDetails, type GitHubDetails } from '../../lib/api';
 import type { LineSelection } from '../comments/types';
+import type { ParsedDiff } from '@diffity/parser';
 import { isThreadResolved } from '../comments/types';
 
 export function DiffPage() {
@@ -68,7 +72,7 @@ export function DiffPage() {
   const reviewsEnabled = !!info?.capabilities?.reviews;
   const sessionId = info?.sessionId ?? null;
   const canRevert = !!info?.capabilities?.revert;
-  const { isStale, staleFiles, resetStaleness } = useDiffStaleness(refParam, !!info?.capabilities?.staleness);
+  const { isStale, staleFiles, resetStaleness, acknowledgeFile } = useDiffStaleness(refParam, !!info?.capabilities?.staleness);
   const [githubDetails, setGithubDetails] = useState<GitHubDetails | null>(null);
 
   useEffect(() => {
@@ -415,6 +419,17 @@ export function DiffPage() {
     queryClient.invalidateQueries({ queryKey: ['diff'] });
   }, [queryClient]);
 
+  // Reloading one file rather than the diff. Everything the reader has not asked about keeps its
+  // object identity, so their collapse states, their place and the rest of the page are untouched.
+  const handleRefreshFile = useCallback(async (path: string) => {
+    const fresh = await fetchDiffFile(path, hideWhitespace, refParam);
+    queryClient.setQueryData<ParsedDiff>(
+      diffOptions(hideWhitespace, refParam).queryKey,
+      current => (current ? patchDiffFile(current, path, fresh) : current),
+    );
+    acknowledgeFile(path);
+  }, [hideWhitespace, refParam, queryClient, acknowledgeFile]);
+
   const handleRefreshDiff = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['diff'] });
     resetStaleness();
@@ -571,6 +586,8 @@ export function DiffPage() {
             pendingSelection={pendingSelection}
             onPendingSelectionChange={setPendingSelection}
             focusRangesByFile={focusRangesByFile}
+            staleFiles={staleFiles}
+            onRefreshFile={handleRefreshFile}
             onAskThread={canAsk ? handleAskThread : undefined}
             onAskReply={canAsk ? handleAskReply : undefined}
             askIsHeard={askIsHeard}

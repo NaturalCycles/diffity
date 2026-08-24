@@ -67,6 +67,9 @@ interface FileBlockProps {
   /** Which stop the header is showing, so the others are not dressed up as current. */
   activeStepIndex?: number;
   onTourMarkClick?: (stepIndex: number) => void;
+  /** This file has moved since the diff was loaded. */
+  isStale?: boolean;
+  onRefreshFile?: (path: string) => void;
   onAskThread?: (filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor) => void;
   onAskReply?: (threadId: string, body: string, author: CommentAuthor) => void;
   askIsHeard?: boolean;
@@ -83,6 +86,7 @@ export function FileBlock(props: FileBlockProps) {
   const {
     file, viewMode, collapsed, onToggleCollapse, reviewed, onReviewedChange, highlightLine, baseRef, canRevert, onRevert, focusRanges,
     tourMarks, activeStepIndex, onTourMarkClick,
+    isStale, onRefreshFile,
     onAskThread, onAskReply, askIsHeard,
     threads: allThreads, commentsEnabled, commentActions, onAddThread: rawAddThread, pendingSelection, onPendingSelectionChange,
     highlighted, onHighlightEnd,
@@ -493,6 +497,18 @@ export function FileBlock(props: FileBlockProps) {
               ))}
             </div>
           </div>
+          {isStale && onRefreshFile && (
+            <button
+              onClick={(event) => {
+                event.stopPropagation();
+                onRefreshFile(filePath);
+              }}
+              title="This file changed after the diff was loaded. Reload just this one."
+              className="flex items-center gap-1 px-1.5 py-0.5 text-[11px] rounded-md bg-accent/10 text-accent hover:bg-accent/20 transition-colors cursor-pointer"
+            >
+              Changed — reload
+            </button>
+          )}
           <label className="flex items-center gap-1.5 text-[11px] text-text-muted cursor-pointer select-none hover:text-text transition-colors">
             <input
               type="checkbox"

@@ -1,4 +1,4 @@
-import type { ParsedDiff } from '@diffity/parser';
+import type { DiffFile, ParsedDiff } from '@diffity/parser';
 import type { CommentThread, CommentAuthor, CommentSide, Comment, CommentKind } from '../components/comments/types';
 
 export async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
@@ -106,6 +106,17 @@ export function fetchDiff(hideWhitespace: boolean, ref?: string): Promise<Parsed
     whitespace: hideWhitespace ? 'hide' : undefined,
     ref,
   }));
+}
+
+export async function fetchDiffFile(
+  path: string,
+  hideWhitespace: boolean,
+  ref?: string,
+): Promise<DiffFile | null> {
+  const json = await apiFetch<{ file: DiffFile | null }>(
+    buildUrl('/api/diff/file', { path, ref, whitespace: hideWhitespace ? 'hide' : undefined }),
+  );
+  return json.file;
 }
 
 export interface DiffFingerprint {
