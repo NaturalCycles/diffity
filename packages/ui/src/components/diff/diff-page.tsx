@@ -497,7 +497,7 @@ export function DiffPage() {
         onGitHubPulled={() => queryClient.invalidateQueries({ queryKey: ['threads'] })}
       />
       {isStale && <StaleDiffBanner onRefresh={handleRefreshDiff} />}
-      <PullRequestPanel details={githubDetails} />
+      <PullRequestPanel details={githubDetails} repoRoot={repoRoot} />
       {info?.review?.inProgress && (
         <ReviewProgressBanner review={info.review} findings={threads.length} />
       )}

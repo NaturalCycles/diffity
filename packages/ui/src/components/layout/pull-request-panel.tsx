@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { readPanelOpen, writePanelOpen } from '../../lib/panel-state';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import type { GitHubDetails } from '../../lib/api';
@@ -10,6 +11,8 @@ dayjs.extend(relativeTime);
 
 interface PullRequestPanelProps {
   details: GitHubDetails | null;
+  /** Scopes the remembered open state, so one checkout does not speak for another. */
+  repoRoot?: string | null;
 }
 
 function stateClass(state: string): string {
@@ -28,8 +31,19 @@ function stateClass(state: string): string {
  * else has already made.
  */
 export function PullRequestPanel(props: PullRequestPanelProps) {
-  const { details } = props;
-  const [open, setOpen] = useState(true);
+  const { details, repoRoot } = props;
+  const scope = repoRoot ?? '';
+  const [open, setOpen] = useState(() =>
+    typeof window === 'undefined' ? true : readPanelOpen(window.localStorage, 'pull-request', scope),
+  );
+
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    if (typeof window !== 'undefined') {
+      writePanelOpen(window.localStorage, 'pull-request', scope, next);
+    }
+  };
 
   if (!details) {
     return null;
@@ -41,7 +55,7 @@ export function PullRequestPanel(props: PullRequestPanelProps) {
     <div className="border-b border-border bg-bg-secondary">
       <button
         className="w-full flex items-center gap-2 px-4 py-2 text-xs text-text-secondary hover:text-text cursor-pointer"
-        onClick={() => setOpen(prev => !prev)}
+        onClick={toggle}
         aria-expanded={open}
       >
         {open ? <ChevronUpIcon className="w-3.5 h-3.5" /> : <ChevronDownIcon className="w-3.5 h-3.5" />}
