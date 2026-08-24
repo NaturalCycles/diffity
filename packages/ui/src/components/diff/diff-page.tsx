@@ -273,6 +273,14 @@ export function DiffPage() {
     requestAnimationFrame(() => diffViewRef.current?.scrollToFile(wasReading));
   }, [orderedDiff, repoRoot, refParam]);
 
+  // Git reports a rename as `src/{old.ts => new.ts}`, which is never a path in the file list. Naming
+  // it would point the reader at a file they cannot find, so anything unmatched falls back to the
+  // count — the whole-diff refresh still covers it.
+  const namedStaleFiles = useMemo(
+    () => staleFiles.filter(path => diffPaths.includes(path)),
+    [staleFiles, diffPaths],
+  );
+
   const handleReviewedChange = useCallback((path: string, reviewed: boolean) => {
     setReviewedFiles((prev) => {
       const next = new Set(prev);
@@ -425,7 +433,17 @@ export function DiffPage() {
     const fresh = await fetchDiffFile(path, hideWhitespace, refParam);
     queryClient.setQueryData<ParsedDiff>(
       diffOptions(hideWhitespace, refParam).queryKey,
-      current => (current ? patchDiffFile(current, path, fresh) : current),
+      current => {
+        if (!current) {
+          return current;
+        }
+        const patched = patchDiffFile(current, path, fresh);
+        // A patched diff is the same reading of the same diff, so it is already initialised. Left
+        // unsaid, the initialiser would re-derive the viewed set and every collapse state — which
+        // is the cost that replacing one file exists to avoid.
+        initializedDiffRef.current = patched;
+        return patched;
+      },
     );
     acknowledgeFile(path);
   }, [hideWhitespace, refParam, queryClient, acknowledgeFile]);
@@ -532,7 +550,7 @@ export function DiffPage() {
         sessionId={sessionId}
         onGitHubPulled={() => queryClient.invalidateQueries({ queryKey: ['threads'] })}
       />
-      {isStale && <StaleDiffBanner onRefresh={handleRefreshDiff} message={staleMessage(staleFiles)} />}
+      {isStale && <StaleDiffBanner onRefresh={handleRefreshDiff} message={staleMessage(namedStaleFiles)} />}
       <PullRequestPanel details={githubDetails} hasPullRequest={!!info?.github} repoRoot={repoRoot} />
       {info?.review?.inProgress && (
         <ReviewProgressBanner review={info.review} findings={threads.length} />

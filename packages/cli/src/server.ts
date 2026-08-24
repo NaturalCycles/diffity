@@ -319,6 +319,18 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
     // VS Code CLI not found
   }
 
+  // Who wrote the pull request does not change between two questions asked a minute apart, and the
+  // lookup is a subprocess on a path that is meant to feel immediate.
+  let authorshipCache: { viewerDidAuthor?: boolean } | null | undefined;
+  function authorship(): { viewerDidAuthor?: boolean } | null {
+    if (authorshipCache === undefined) {
+      authorshipCache = githubRemote
+        ? fetchGitHubDetails(githubRemote.owner, githubRemote.repo, prNumber)
+        : null;
+    }
+    return authorshipCache;
+  }
+
   const server = createServer(
     async (req: IncomingMessage, res: ServerResponse) => {
       try {
@@ -390,10 +402,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
               }
               // Carried on the request rather than left for the agent to look up: a rule nobody
               // has to remember is a rule that holds.
-              const details = githubRemote
-                ? fetchGitHubDetails(githubRemote.owner, githubRemote.repo, prNumber)
-                : null;
-              sendJson(res, { request: { ...request, mayChangeCode: mayChangeCode(details) } });
+              sendJson(res, { request: { ...request, mayChangeCode: mayChangeCode(authorship()) } });
             },
             err => sendError(res, 500, `Failed to wait for a live request: ${err}`),
           );
