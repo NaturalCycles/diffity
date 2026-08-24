@@ -357,7 +357,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             // A comment box that drives an agent is only as safe as the loopback bind, so live
             // mode is not offered at all when the server is reachable from elsewhere.
             enabled: isLoopbackBind(getBindHost()),
-            listening: liveListenerCount() > 0,
+            listening: sid ? liveListenerCount(sid) > 0 : false,
             waiting: sid ? pendingLiveCount(sid) : 0,
           });
           return;

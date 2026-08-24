@@ -251,3 +251,47 @@ describe('closing a request', () => {
     expect(answerLiveRequest('no-such-comment')).toBe(false);
   });
 });
+
+describe('two sessions in one server', () => {
+  // One diffity serves a whole checkout: the file browser is its own session and each ref gets
+  // one, so a listener on one must not be disturbed by — or spoken for by — another.
+  it('does not report a listener on one session as listening on another', async () => {
+    const { findOrCreateSession } = await import('../src/session.js');
+    const { waitForLiveRequest, liveListenerCount } = await import('../src/live.js');
+    const other = findOrCreateSession('__tree__');
+    const s = await session();
+
+    const parked = waitForLiveRequest(s.id, 400);
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    expect(liveListenerCount(s.id)).toBe(1);
+    expect(liveListenerCount(other.id)).toBe(0);
+
+    await parked;
+  });
+
+  it('does not end a wait because another session was asked something', async () => {
+    const { findOrCreateSession } = await import('../src/session.js');
+    const { createThread } = await import('../src/threads.js');
+    const { requestLive, notifyLiveListeners, waitForLiveRequest } = await import('../src/live.js');
+    await drainRequests();
+    const other = findOrCreateSession('__tree__');
+    const s = await session();
+
+    let settled = false;
+    const parked = waitForLiveRequest(s.id, 600).then(request => {
+      settled = true;
+      return request;
+    });
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    // Something asked, but on the other session.
+    const elsewhere = createThread(other.id, 'a.ts', 'new', 1, 1, 'asked over here', you, undefined, 'aside');
+    requestLive(elsewhere.comments[0].id);
+    notifyLiveListeners(other.id);
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    expect(settled).toBe(false);
+    expect(await parked).toBeNull();
+  });
+});

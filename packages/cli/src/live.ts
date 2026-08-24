@@ -22,10 +22,19 @@ export interface LiveRequest {
   findingBody: string | null;
 }
 
-export function requestLive(commentId: string): void {
+/** Returns the session the request belongs to, which is who should be woken for it. */
+export function requestLive(commentId: string): string | null {
   getDb()
     .prepare("UPDATE comments SET live_requested_at = datetime('now') WHERE id = ?")
     .run(commentId);
+
+  return (
+    queryOne<{ session_id: string }>(
+      `SELECT t.session_id FROM comments c JOIN comment_threads t ON t.id = c.thread_id
+        WHERE c.id = ?`,
+      commentId,
+    )?.session_id ?? null
+  );
 }
 
 /**
@@ -110,17 +119,24 @@ export function reclaimStaleLiveRequests(olderThanMinutes: number): number {
 }
 
 /**
- * Presence is a request parked on the claim route, not a row in the database. A listener that dies
- * takes its connection with it, so nothing has to expire and nothing can lie about being there.
+ * Presence is a request parked on the claim route, not a row in the database: a listener that dies
+ * takes its connection with it, so nothing has to expire.
+ *
+ * Kept per session rather than per process, because one server holds a whole checkout — the file
+ * browser is its own session and each ref gets one. A single set would have every session claiming
+ * an agent that is parked on one of them.
  */
-const listeners = new Set<() => void>();
+const listeners = new Map<string, Set<() => void>>();
 
-export function liveListenerCount(): number {
-  return listeners.size;
+export function liveListenerCount(sessionId: string): number {
+  return listeners.get(sessionId)?.size ?? 0;
 }
 
-export function notifyLiveListeners(): void {
-  for (const wake of [...listeners]) {
+export function notifyLiveListeners(sessionId: string | null): void {
+  if (!sessionId) {
+    return;
+  }
+  for (const wake of [...(listeners.get(sessionId) ?? [])]) {
     wake();
   }
 }
@@ -142,14 +158,28 @@ export function waitForLiveRequest(sessionId: string, waitMs: number): Promise<L
         return;
       }
       settled = true;
-      listeners.delete(wake);
+      const forSession = listeners.get(sessionId);
+      forSession?.delete(wake);
+      if (forSession?.size === 0) {
+        listeners.delete(sessionId);
+      }
       clearTimeout(timer);
       resolve(request);
     };
 
-    const wake = () => finish(claimNextLiveRequest(sessionId));
+    // Only a request this listener could take ends its wait. Waking on anything else would end it
+    // with "nothing asked" and send the agent round the loop for someone else's question.
+    const wake = () => {
+      const claimed = claimNextLiveRequest(sessionId);
+      if (claimed) {
+        finish(claimed);
+      }
+    };
     const timer = setTimeout(() => finish(null), waitMs);
     timer.unref?.();
-    listeners.add(wake);
+
+    const forSession = listeners.get(sessionId) ?? new Set<() => void>();
+    forSession.add(wake);
+    listeners.set(sessionId, forSession);
   });
 }
