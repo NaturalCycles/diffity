@@ -76,7 +76,7 @@ is what you did.
 ## Then go back to waiting
 
 ```
-diffity agent await --timeout 900
+diffity agent await --timeout 240
 ```
 
 Background command, same as before. Exit 3 means nothing was asked — re-arm without saying anything.

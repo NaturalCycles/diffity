@@ -307,7 +307,7 @@ Check whether the page can reach you: `diffity agent live-status`. If it reports
 available, arm the loop as the last thing you do:
 
 ```
-diffity agent await --timeout 900
+diffity agent await --timeout 240
 ```
 
 Run it as a **background** command. It blocks until the reader asks something in the page and then

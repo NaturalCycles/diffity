@@ -15,6 +15,7 @@ import {
   type Thread,
 } from './threads.js';
 import { answerLiveRequest, type LiveRequest } from './live.js';
+import { clampClientWait } from './live-wait.js';
 import { findInstanceForRepo, type RegistryEntry } from './registry.js';
 import { createHash } from 'node:crypto';
 import { createTour, addTourStep, updateTourStatus, deleteTour, deleteToursForSession } from './tours.js';
@@ -302,7 +303,13 @@ Examples:
         return;
       }
 
-      const wait = Math.max(0, Number(opts.timeout) || 0);
+      const asked = Number(opts.timeout);
+      const wait = clampClientWait(asked);
+      if (Number.isFinite(asked) && asked > wait) {
+        console.error(
+          pc.dim(`Waiting ${wait}s at a time (node abandons a request after 300s without headers) — re-arm to keep going.`),
+        );
+      }
       const startedAt = Date.now();
       let payload: { request: LiveRequest | null };
       try {
