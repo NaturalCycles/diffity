@@ -237,6 +237,9 @@ export function DiffPage() {
       return next;
     });
     if (reviewed) {
+      // Measured before the collapse: afterwards the page is shorter, the browser may already have
+      // clamped the scroll, and the file no longer looks like the one the reader was inside.
+      const wasInsideFile = diffViewRef.current?.isScrolledInsideFile(path) ?? false;
       setCollapsedFiles((prev) => {
         const next = new Set(prev);
         next.add(path);
@@ -244,7 +247,9 @@ export function DiffPage() {
       });
       // The header is sticky, so it was under the cursor when it was clicked. Put the collapsed
       // file back there rather than letting the page shorten under the reader.
-      requestAnimationFrame(() => diffViewRef.current?.anchorFileTop(path));
+      if (wasInsideFile) {
+        requestAnimationFrame(() => diffViewRef.current?.scrollFileToTop(path));
+      }
     } else {
       setCollapsedFiles((prev) => {
         const next = new Set(prev);

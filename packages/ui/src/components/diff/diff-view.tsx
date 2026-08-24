@@ -21,8 +21,9 @@ export interface DiffViewHandle {
   scrollToFile: (path: string) => void;
   scrollToThread: (threadId: string, filePath: string) => void;
   scrollToLine: (filePath: string, line: number) => void;
-  /** Keep a file's header where the reader is looking, once collapsing it has shortened the page. */
-  anchorFileTop: (filePath: string) => void;
+  /** Whether the reader is inside the file rather than looking at its header. Ask before collapsing. */
+  isScrolledInsideFile: (filePath: string) => boolean;
+  scrollFileToTop: (filePath: string) => void;
 }
 
 const VIRTUALIZER_OVERSCAN = 3;
@@ -178,24 +179,25 @@ export function DiffView(props: DiffViewProps) {
         settleScrollToElement(`#file-${CSS.escape(encodeURIComponent(path))}`, 'start');
       }
     },
-    anchorFileTop: (filePath: string) => {
-      const selector = `#file-${CSS.escape(encodeURIComponent(filePath))}`;
-      const element = document.querySelector(selector);
+    isScrolledInsideFile: (filePath: string) => {
+      const element = document.querySelector(`#file-${CSS.escape(encodeURIComponent(filePath))}`);
       const container = scrollElementRef.current;
       if (!element || !container) {
-        return;
+        return false;
       }
-      if (!isScrolledPastFileTop(element.getBoundingClientRect().top, container.getBoundingClientRect().top)) {
-        return;
-      }
-
+      return isScrolledPastFileTop(
+        element.getBoundingClientRect().top,
+        container.getBoundingClientRect().top,
+      );
+    },
+    scrollFileToTop: (filePath: string) => {
       const index = diff.files.findIndex((f) => getFilePath(f) === filePath);
       if (index < 0) {
         return;
       }
       scrollTargetRef.current = filePath;
       virtualizer.scrollToIndex(index, { align: 'start' });
-      settleScrollToElement(selector, 'start');
+      settleScrollToElement(`#file-${CSS.escape(encodeURIComponent(filePath))}`, 'start');
     },
     scrollToLine: (filePath: string, line: number) => {
       const index = diff.files.findIndex((f) => getFilePath(f) === filePath);
