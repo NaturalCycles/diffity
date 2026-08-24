@@ -105,13 +105,11 @@ interface LiveStatus {
 
 async function fetchLiveStatus(port: number): Promise<LiveStatus | null> {
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/api/info`);
+    const res = await fetch(`http://127.0.0.1:${port}/api/live/status`);
     if (!res.ok) {
       return null;
     }
-    const info = (await res.json()) as {
-      live?: { enabled?: boolean; listening?: boolean };
-    };
+    const info = { live: (await res.json()) as { enabled?: boolean; listening?: boolean } };
     if (!info.live?.enabled) {
       return { available: false, reason: 'the server is not bound to loopback', mayChangeCode: false };
     }

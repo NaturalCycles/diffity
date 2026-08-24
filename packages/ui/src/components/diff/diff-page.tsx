@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useLoaderData } from 'react-router';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useDiff } from '../../hooks/use-diff';
 import { useInfo } from '../../hooks/use-info';
 import { useTheme } from '../../hooks/use-theme';
@@ -11,6 +11,7 @@ import { useTours } from '../../hooks/use-tours';
 import { useHideWhitespace } from '../../hooks/use-hide-whitespace';
 import { pickActiveTour, orderPathsByTour, stopsByPath } from '../../lib/tour-order';
 import { TOUR_NOT_STARTED, clampTourStep } from '../../lib/tour-navigation';
+import { liveStatusOptions } from '../../queries/live';
 import { tourMarks, marksByPath, focusRangesFromMarks, type TourFocusRange } from '../../lib/tour-marks';
 import { TourStepper } from './tour-stepper';
 import { useCommentActions } from '../../hooks/use-comment-actions';
@@ -83,8 +84,9 @@ export function DiffPage() {
 
   // Asking is a button on the comment box, not a mode: a mode you have to remember is a mode you
   // forget, and the first version of this answered three comments with silence because of it.
-  const canAsk = !!info?.live?.enabled && reviewsEnabled;
-  const askIsHeard = !!info?.live?.listening;
+  const { data: liveStatus } = useQuery(liveStatusOptions(refParam));
+  const canAsk = !!liveStatus?.enabled && reviewsEnabled;
+  const askIsHeard = !!liveStatus?.listening;
 
   const handleAskReply = useCallback(
     (threadId: string, body: string, author: Parameters<typeof commentActions.addReply>[2]) =>
@@ -490,7 +492,7 @@ export function DiffPage() {
         description={whitespaceNotice ?? info?.description ?? null}
         githubDetails={githubDetails}
         reviewInProgress={!!info?.review?.inProgress}
-        live={info?.live}
+        live={liveStatus}
         sessionId={sessionId}
         onGitHubPulled={() => queryClient.invalidateQueries({ queryKey: ['threads'] })}
       />

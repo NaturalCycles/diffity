@@ -183,9 +183,17 @@ describe('the live loop', () => {
   }
 
   it('reports that nobody is listening', async () => {
-    const info = JSON.parse((await req('/api/info')).text) as { live?: { listening: boolean } };
+    const status = JSON.parse((await req('/api/live/status')).text) as { listening: boolean };
 
-    expect(info.live?.listening).toBe(false);
+    expect(status.listening).toBe(false);
+  });
+
+  // On /api/info this changed the identity of the object half the page reads, so every arm and
+  // answer re-rendered the diff — which looked like the page reloading.
+  it('keeps the repo info free of it', async () => {
+    const info = JSON.parse((await req('/api/info')).text) as Record<string, unknown>;
+
+    expect(info.live).toBeUndefined();
   });
 
   it('has nothing to hand over when nothing was asked', async () => {
@@ -252,9 +260,9 @@ describe('the live loop', () => {
       });
     }
 
-    const info = JSON.parse((await req('/api/info')).text) as { live?: { waiting: number } };
+    const status = JSON.parse((await req('/api/live/status')).text) as { waiting: number };
 
-    expect(info.live?.waiting).toBe(2);
+    expect(status.waiting).toBe(2);
   });
 });
 

@@ -1,7 +1,7 @@
 import type { ParsedDiff } from '@diffity/parser';
 import type { CommentThread, CommentAuthor, CommentSide, Comment, CommentKind } from '../components/comments/types';
 
-async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
+export async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
   if (!res.ok) {
     const json = await res.json().catch(() => null);
@@ -78,12 +78,6 @@ export interface RepoInfo {
   github?: GitHubRemote | null;
   editor?: 'vscode' | null;
   review?: ReviewRun | null;
-  live?: {
-    /** False when the server is not on a loopback bind, where live mode is refused outright. */
-    enabled: boolean;
-    listening: boolean;
-    waiting: number;
-  };
 }
 
 export interface Commit {

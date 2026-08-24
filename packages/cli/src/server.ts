@@ -347,6 +347,22 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           return;
         }
 
+        // Its own endpoint rather than a field on /api/info. Whether an agent is listening changes
+        // as one arms and answers, and react-query keeps an unchanged object's identity — so
+        // carrying this on the info payload made every consumer of it re-render each time a
+        // listener came or went, which reads as the page reloading under you.
+        if (pathname === '/api/live/status') {
+          const sid = resolveSessionId(url.searchParams.get('session'));
+          sendJson(res, {
+            // A comment box that drives an agent is only as safe as the loopback bind, so live
+            // mode is not offered at all when the server is reachable from elsewhere.
+            enabled: isLoopbackBind(getBindHost()),
+            listening: liveListenerCount() > 0,
+            waiting: sid ? pendingLiveCount(sid) : 0,
+          });
+          return;
+        }
+
         if (pathname === '/api/live/claim' && req.method === 'POST') {
           if (!isLoopbackBind(getBindHost())) {
             sendError(res, 403, 'Live mode is only available on a loopback bind');
@@ -542,13 +558,6 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             capabilities,
             sessionId,
             review: sessionId ? getReviewRun(sessionId) : null,
-            live: {
-              // A comment box that drives an agent is only as safe as the loopback bind, so live
-              // mode is not offered at all when the server is reachable from elsewhere.
-              enabled: isLoopbackBind(getBindHost()),
-              listening: liveListenerCount() > 0,
-              waiting: sessionId ? pendingLiveCount(sessionId) : 0,
-            },
             github: githubRemote,
             editor: editorAvailable,
           });
