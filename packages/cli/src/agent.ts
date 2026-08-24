@@ -303,6 +303,7 @@ Examples:
       }
 
       const wait = Math.max(0, Number(opts.timeout) || 0);
+      const startedAt = Date.now();
       let payload: { request: LiveRequest | null };
       try {
         const res = await fetch(`http://127.0.0.1:${instance.port}/api/live/claim?wait=${wait}`, {
@@ -315,7 +316,17 @@ Examples:
         }
         payload = (await res.json()) as { request: LiveRequest | null };
       } catch (err) {
-        console.error(pc.red(`Could not reach diffity on port ${instance.port}: ${err}`));
+        // `fetch failed` on its own says nothing about why a held connection went away, and a
+        // listener dying early is the failure that matters most here. The cause and how long it
+        // lasted are the two things worth having next time.
+        const seconds = Math.round((Date.now() - startedAt) / 1000);
+        const cause = (err as { cause?: unknown }).cause;
+        console.error(
+          pc.red(
+            `Waiting on port ${instance.port} ended after ${seconds}s of ${wait}s: ${err}`
+              + (cause ? `\n  cause: ${cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause)}` : ''),
+          ),
+        );
         process.exitCode = 1;
         return;
       }
