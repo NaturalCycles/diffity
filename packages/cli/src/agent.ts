@@ -93,6 +93,38 @@ function formatThreadLine(thread: Thread): string {
 /** A `diffity agent await` that found nothing to do, told apart from one that failed. */
 const NOTHING_ASKED_EXIT_CODE = 3;
 
+interface LiveStatus {
+  available: boolean;
+  reason: string;
+  /**
+   * Reviewing is not editing. A pull request somebody else wrote may be asked about, never rewritten
+   * — so this is derived from who wrote it rather than from a setting somebody can leave on.
+   */
+  mayChangeCode: boolean;
+}
+
+async function fetchLiveStatus(port: number): Promise<LiveStatus | null> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/info`);
+    if (!res.ok) {
+      return null;
+    }
+    const info = (await res.json()) as {
+      live?: { enabled?: boolean; listening?: boolean };
+    };
+    if (!info.live?.enabled) {
+      return { available: false, reason: 'the server is not bound to loopback', mayChangeCode: false };
+    }
+
+    const details = await fetch(`http://127.0.0.1:${port}/api/github/details`);
+    const pr = details.ok ? ((await details.json()) as { viewerDidAuthor?: boolean } | null) : null;
+    // No pull request means this is your own working tree, which is the case changes exist for.
+    return { available: true, reason: '', mayChangeCode: pr ? pr.viewerDidAuthor === true : true };
+  } catch {
+    return null;
+  }
+}
+
 function findRunningInstance(): RegistryEntry | null {
   const repoRoot = getRepoRoot();
   if (!repoRoot) {
@@ -293,7 +325,45 @@ Examples:
         return;
       }
 
+      // stdout is the request, so a script can parse it. The directive goes to stderr, because the
+      // turn this wakes up may be a long way from whatever armed the loop.
+      console.error(
+        pc.cyan(
+          'A request came back from the review page. Answer it in the thread, amend the finding it '
+            + 'is about, or make the change — then re-arm with `agent await`. The diffity-live skill '
+            + 'has the detail.',
+        ),
+      );
       console.log(JSON.stringify(payload.request, null, 2));
+    });
+
+  agent
+    .command('live-status')
+    .description('Whether the review page can reach an agent, and what it is allowed to ask for')
+    .option('--json', 'Output as JSON')
+    .action(async (opts: { json?: boolean }) => {
+      requireSession();
+      const instance = findRunningInstance();
+      const status = instance ? await fetchLiveStatus(instance.port) : null;
+
+      if (opts.json) {
+        console.log(JSON.stringify(status ?? { available: false, reason: 'no diffity is running' }));
+        return;
+      }
+
+      if (!status) {
+        console.log(pc.yellow('No diffity is running for this repository'));
+        return;
+      }
+      if (!status.available) {
+        console.log(pc.yellow(`Live mode is not available: ${status.reason}`));
+        return;
+      }
+      console.log(
+        pc.green(
+          `Live mode is available. ${status.mayChangeCode ? 'Changes are allowed — this is your own work.' : 'Answers and amendments only — this pull request is somebody else\'s.'}`,
+        ),
+      );
     });
 
   agent

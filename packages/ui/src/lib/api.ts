@@ -78,6 +78,12 @@ export interface RepoInfo {
   github?: GitHubRemote | null;
   editor?: 'vscode' | null;
   review?: ReviewRun | null;
+  live?: {
+    /** False when the server is not on a loopback bind, where live mode is refused outright. */
+    enabled: boolean;
+    listening: boolean;
+    waiting: number;
+  };
 }
 
 export interface Commit {
@@ -168,11 +174,28 @@ export function createThread(data: {
   });
 }
 
-export function replyToThread(threadId: string, body: string, author: CommentAuthor): Promise<Comment> {
+export interface ReplyOptions {
+  /** An aside stays on this machine. Only an aside can ask the agent for anything. */
+  aside?: boolean;
+  /** Ask the agent to answer, amend or act on it. */
+  live?: boolean;
+}
+
+export function replyToThread(
+  threadId: string,
+  body: string,
+  author: CommentAuthor,
+  options: ReplyOptions = {},
+): Promise<Comment> {
   return apiFetch(`/api/threads/${threadId}/reply`, {
     method: 'POST',
     headers: JSON_HEADERS,
-    body: JSON.stringify({ body, author }),
+    body: JSON.stringify({
+      body,
+      author,
+      kind: options.aside ? 'aside' : 'review',
+      live: options.live === true,
+    }),
   });
 }
 

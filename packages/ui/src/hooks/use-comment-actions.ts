@@ -19,11 +19,11 @@ export function useCommentActions(sessionId: string | null, enabled: boolean) {
     });
   }, [enabled, sessionId, invalidateThreads]);
 
-  const addReply = useCallback((threadId: string, body: string, author: CommentAuthor) => {
+  const addReply = useCallback((threadId: string, body: string, author: CommentAuthor, options?: api.ReplyOptions) => {
     if (!enabled) {
       return;
     }
-    api.replyToThread(threadId, body, author).then(() => {
+    api.replyToThread(threadId, body, author, options).then(() => {
       invalidateThreads();
     });
   }, [enabled, invalidateThreads]);

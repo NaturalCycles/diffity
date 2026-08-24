@@ -11,6 +11,7 @@ import { useTours } from '../../hooks/use-tours';
 import { useHideWhitespace } from '../../hooks/use-hide-whitespace';
 import { pickActiveTour, orderPathsByTour, stopsByPath } from '../../lib/tour-order';
 import { TOUR_NOT_STARTED, clampTourStep } from '../../lib/tour-navigation';
+import { readLiveMode, writeLiveMode } from '../../lib/live-mode';
 import { tourMarks, marksByPath, focusRangesFromMarks, type TourFocusRange } from '../../lib/tour-marks';
 import { TourStepper } from './tour-stepper';
 import { useCommentActions } from '../../hooks/use-comment-actions';
@@ -80,6 +81,35 @@ export function DiffPage() {
   const { data: serverThreads, isFetched: threadsFetched } = useReviewThreads(reviewsEnabled ? sessionId : null);
   const threads = reviewsEnabled && serverThreads ? serverThreads : [];
   const commentActions = useCommentActions(sessionId, reviewsEnabled);
+
+  const [liveMode, setLiveMode] = useState(false);
+  // Read once the page knows which checkout and branch it is showing, since that is what the
+  // setting belongs to.
+  useEffect(() => {
+    if (!info?.root || !info?.branch || typeof window === 'undefined') {
+      return;
+    }
+    setLiveMode(readLiveMode(window.localStorage, info.root, info.branch));
+  }, [info?.root, info?.branch]);
+
+  const handleLiveModeChange = useCallback((on: boolean) => {
+    setLiveMode(on);
+    if (info?.root && info?.branch && typeof window !== 'undefined') {
+      writeLiveMode(window.localStorage, info.root, info.branch, on);
+    }
+  }, [info?.root, info?.branch]);
+
+  // With live on, a reply is a question for the agent rather than a note for whoever wrote the
+  // code — so it is an aside, and it asks. Findings you start are still review comments, which is
+  // why this wraps the reply and nothing else.
+  const liveCommentActions = useMemo(
+    () => ({
+      ...commentActions,
+      addReply: (threadId: string, body: string, author: Parameters<typeof commentActions.addReply>[2]) =>
+        commentActions.addReply(threadId, body, author, liveMode ? { aside: true, live: true } : undefined),
+    }),
+    [commentActions, liveMode],
+  );
   const commentCountsByFile = useMemo(() => buildThreadCountsByFile(threads), [threads]);
 
   const { data: tours } = useTours(reviewsEnabled ? sessionId : null);
@@ -467,6 +497,9 @@ export function DiffPage() {
         description={whitespaceNotice ?? info?.description ?? null}
         githubDetails={githubDetails}
         reviewInProgress={!!info?.review?.inProgress}
+        live={info?.live}
+        liveMode={liveMode}
+        onLiveModeChange={handleLiveModeChange}
         sessionId={sessionId}
         onGitHubPulled={() => queryClient.invalidateQueries({ queryKey: ['threads'] })}
       />
@@ -519,7 +552,7 @@ export function DiffPage() {
             }}
             threads={threads}
             commentsEnabled={reviewsEnabled}
-            commentActions={commentActions}
+            commentActions={liveCommentActions}
             onAddThread={handleAddThread}
             pendingSelection={pendingSelection}
             onPendingSelectionChange={setPendingSelection}
