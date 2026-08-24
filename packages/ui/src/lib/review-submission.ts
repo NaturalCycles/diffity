@@ -32,8 +32,6 @@ export function isSubmittable(thread: CommentThread): boolean {
   return (
     !isThreadResolved(thread)
     && thread.filePath !== GENERAL_THREAD_FILE_PATH
-    // Asking about a line nobody has commented on starts a thread with no finding in it. There is
-    // nothing to post, and threadToPayload would read a first review comment that is not there.
     && thread.comments.some(isReviewComment)
   );
 }
