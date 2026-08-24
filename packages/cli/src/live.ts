@@ -68,10 +68,15 @@ export function claimNextLiveRequest(sessionId: string): LiveRequest | null {
   );
 }
 
-export function answerLiveRequest(commentId: string): void {
-  getDb()
-    .prepare("UPDATE comments SET live_answered_at = datetime('now') WHERE id = ?")
-    .run(commentId);
+/**
+ * Takes a full id or the 8-char prefix the rest of the CLI takes, and says whether it matched. A
+ * silent miss would leave the page saying an agent is working on something it has already answered.
+ */
+export function answerLiveRequest(commentIdOrPrefix: string): boolean {
+  const result = getDb()
+    .prepare("UPDATE comments SET live_answered_at = datetime('now') WHERE id = ? OR id LIKE ?")
+    .run(commentIdOrPrefix, `${commentIdOrPrefix}%`);
+  return Number(result.changes ?? 0) > 0;
 }
 
 /** How many requests are waiting for somebody to pick them up. */

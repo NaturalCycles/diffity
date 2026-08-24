@@ -227,3 +227,27 @@ describe('asking about a line nobody has commented on', () => {
     expect(claimNextLiveRequest(s.id)?.findingBody).toBe('P2: the finding');
   });
 });
+
+describe('closing a request', () => {
+  // Every other command takes an 8-char prefix, so one that silently ignores one is a trap: the
+  // agent reports it answered, and the page goes on saying an agent is working on it.
+  it('accepts the short id the rest of the CLI accepts', async () => {
+    const { addReply, getThread } = await import('../src/threads.js');
+    const { requestLive, claimNextLiveRequest, answerLiveRequest } = await import('../src/live.js');
+    await drainRequests();
+    const s = await session();
+    const thread = await finding();
+    const asked = addReply(thread.id, 'answer me by prefix', you, 'aside');
+    requestLive(asked.id);
+    claimNextLiveRequest(s.id);
+
+    expect(answerLiveRequest(asked.id.slice(0, 8))).toBe(true);
+    expect(getThread(thread.id)?.comments[1].liveAnsweredAt).toBeTruthy();
+  });
+
+  it('says so when it matched nothing, rather than reporting success', async () => {
+    const { answerLiveRequest } = await import('../src/live.js');
+
+    expect(answerLiveRequest('no-such-comment')).toBe(false);
+  });
+});

@@ -281,8 +281,12 @@ Examples:
       const session = requireSession();
       const thread = resolveThreadId(id, session.id);
       addReply(thread.id, opts.body, { name: 'Agent', type: 'agent' }, opts.aside ? 'aside' : 'review');
-      if (opts.answers) {
-        answerLiveRequest(opts.answers);
+      if (opts.answers && !answerLiveRequest(opts.answers)) {
+        console.error(
+          pc.yellow(
+            `No request matched ${opts.answers}, so the page still says an agent is working on it.`,
+          ),
+        );
       }
       console.log(pc.green(`Replied to thread ${thread.id.slice(0, 8)}`));
     });
