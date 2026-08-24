@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { DiffFile, DiffHunk, DiffLine } from '@diffity/parser';
 import { FileBlock } from '../src/components/diff/file-block';
 import type { CommentActions } from '../src/hooks/use-comment-actions';
+import type { TourFocusRange } from '../src/lib/tour-marks';
 
 function line(type: DiffLine['type'], content: string, num: number): DiffLine {
   return {
@@ -40,7 +41,7 @@ function file(path: string, hunks: DiffHunk[]): DiffFile {
 // The component takes a bag of callbacks it never invokes during a plain render.
 const commentActions = {} as CommentActions;
 
-function renderFileBlock(target: DiffFile, focusRanges?: { startLine: number; endLine: number }[]) {
+function renderFileBlock(target: DiffFile, focusRanges?: TourFocusRange[]) {
   // FileBlock expands context through a query, so it needs a client even when nothing fetches.
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
@@ -104,17 +105,17 @@ describe('FileBlock attention', () => {
   });
 
   it('highlights a hunk the walkthrough points at, in preference to dimming it', () => {
-    renderFileBlock(file('src/a.ts', [importsHunk]), [{ startLine: 1, endLine: 1 }]);
+    renderFileBlock(file('src/a.ts', [importsHunk]), [{ startLine: 1, endLine: 1, stepIndex: 0 }]);
 
     expect(tbodyClasses().some(c => c.includes('bg-accent/5'))).toBe(true);
     expect(tbodyClasses().some(c => c.includes('opacity-45'))).toBe(false);
     expect(document.querySelector('tbody[title]')?.getAttribute('title')).toBe(
-      'The walkthrough points here',
+      'Walkthrough stop 1',
     );
   });
 
   it('highlights only the hunk in range', () => {
-    renderFileBlock(file('src/a.ts', [importsHunk, workHunk]), [{ startLine: 40, endLine: 40 }]);
+    renderFileBlock(file('src/a.ts', [importsHunk, workHunk]), [{ startLine: 40, endLine: 40, stepIndex: 0 }]);
 
     const focused = tbodyClasses().filter(c => c.includes('bg-accent/5'));
     const dimmed = tbodyClasses().filter(c => c.includes('opacity-45'));

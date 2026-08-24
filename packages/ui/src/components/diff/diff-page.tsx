@@ -10,6 +10,8 @@ import { useReviewThreads } from '../../hooks/use-review-threads';
 import { useTours } from '../../hooks/use-tours';
 import { useHideWhitespace } from '../../hooks/use-hide-whitespace';
 import { pickActiveTour, orderPathsByTour, stopsByPath } from '../../lib/tour-order';
+import { TOUR_NOT_STARTED } from '../../lib/tour-navigation';
+import { tourMarks, marksByPath, focusRangesFromMarks, type TourFocusRange } from '../../lib/tour-marks';
 import { TourStepper } from './tour-stepper';
 import { useCommentActions } from '../../hooks/use-comment-actions';
 import { Toolbar } from '../layout/toolbar';
@@ -83,7 +85,7 @@ export function DiffPage() {
   const { data: tours } = useTours(reviewsEnabled ? sessionId : null);
   const activeTour = useMemo(() => pickActiveTour(tours), [tours]);
   const [reviewOrderEnabled, setReviewOrderEnabled] = useState(true);
-  const [tourStepIndex, setTourStepIndex] = useState(0);
+  const [tourStepIndex, setTourStepIndex] = useState(TOUR_NOT_STARTED);
 
   const diffPaths = useMemo(() => (diff ? diff.files.map(file => getFilePath(file)) : []), [diff]);
   const tourStops = useMemo(() => stopsByPath(activeTour, diffPaths), [activeTour, diffPaths]);
@@ -109,15 +111,15 @@ export function DiffPage() {
     return `${base} · whitespace hidden (${parts.join(', ')} suppressed)`;
   }, [hideWhitespace, info?.description, diff]);
 
+  const tourMarksByFile = useMemo(() => marksByPath(tourMarks(activeTour)), [activeTour]);
+
   const focusRangesByFile = useMemo(() => {
-    const ranges = new Map<string, { startLine: number; endLine: number }[]>();
-    for (const step of activeTour?.steps ?? []) {
-      const existing = ranges.get(step.filePath) ?? [];
-      existing.push({ startLine: step.startLine, endLine: step.endLine });
-      ranges.set(step.filePath, existing);
+    const ranges = new Map<string, TourFocusRange[]>();
+    for (const [path, marks] of tourMarksByFile) {
+      ranges.set(path, focusRangesFromMarks(marks));
     }
     return ranges;
-  }, [activeTour]);
+  }, [tourMarksByFile]);
 
   const orderedDiff = useMemo(() => {
     if (!diff || !activeTour || !reviewOrderEnabled || activeTour.steps.length === 0) {
@@ -266,8 +268,18 @@ export function DiffPage() {
       return;
     }
     const clamped = Math.max(0, Math.min(steps.length - 1, index));
+    const step = steps[clamped];
     setTourStepIndex(clamped);
-    diffViewRef.current?.scrollToFile(steps[clamped].filePath);
+    setActiveFile(step.filePath);
+    setCollapsedFiles((prev) => {
+      if (!prev.has(step.filePath)) {
+        return prev;
+      }
+      const next = new Set(prev);
+      next.delete(step.filePath);
+      return next;
+    });
+    diffViewRef.current?.scrollToLine(step.filePath, step.startLine);
   }, [activeTour]);
 
   const navigateHunk = useCallback((direction: number) => {
@@ -498,6 +510,9 @@ export function DiffPage() {
             pendingSelection={pendingSelection}
             onPendingSelectionChange={setPendingSelection}
             focusRangesByFile={focusRangesByFile}
+            tourMarksByFile={tourMarksByFile}
+            activeStepIndex={tourStepIndex}
+            onTourMarkClick={handleTourStepChange}
           />
         ) : null}
       </div>

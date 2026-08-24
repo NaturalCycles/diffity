@@ -3,6 +3,8 @@ import type { Tour } from './api';
 export interface TourFileStop {
   /** 1-based position of the file in the reading order. */
   position: number;
+  /** How many stops the walkthrough makes in this file. */
+  count: number;
   annotation: string;
   body: string;
 }
@@ -54,11 +56,17 @@ export function stopsByPath(tour: Tour | null, availablePaths: string[]): Map<st
   const steps = [...tour.steps].sort((a, b) => a.sortOrder - b.sortOrder);
 
   for (const step of steps) {
-    if (!available.has(step.filePath) || stops.has(step.filePath)) {
+    if (!available.has(step.filePath)) {
+      continue;
+    }
+    const existing = stops.get(step.filePath);
+    if (existing) {
+      existing.count += 1;
       continue;
     }
     stops.set(step.filePath, {
       position: stops.size + 1,
+      count: 1,
       annotation: step.annotation,
       body: step.body,
     });

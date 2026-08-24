@@ -16,6 +16,14 @@ export function useThreadNavigation(threads: CommentThread[], onScrollToThread: 
     onScrollToThread(thread.id, thread.filePath);
   }, [unresolvedThreads, onScrollToThread]);
 
+  const goToFirst = useCallback(() => {
+    if (count === 0) {
+      return;
+    }
+    setCurrentIndex(0);
+    scrollToThread(0);
+  }, [count, scrollToThread]);
+
   const goToPrevious = useCallback(() => {
     if (count === 0) {
       return;
@@ -37,6 +45,7 @@ export function useThreadNavigation(threads: CommentThread[], onScrollToThread: 
   return {
     currentIndex,
     count,
+    goToFirst,
     goToPrevious,
     goToNext,
   };

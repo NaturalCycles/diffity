@@ -6,7 +6,9 @@ import type { SyntaxToken } from '../../lib/syntax-token';
 import type { HighlightedTokens } from '../../hooks/use-highlighter';
 import type { CommentSide, LineSelection } from '../comments/types';
 import { type ViewMode, getFilePath, buildChangeGroupPatch, extractLinesFromDiff, extractLinesFromExpandedLines } from '../../lib/diff-utils';
-import { classifyHunk, hunkIntersectsRanges, MECHANICAL_LABELS } from '../../lib/hunk-attention';
+import { classifyHunk, rangesIntersectingHunk, MECHANICAL_LABELS } from '../../lib/hunk-attention';
+import { stopTitle, type TourFocusRange, type TourMark, type TourStopRef } from '../../lib/tour-marks';
+import { TOUR_NOT_STARTED } from '../../lib/tour-navigation';
 import { revertHunk as apiRevertHunk } from '../../lib/api';
 import { ConfirmDialog } from '../ui/confirm-dialog';
 import { computeGaps, createContextLines, getExpandRange, type ExpandableGap } from '../../lib/context-expansion';
@@ -60,7 +62,12 @@ interface FileBlockProps {
   highlighted?: boolean;
   onHighlightEnd?: () => void;
   /** Line ranges the walkthrough asked the reader to look at, on the new side. */
-  focusRanges?: { startLine: number; endLine: number }[];
+  focusRanges?: TourFocusRange[];
+  /** The walkthrough's stops in this file, for the gutter lamps. */
+  tourMarks?: TourMark[];
+  /** Which stop the header is showing, so the others are not dressed up as current. */
+  activeStepIndex?: number;
+  onTourMarkClick?: (stepIndex: number) => void;
 }
 
 interface GapExpansion {
@@ -73,6 +80,7 @@ interface GapExpansion {
 export function FileBlock(props: FileBlockProps) {
   const {
     file, viewMode, collapsed, onToggleCollapse, reviewed, onReviewedChange, highlightLine, baseRef, canRevert, onRevert, focusRanges,
+    tourMarks, activeStepIndex, onTourMarkClick,
     threads: allThreads, commentsEnabled, commentActions, onAddThread: rawAddThread, pendingSelection, onPendingSelectionChange,
     highlighted, onHighlightEnd,
   } = props;
@@ -277,9 +285,21 @@ export function FileBlock(props: FileBlockProps) {
     [file],
   );
 
-  const isHunkFocused = useCallback(
-    (hunk: DiffHunk) => hunkIntersectsRanges(hunk, focusRanges),
-    [focusRanges],
+  const annotationByStep = useMemo(() => {
+    const byStep = new Map<number, string>();
+    for (const mark of tourMarks ?? []) {
+      byStep.set(mark.stepIndex, mark.annotation);
+    }
+    return byStep;
+  }, [tourMarks]);
+
+  const stopsInHunk = useCallback(
+    (hunk: DiffHunk): TourStopRef[] =>
+      rangesIntersectingHunk(hunk, focusRanges).map(range => ({
+        stepIndex: range.stepIndex,
+        annotation: annotationByStep.get(range.stepIndex),
+      })),
+    [focusRanges, annotationByStep],
   );
 
   const gaps = useMemo(() => {
@@ -522,14 +542,17 @@ export function FileBlock(props: FileBlockProps) {
               )}
               {file.hunks.map((hunk, i) => {
                 const mechanical = hunkAttention[i];
-                const focused = isHunkFocused(hunk);
-                const attentionClass = focused
-                  ? 'bg-accent/5'
-                  : mechanical
-                    ? 'opacity-45 hover:opacity-100 transition-opacity'
-                    : '';
-                const attentionTitle = focused
-                  ? 'The walkthrough points here'
+                const stops = stopsInHunk(hunk);
+                const isCurrentStop = stops.some(stop => stop.stepIndex === activeStepIndex);
+                const attentionClass = isCurrentStop
+                  ? 'bg-accent/15'
+                  : stops.length > 0
+                    ? 'bg-accent/5'
+                    : mechanical
+                      ? 'opacity-45 hover:opacity-100 transition-opacity'
+                      : '';
+                const attentionTitle = stops.length > 0
+                  ? stopTitle(stops, activeStepIndex ?? TOUR_NOT_STARTED)
                   : mechanical
                     ? `Dimmed: ${MECHANICAL_LABELS[mechanical]}`
                     : undefined;
@@ -543,6 +566,9 @@ export function FileBlock(props: FileBlockProps) {
                     hunk={hunk}
                     attentionClass={attentionClass}
                     attentionTitle={attentionTitle}
+                    tourMarks={tourMarks}
+                    activeStepIndex={activeStepIndex}
+                    onTourMarkClick={onTourMarkClick}
                     viewMode={viewMode}
                     syntaxMap={syntaxMap}
                     expandControls={getExpandControlsForHunk(i)}

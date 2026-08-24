@@ -4,6 +4,7 @@ import type { ViewMode } from '../../lib/diff-utils';
 import type { SyntaxToken } from '../../lib/syntax-token';
 import type { ExpandControls } from './hunk-header';
 import type { CommentThread as CommentThreadType, CommentAuthor, CommentSide, LineSelection } from '../comments/types';
+import type { TourMark } from '../../lib/tour-marks';
 import { HunkBlock } from './hunk-block';
 import { HunkBlockSplit } from './hunk-block-split';
 import { buildExpansionSyntaxMap, renderExpansionRows } from './render-expansion-rows';
@@ -44,6 +45,9 @@ interface HunkWithGapProps {
   filePath?: string;
   onRevertChange?: (hunk: DiffHunk, startIndex: number, endIndex: number) => void;
   getOriginalCode?: (side: CommentSide, startLine: number, endLine: number) => string;
+  tourMarks?: TourMark[];
+  activeStepIndex?: number;
+  onTourMarkClick?: (stepIndex: number) => void;
 }
 
 export function HunkWithGap(props: HunkWithGapProps) {
@@ -54,6 +58,7 @@ export function HunkWithGap(props: HunkWithGapProps) {
     onLineMouseDown, onLineMouseEnter, onCommentClick,
     onAddThread, onReply, onResolve, onUnresolve, onEditComment, onDeleteComment, onDeleteThread,
     onCancelPending, filePath, onRevertChange, getOriginalCode,
+    tourMarks, activeStepIndex, onTourMarkClick,
   } = props;
 
   const HunkComponent = viewMode === 'split' ? HunkBlockSplit : HunkBlock;
@@ -72,6 +77,7 @@ export function HunkWithGap(props: HunkWithGapProps) {
     threads, pendingSelection, currentAuthor,
     onAddThread, onReply, onResolve, onUnresolve, onEditComment, onDeleteComment, onDeleteThread,
     onCancelPending, filePath,
+    tourMarks, activeStepIndex, onTourMarkClick,
   };
 
   return (
@@ -114,6 +120,9 @@ export function HunkWithGap(props: HunkWithGapProps) {
         filePath={filePath}
         onRevertChange={onRevertChange}
         getOriginalCode={getOriginalCode}
+        tourMarks={tourMarks}
+        activeStepIndex={activeStepIndex}
+        onTourMarkClick={onTourMarkClick}
       />
     </>
   );

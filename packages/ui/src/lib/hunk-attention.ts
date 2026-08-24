@@ -135,12 +135,19 @@ export interface FocusRange {
  * which is where a walkthrough step's lines are recorded.
  */
 export function hunkIntersectsRanges(hunk: DiffHunk, ranges: FocusRange[] | undefined): boolean {
+  return rangesIntersectingHunk(hunk, ranges).length > 0;
+}
+
+export function rangesIntersectingHunk<T extends FocusRange>(
+  hunk: DiffHunk,
+  ranges: T[] | undefined,
+): T[] {
   if (!ranges || ranges.length === 0) {
-    return false;
+    return [];
   }
 
   const from = hunk.newStart;
   const to = hunk.newStart + hunk.newCount - 1;
 
-  return ranges.some(range => range.startLine <= to && range.endLine >= from);
+  return ranges.filter(range => range.startLine <= to && range.endLine >= from);
 }
