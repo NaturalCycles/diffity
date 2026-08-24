@@ -295,3 +295,20 @@ describe('two sessions in one server', () => {
     expect(await parked).toBeNull();
   });
 });
+
+describe('what the server says it wrote', () => {
+  // Handing back a timestamp made up by the caller meant a client comparing it with a later GET
+  // was comparing two unrelated strings: the column is datetime('now'), not an ISO string.
+  it('reports the stamp it actually wrote', async () => {
+    const { addReply, getThread } = await import('../src/threads.js');
+    const { requestLive } = await import('../src/live.js');
+    const thread = await finding();
+    const asked = addReply(thread.id, 'what does the stamp look like?', you, 'aside');
+
+    const stamp = requestLive(asked.id);
+    const stored = getThread(thread.id)?.comments[1].liveRequestedAt;
+
+    expect(stamp.requestedAt).toBe(stored);
+    expect(stamp.sessionId).toBeTruthy();
+  });
+});

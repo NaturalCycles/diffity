@@ -22,19 +22,25 @@ export interface LiveRequest {
   findingBody: string | null;
 }
 
-/** Returns the session the request belongs to, which is who should be woken for it. */
-export function requestLive(commentId: string): string | null {
+export interface LiveRequestStamp {
+  /** Who should be woken for it. */
+  sessionId: string | null;
+  /** The stamp that was written, read back rather than guessed at by the caller. */
+  requestedAt: string | null;
+}
+
+export function requestLive(commentId: string): LiveRequestStamp {
   getDb()
     .prepare("UPDATE comments SET live_requested_at = datetime('now') WHERE id = ?")
     .run(commentId);
 
-  return (
-    queryOne<{ session_id: string }>(
-      `SELECT t.session_id FROM comments c JOIN comment_threads t ON t.id = c.thread_id
-        WHERE c.id = ?`,
-      commentId,
-    )?.session_id ?? null
+  const row = queryOne<{ session_id: string; live_requested_at: string | null }>(
+    `SELECT t.session_id, c.live_requested_at FROM comments c JOIN comment_threads t ON t.id = c.thread_id
+      WHERE c.id = ?`,
+    commentId,
   );
+
+  return { sessionId: row?.session_id ?? null, requestedAt: row?.live_requested_at ?? null };
 }
 
 /**

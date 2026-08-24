@@ -63,7 +63,9 @@ export function handleReviewRoute(req: IncomingMessage, res: ServerResponse, pat
         threadKind,
       );
       if (live === true && threadKind === 'aside') {
-        notifyLiveListeners(requestLive(thread.comments[0].id));
+        const stamp = requestLive(thread.comments[0].id);
+        thread.comments[0].liveRequestedAt = stamp.requestedAt;
+        notifyLiveListeners(stamp.sessionId);
       }
       sendJson(res, thread);
     });
@@ -87,10 +89,13 @@ export function handleReviewRoute(req: IncomingMessage, res: ServerResponse, pat
       );
       // Only an aside can ask the agent for something: a review comment is addressed to the pull
       // request's author, and it is going to the forge rather than to a listener here.
+      let requestedAt: string | null = null;
       if (live === true && commentKind === 'aside') {
-        notifyLiveListeners(requestLive(comment.id));
+        const stamp = requestLive(comment.id);
+        requestedAt = stamp.requestedAt;
+        notifyLiveListeners(stamp.sessionId);
       }
-      sendJson(res, { ...comment, liveRequestedAt: live === true && commentKind === 'aside' ? new Date().toISOString() : null });
+      sendJson(res, { ...comment, liveRequestedAt: requestedAt });
     });
     return true;
   }
