@@ -1,3 +1,5 @@
+import type { TourMark } from '../../lib/tour-marks';
+
 export const GENERAL_THREAD_FILE_PATH = '__general__';
 
 export interface CommentAuthor {
@@ -63,4 +65,7 @@ export interface LineRenderProps {
   onDeleteComment?: (threadId: string, commentId: string) => void;
   onDeleteThread?: (threadId: string) => void;
   getOriginalCode?: (side: CommentSide, startLine: number, endLine: number) => string;
+  tourMarks?: TourMark[];
+  activeStepIndex?: number;
+  onTourMarkClick?: (stepIndex: number) => void;
 }

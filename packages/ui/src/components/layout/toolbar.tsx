@@ -19,6 +19,7 @@ import type { CommentThread } from '../comments/types';
 import { isThreadResolved } from '../comments/types';
 
 interface ToolbarProps {
+  reviewInProgress?: boolean;
   viewMode: ViewMode;
   onViewModeChange: (mode: ViewMode) => void;
   hideWhitespace: boolean;

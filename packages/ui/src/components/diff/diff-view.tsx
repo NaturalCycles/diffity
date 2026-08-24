@@ -5,6 +5,8 @@ import { FileBlock, LARGE_DIFF_LINE_THRESHOLD } from './file-block';
 import { GeneralComments } from '../comments/general-comments';
 import { useHighlighter } from '../../hooks/use-highlighter';
 import { type ViewMode, getFilePath } from '../../lib/diff-utils';
+import type { TourFocusRange, TourMark } from '../../lib/tour-marks';
+import { isScrolledPastFileTop } from '../../lib/collapse-anchor';
 import type { CommentThread, LineSelection } from '../comments/types';
 import type { CommentActions } from '../../hooks/use-comment-actions';
 
@@ -18,6 +20,10 @@ function flashThreadElement(element: Element) {
 export interface DiffViewHandle {
   scrollToFile: (path: string) => void;
   scrollToThread: (threadId: string, filePath: string) => void;
+  scrollToLine: (filePath: string, line: number) => void;
+  /** Whether the reader is inside the file rather than looking at its header. Ask before collapsing. */
+  isScrolledInsideFile: (filePath: string) => boolean;
+  scrollFileToTop: (filePath: string) => void;
 }
 
 const VIRTUALIZER_OVERSCAN = 3;
@@ -48,7 +54,10 @@ interface DiffViewProps {
   pendingSelection: LineSelection | null;
   onPendingSelectionChange: (selection: LineSelection | null) => void;
   /** Per file, the line ranges the walkthrough points at. */
-  focusRangesByFile?: Map<string, { startLine: number; endLine: number }[]>;
+  focusRangesByFile?: Map<string, TourFocusRange[]>;
+  tourMarksByFile?: Map<string, TourMark[]>;
+  activeStepIndex?: number;
+  onTourMarkClick?: (stepIndex: number) => void;
 }
 
 function estimateFileHeight(file: { hunks: { lines: { length: number } }[]; isBinary: boolean }, collapsed: boolean): number {
@@ -76,6 +85,9 @@ export function DiffView(props: DiffViewProps) {
     threads, commentsEnabled, commentActions, onAddThread,
     pendingSelection, onPendingSelectionChange,
     focusRangesByFile,
+    tourMarksByFile,
+    activeStepIndex,
+    onTourMarkClick,
   } = props;
   const { highlight } = useHighlighter();
   const scrollElementRef = useRef<HTMLElement>(null);
@@ -166,6 +178,45 @@ export function DiffView(props: DiffViewProps) {
         virtualizer.scrollToIndex(index, { align: 'start' });
         settleScrollToElement(`#file-${CSS.escape(encodeURIComponent(path))}`, 'start');
       }
+    },
+    isScrolledInsideFile: (filePath: string) => {
+      const element = document.querySelector(`#file-${CSS.escape(encodeURIComponent(filePath))}`);
+      const container = scrollElementRef.current;
+      if (!element || !container) {
+        return false;
+      }
+      return isScrolledPastFileTop(
+        element.getBoundingClientRect().top,
+        container.getBoundingClientRect().top,
+      );
+    },
+    scrollFileToTop: (filePath: string) => {
+      const index = diff.files.findIndex((f) => getFilePath(f) === filePath);
+      if (index < 0) {
+        return;
+      }
+      scrollTargetRef.current = filePath;
+      virtualizer.scrollToIndex(index, { align: 'start' });
+      settleScrollToElement(`#file-${CSS.escape(encodeURIComponent(filePath))}`, 'start');
+    },
+    scrollToLine: (filePath: string, line: number) => {
+      const index = diff.files.findIndex((f) => getFilePath(f) === filePath);
+      if (index < 0) {
+        return;
+      }
+      scrollTargetRef.current = filePath;
+      setHighlightedFile(filePath);
+      virtualizer.scrollToIndex(index, { align: 'start' });
+      const fileSelector = `#file-${CSS.escape(encodeURIComponent(filePath))}`;
+      settleScrollToElement(`${fileSelector} [data-new-line="${line}"]`, 'start', () => {
+        // 'start' puts the row at the very top of the container, which is where the file's own
+        // sticky header sits — so the line jumped to would be the one covered up.
+        const container = scrollElementRef.current;
+        const header = document.querySelector(`${fileSelector} [data-file-header]`);
+        if (container && header instanceof HTMLElement) {
+          container.scrollTop -= header.offsetHeight;
+        }
+      });
     },
     scrollToThread: (threadId: string, filePath: string) => {
       const element = document.querySelector(`[data-thread-id="${threadId}"]`);
@@ -281,6 +332,9 @@ export function DiffView(props: DiffViewProps) {
             >
               <FileBlock
                 focusRanges={focusRangesByFile?.get(filePath)}
+                tourMarks={tourMarksByFile?.get(filePath)}
+                activeStepIndex={activeStepIndex}
+                onTourMarkClick={onTourMarkClick}
                 highlighted={highlightedFile === filePath}
                 onHighlightEnd={() => {
                   if (highlightedFile === filePath) {

@@ -10,6 +10,8 @@ import { useReviewThreads } from '../../hooks/use-review-threads';
 import { useTours } from '../../hooks/use-tours';
 import { useHideWhitespace } from '../../hooks/use-hide-whitespace';
 import { pickActiveTour, orderPathsByTour, stopsByPath } from '../../lib/tour-order';
+import { TOUR_NOT_STARTED, clampTourStep } from '../../lib/tour-navigation';
+import { tourMarks, marksByPath, focusRangesFromMarks, type TourFocusRange } from '../../lib/tour-marks';
 import { TourStepper } from './tour-stepper';
 import { useCommentActions } from '../../hooks/use-comment-actions';
 import { Toolbar } from '../layout/toolbar';
@@ -83,10 +85,16 @@ export function DiffPage() {
   const { data: tours } = useTours(reviewsEnabled ? sessionId : null);
   const activeTour = useMemo(() => pickActiveTour(tours), [tours]);
   const [reviewOrderEnabled, setReviewOrderEnabled] = useState(true);
-  const [tourStepIndex, setTourStepIndex] = useState(0);
+  const [tourStepIndex, setTourStepIndex] = useState(TOUR_NOT_STARTED);
 
   const diffPaths = useMemo(() => (diff ? diff.files.map(file => getFilePath(file)) : []), [diff]);
   const tourStops = useMemo(() => stopsByPath(activeTour, diffPaths), [activeTour, diffPaths]);
+  const activeStepIndex = clampTourStep(tourStepIndex, activeTour?.steps.length ?? 0);
+
+  // A different walkthrough is a different reading order, so the position does not carry over.
+  useEffect(() => {
+    setTourStepIndex(TOUR_NOT_STARTED);
+  }, [activeTour?.id]);
 
   // Naming the amount matters: a filtered diff disagrees with the forge's own counts, and after
   // the stale-base episode an unexplained disagreement is the last thing this page should show.
@@ -109,15 +117,15 @@ export function DiffPage() {
     return `${base} · whitespace hidden (${parts.join(', ')} suppressed)`;
   }, [hideWhitespace, info?.description, diff]);
 
+  const tourMarksByFile = useMemo(() => marksByPath(tourMarks(activeTour)), [activeTour]);
+
   const focusRangesByFile = useMemo(() => {
-    const ranges = new Map<string, { startLine: number; endLine: number }[]>();
-    for (const step of activeTour?.steps ?? []) {
-      const existing = ranges.get(step.filePath) ?? [];
-      existing.push({ startLine: step.startLine, endLine: step.endLine });
-      ranges.set(step.filePath, existing);
+    const ranges = new Map<string, TourFocusRange[]>();
+    for (const [path, marks] of tourMarksByFile) {
+      ranges.set(path, focusRangesFromMarks(marks));
     }
     return ranges;
-  }, [activeTour]);
+  }, [tourMarksByFile]);
 
   const orderedDiff = useMemo(() => {
     if (!diff || !activeTour || !reviewOrderEnabled || activeTour.steps.length === 0) {
@@ -229,11 +237,19 @@ export function DiffPage() {
       return next;
     });
     if (reviewed) {
+      // Measured before the collapse: afterwards the page is shorter, the browser may already have
+      // clamped the scroll, and the file no longer looks like the one the reader was inside.
+      const wasInsideFile = diffViewRef.current?.isScrolledInsideFile(path) ?? false;
       setCollapsedFiles((prev) => {
         const next = new Set(prev);
         next.add(path);
         return next;
       });
+      // The header is sticky, so it was under the cursor when it was clicked. Put the collapsed
+      // file back there rather than letting the page shorten under the reader.
+      if (wasInsideFile) {
+        requestAnimationFrame(() => diffViewRef.current?.scrollFileToTop(path));
+      }
     } else {
       setCollapsedFiles((prev) => {
         const next = new Set(prev);
@@ -266,8 +282,18 @@ export function DiffPage() {
       return;
     }
     const clamped = Math.max(0, Math.min(steps.length - 1, index));
+    const step = steps[clamped];
     setTourStepIndex(clamped);
-    diffViewRef.current?.scrollToFile(steps[clamped].filePath);
+    setActiveFile(step.filePath);
+    setCollapsedFiles((prev) => {
+      if (!prev.has(step.filePath)) {
+        return prev;
+      }
+      const next = new Set(prev);
+      next.delete(step.filePath);
+      return next;
+    });
+    diffViewRef.current?.scrollToLine(step.filePath, step.startLine);
   }, [activeTour]);
 
   const navigateHunk = useCallback((direction: number) => {
@@ -452,7 +478,7 @@ export function DiffPage() {
       {activeTour && (
         <TourStepper
           tour={activeTour}
-          stepIndex={tourStepIndex}
+          stepIndex={activeStepIndex}
           onStepChange={handleTourStepChange}
         />
       )}
@@ -498,6 +524,9 @@ export function DiffPage() {
             pendingSelection={pendingSelection}
             onPendingSelectionChange={setPendingSelection}
             focusRangesByFile={focusRangesByFile}
+            tourMarksByFile={tourMarksByFile}
+            activeStepIndex={activeStepIndex}
+            onTourMarkClick={handleTourStepChange}
           />
         ) : null}
       </div>

@@ -29,6 +29,10 @@
   --color-diff-comment-bg: #fff8c5;
   --color-diff-comment-gutter: #ecd364;
 
+  --color-note-bg: #fdf6d3;
+  --color-note-border: #e0cd8a;
+  --color-note-text: #3d3718;
+
   --color-accent: #0969da;
   --color-accent-hover: #0550ae;
 
@@ -67,6 +71,10 @@
   --color-diff-expanded-gutter: rgba(96, 165, 250, 0.08);
   --color-diff-comment-bg: rgba(234, 179, 8, 0.1);
   --color-diff-comment-gutter: rgba(234, 179, 8, 0.3);
+
+  --color-note-bg: #38310f;
+  --color-note-border: #5c5122;
+  --color-note-text: #f2e8c4;
 
   --color-accent: #60a5fa;
   --color-accent-hover: #93c5fd;

@@ -10,12 +10,14 @@ interface CommentLineNumberProps {
   onCommentClick?: () => void;
   showCommentButton?: boolean;
   forceShowButton?: boolean;
+  /** Sits at the left edge of the gutter, where the right-aligned number leaves room. */
+  leadingMarker?: React.ReactNode;
 }
 
 const baseClass = 'w-12.5 min-w-12.5 px-2 text-right text-text-muted select-none cursor-pointer align-top text-xs leading-6 relative group/line';
 
 export function CommentLineNumber(props: CommentLineNumberProps) {
-  const { lineNumber, className, isSelected, onMouseDown, onMouseEnter, onCommentClick, showCommentButton, forceShowButton } = props;
+  const { lineNumber, className, isSelected, onMouseDown, onMouseEnter, onCommentClick, showCommentButton, forceShowButton, leadingMarker } = props;
 
   return (
     <td
@@ -36,6 +38,7 @@ export function CommentLineNumber(props: CommentLineNumberProps) {
         }
       }}
     >
+      {leadingMarker}
       {showCommentButton && lineNumber !== null && (
         <button
           className={cn(

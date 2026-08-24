@@ -5,6 +5,8 @@ import { renderContent } from '../../lib/render-content';
 import type { SyntaxToken } from '../../lib/syntax-token';
 import { CommentLineNumber } from '../comments/comment-line-number';
 import type { CommentSide } from '../comments/types';
+import type { TourMark } from '../../lib/tour-marks';
+import { TourMarkLamp } from './tour-mark-lamp';
 
 export type { SyntaxToken };
 
@@ -16,6 +18,9 @@ interface DiffLineProps {
   onLineMouseDown?: (line: number, side: CommentSide, shiftKey?: boolean) => void;
   onLineMouseEnter?: (line: number, side: CommentSide) => void;
   onCommentClick?: (line: number, side: CommentSide) => void;
+  tourMarks?: TourMark[];
+  activeStepIndex?: number;
+  onTourMarkClick?: (stepIndex: number) => void;
 }
 
 function getPrefix(type: string): string {
@@ -41,17 +46,29 @@ function getPrefixColor(type: string): string {
 }
 
 export function DiffLine(props: DiffLineProps) {
-  const { line, syntaxTokens, expanded, isSelected, onLineMouseDown, onLineMouseEnter, onCommentClick } = props;
+  const { line, syntaxTokens, expanded, isSelected, onLineMouseDown, onLineMouseEnter, onCommentClick, tourMarks, activeStepIndex, onTourMarkClick } = props;
 
   const side: CommentSide = line.type === 'delete' ? 'old' : 'new';
   const activeLine = side === 'old' ? line.oldLineNumber : line.newLineNumber;
   const gutterBg = expanded ? 'bg-diff-expanded-gutter' : '';
 
   return (
-    <tr className={cn('group/row font-mono text-sm leading-6 hover:brightness-[0.97]', expanded ? 'bg-diff-expanded-bg' : getLineBg(line.type))}>
+    <tr
+      className={cn('group/row font-mono text-sm leading-6 hover:brightness-[0.97]', expanded ? 'bg-diff-expanded-bg' : getLineBg(line.type))}
+      data-new-line={line.newLineNumber ?? undefined}
+    >
       <CommentLineNumber
         lineNumber={line.oldLineNumber}
         className={cn('border-r border-border-muted', gutterBg)}
+        leadingMarker={
+          <TourMarkLamp
+            marks={tourMarks}
+            line={line.newLineNumber}
+            activeStepIndex={activeStepIndex}
+            onClick={onTourMarkClick}
+            direction="right"
+          />
+        }
         showCommentButton={!!onCommentClick && line.type === 'delete' && line.oldLineNumber !== null}
         isSelected={isSelected && side === 'old'}
         onMouseDown={line.oldLineNumber !== null ? (shiftKey: boolean) => onLineMouseDown?.(line.oldLineNumber!, line.type === 'delete' ? 'old' : 'new', shiftKey) : undefined}

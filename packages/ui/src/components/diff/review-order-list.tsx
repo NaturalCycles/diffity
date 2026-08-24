@@ -3,6 +3,7 @@ import { getFilePath } from '../../lib/diff-utils';
 import type { TourFileStop } from '../../lib/tour-order';
 import { CheckIcon } from '../icons/check-icon';
 import { CommentIcon } from '../icons/comment-icon';
+import { LightbulbIcon } from '../icons/lightbulb-icon';
 
 interface ReviewOrderListProps {
   files: DiffFile[];
@@ -72,12 +73,23 @@ export function ReviewOrderList(props: ReviewOrderListProps) {
                   {reviewedFiles.has(path) && (
                     <CheckIcon className="w-3 h-3 shrink-0 text-text-muted" />
                   )}
-                  {comments ? (
-                    <span className="ml-auto shrink-0 inline-flex items-center gap-0.5 text-[10px] text-text-muted">
-                      <CommentIcon className="w-3 h-3" />
-                      {comments}
-                    </span>
-                  ) : null}
+                  <span className="ml-auto shrink-0 inline-flex items-center gap-1.5">
+                    {stop ? (
+                      <span
+                        className="inline-flex items-center gap-0.5 text-[10px] text-accent"
+                        title={`${stop.count} walkthrough note${stop.count === 1 ? '' : 's'}`}
+                      >
+                        <LightbulbIcon className="w-3 h-3" />
+                        {stop.count > 1 ? stop.count : null}
+                      </span>
+                    ) : null}
+                    {comments ? (
+                      <span className="inline-flex items-center gap-0.5 text-[10px] text-text-muted">
+                        <CommentIcon className="w-3 h-3" />
+                        {comments}
+                      </span>
+                    ) : null}
+                  </span>
                 </span>
                 {dir && <span className="block truncate text-[10px] text-text-muted">{dir}</span>}
                 {stop?.annotation && (
