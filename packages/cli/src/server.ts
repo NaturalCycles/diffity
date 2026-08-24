@@ -152,6 +152,13 @@ const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 /** Long enough that a listener is not re-arming constantly, short enough to notice a dead server. */
 const MAX_LIVE_WAIT_SECONDS = 900;
+
+/**
+ * A waiting listener holds a response open, and node destroys a request that outlives
+ * `requestTimeout` — 300s by default, which killed the loop the first time it ran for the full
+ * wait. Set here rather than left to the default, so the two numbers cannot drift apart.
+ */
+const REQUEST_TIMEOUT_MS = (MAX_LIVE_WAIT_SECONDS + 60) * 1000;
 const RECLAIM_AFTER_MINUTES = 10;
 
 function isLoopbackBind(host: string): boolean {
@@ -232,6 +239,8 @@ function descriptionForRef(ref: string): string {
 interface ServerResult {
   port: number;
   close: () => void;
+  /** Exposed so a test can pin it against the longest wait a listener may ask for. */
+  requestTimeoutMs: number;
 }
 
 export function startServer(options: ServerOptions): Promise<ServerResult> {
@@ -802,10 +811,11 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             version,
           });
         }
-        resolve({ port: addr.port, close: closeFn });
+        resolve({ port: addr.port, close: closeFn, requestTimeoutMs: server.requestTimeout });
       }
     });
 
+    server.requestTimeout = REQUEST_TIMEOUT_MS;
     server.listen(currentPort, getBindHost());
   });
 }

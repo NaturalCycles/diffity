@@ -257,3 +257,36 @@ describe('the live loop', () => {
     expect(info.live?.waiting).toBe(2);
   });
 });
+
+describe('a listener that waits', () => {
+  // The first real run of the loop died here: a response held for the full wait outlived node's
+  // default requestTimeout of 300s and the socket was destroyed under it.
+  it('is not cut off by the request timeout', async () => {
+    const { startServer } = await import('../src/server.js');
+    const started = await startServer({ port: 0, diffArgs: [], effectiveRef: 'work' });
+    try {
+      expect(started.requestTimeoutMs).toBeGreaterThan(900_000);
+    } finally {
+      started.close();
+    }
+  });
+
+  it('comes back when the wait runs out, rather than hanging', async () => {
+    // Earlier cases leave requests queued, and a wait with something to hand over returns at once —
+    // which is the opposite of what this is about.
+    for (let i = 0; i < 20; i++) {
+      const drained = await req('/api/live/claim?wait=0', { method: 'POST' });
+      if (JSON.parse(drained.text).request === null) {
+        break;
+      }
+    }
+
+    const before = Date.now();
+    const claim = await req('/api/live/claim?wait=1', { method: 'POST' });
+    const elapsed = Date.now() - before;
+
+    expect(claim.status).toBe(200);
+    expect(JSON.parse(claim.text)).toEqual({ request: null });
+    expect(elapsed).toBeGreaterThanOrEqual(900);
+  });
+});
