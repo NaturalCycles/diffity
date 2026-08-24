@@ -120,3 +120,17 @@ export function getExpandRange(
 
   return { oldStart: Math.max(remainingEnd - EXPAND_CHUNK_SIZE + 1, remainingStart), oldEnd: remainingEnd };
 }
+
+/**
+ * Reaching a line in the middle of a gap means expanding the whole gap, so an automatic expansion
+ * is bounded: past this the reader is better served by the gap's own expand controls.
+ */
+export const AUTO_EXPAND_GAP_LIMIT = 200;
+
+export function gapForLine(gaps: ExpandableGap[], line: number): ExpandableGap | null {
+  return gaps.find(gap => line >= gap.newStart && line <= gap.newEnd) ?? null;
+}
+
+export function canAutoExpand(gap: ExpandableGap): boolean {
+  return gap.totalLines <= AUTO_EXPAND_GAP_LIMIT;
+}

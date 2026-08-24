@@ -66,6 +66,7 @@ export function DiffLine(props: DiffLineProps) {
             line={line.newLineNumber}
             activeStepIndex={activeStepIndex}
             onClick={onTourMarkClick}
+            direction="right"
           />
         }
         showCommentButton={!!onCommentClick && line.type === 'delete' && line.oldLineNumber !== null}

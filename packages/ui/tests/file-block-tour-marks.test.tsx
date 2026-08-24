@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, cleanup, screen } from '@testing-library/react';
+import { render, cleanup, screen, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { DiffFile, DiffHunk, DiffLine } from '@diffity/parser';
 import { FileBlock } from '../src/components/diff/file-block';
@@ -31,7 +31,7 @@ function file(path: string, hunks: DiffHunk[]): DiffFile {
   return { oldPath: path, newPath: path, status: 'modified', hunks, additions: 1, deletions: 0, isBinary: false };
 }
 
-function mark(stepIndex: number, startLine: number, endLine: number, annotation = ''): TourMark {
+function mark(stepIndex: number, startLine: number, endLine: number, annotation = '', body = ''): TourMark {
   return {
     stepIndex,
     position: stepIndex + 1,
@@ -39,7 +39,7 @@ function mark(stepIndex: number, startLine: number, endLine: number, annotation 
     startLine,
     endLine,
     annotation,
-    body: '',
+    body,
   };
 }
 
@@ -50,13 +50,14 @@ function renderWithMarks(
   marks: TourMark[],
   activeStepIndex = TOUR_NOT_STARTED,
   onTourMarkClick = vi.fn(),
+  viewMode: 'unified' | 'split' = 'unified',
 ) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={queryClient}>
       <FileBlock
         file={target}
-        viewMode="unified"
+        viewMode={viewMode}
         collapsed={false}
         onToggleCollapse={vi.fn()}
         reviewed={false}
@@ -146,12 +147,11 @@ describe('FileBlock highlight tells the current stop from the others', () => {
     expect(classes.some(c => c.includes('bg-accent/5'))).toBe(true);
   });
 
-  it('says which stop a hunk belongs to instead of only that one does', () => {
+  // The tooltip used to sit over the code being read. The lamp's note replaced it.
+  it('puts no tooltip on the code it highlights', () => {
     renderWithMarks(file('src/a.ts', twoHunks), [mark(0, 10, 10), mark(1, 40, 40)], 1);
 
-    const titles = Array.from(document.querySelectorAll('tbody[title]')).map(el => el.getAttribute('title'));
-    expect(titles).toContain('Walkthrough stop 1');
-    expect(titles).toContain('Walkthrough stop 2 (you are here)');
+    expect(document.querySelectorAll('tbody[title]')).toHaveLength(0);
   });
 });
 
@@ -166,18 +166,70 @@ describe('FileBlock line anchors', () => {
   });
 });
 
-describe('FileBlock lamps for stops outside the diff', () => {
-  it('moves the lamp to the first rendered line of the stop', () => {
-    // The stop starts at 20, which is not in the diff; the hunk starts at 40.
-    renderWithMarks(file('src/a.ts', [threeLines]), [mark(0, 20, 41)]);
+describe('FileBlock walkthrough notes', () => {
+  const noted = [mark(2, 40, 40, 'the marker', 'The one design decision in this PR.')];
 
-    const lamp = screen.getByRole('button', { name: /walkthrough stop 1/i });
-    expect(lamp.closest('tr')?.getAttribute('data-new-line')).toBe('40');
+  it('says nothing until the lamp is hovered', () => {
+    renderWithMarks(file('src/a.ts', [threeLines]), noted);
+
+    expect(screen.queryByText(/The one design decision/)).toBeNull();
   });
 
-  it('shows no lamp when the whole stop is outside the diff', () => {
-    renderWithMarks(file('src/a.ts', [threeLines]), [mark(0, 10, 20)]);
+  it('shows the whole note on hover, without a click', () => {
+    renderWithMarks(file('src/a.ts', [threeLines]), noted);
 
-    expect(screen.queryByRole('button', { name: /walkthrough stop/i })).toBeNull();
+    fireEvent.mouseEnter(screen.getByRole('button', { name: /walkthrough stop 3/i }));
+
+    expect(screen.getByText(/The one design decision/)).toBeTruthy();
+    expect(screen.getByText(/the marker/)).toBeTruthy();
+  });
+
+  it('puts it away again', () => {
+    renderWithMarks(file('src/a.ts', [threeLines]), noted);
+    const lamp = screen.getByRole('button', { name: /walkthrough stop 3/i });
+
+    fireEvent.mouseEnter(lamp);
+    fireEvent.mouseLeave(lamp);
+
+    expect(screen.queryByText(/The one design decision/)).toBeNull();
+  });
+
+  it('opens over the old side in split view, so it never covers the code under review', () => {
+    renderWithMarks(file('src/a.ts', [threeLines]), noted, TOUR_NOT_STARTED, vi.fn(), 'split');
+
+    fireEvent.mouseEnter(screen.getByRole('button', { name: /walkthrough stop 3/i }));
+
+    expect(screen.getByRole('tooltip').className).toContain('right-full');
+  });
+
+  // Unified has a single code column and nothing to the left of its first gutter.
+  it('opens the other way in unified view, where there is no old side', () => {
+    renderWithMarks(file('src/a.ts', [threeLines]), noted);
+
+    fireEvent.mouseEnter(screen.getByRole('button', { name: /walkthrough stop 3/i }));
+
+    expect(screen.getByRole('tooltip').className).toContain('left-full');
+  });
+
+  it('marks the stop in split view too', () => {
+    renderWithMarks(file('src/a.ts', [threeLines]), noted, TOUR_NOT_STARTED, vi.fn(), 'split');
+
+    expect(screen.getAllByRole('button', { name: /walkthrough stop 3/i })).toHaveLength(1);
+  });
+
+  // Two stops on one line are one thing to say about that block, not two lamps to hunt between.
+  it('merges stops that share a line into one note', () => {
+    renderWithMarks(file('src/a.ts', [threeLines]), [
+      mark(0, 40, 40, 'first', 'What the first stop says.'),
+      mark(3, 40, 41, 'second', 'What the fourth stop says.'),
+    ]);
+
+    const lamps = screen.getAllByRole('button', { name: /walkthrough stop/i });
+    expect(lamps).toHaveLength(1);
+
+    fireEvent.mouseEnter(lamps[0]);
+
+    expect(screen.getByText(/What the first stop says/)).toBeTruthy();
+    expect(screen.getByText(/What the fourth stop says/)).toBeTruthy();
   });
 });

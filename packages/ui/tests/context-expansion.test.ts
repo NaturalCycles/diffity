@@ -1,11 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { DiffHunk } from '@diffity/parser';
-import {
-  computeGaps,
-  createContextLines,
-  getExpandRange,
-  type ExpandableGap,
-} from '../src/lib/context-expansion';
+import { computeGaps, createContextLines, getExpandRange, type ExpandableGap, gapForLine, canAutoExpand, AUTO_EXPAND_GAP_LIMIT } from '../src/lib/context-expansion';
 
 function makeHunk(oldStart: number, oldCount: number, newStart: number, newCount: number): DiffHunk {
   return {
@@ -275,5 +270,45 @@ describe('getExpandRange', () => {
       const rangeUp = getExpandRange(gap, 'up', { fromTop: 20, fromBottom: 20 });
       expect(rangeUp).toEqual({ oldStart: 61, oldEnd: 80 });
     });
+  });
+});
+
+describe('gapForLine', () => {
+  const gaps = [
+    { id: 'top', position: 'top' as const, oldStart: 1, oldEnd: 9, newStart: 1, newEnd: 9, totalLines: 9 },
+    { id: 'between-0', position: 'between' as const, oldStart: 13, oldEnd: 39, newStart: 13, newEnd: 39, totalLines: 27 },
+  ];
+
+  // A walkthrough stop can point at unchanged code, which lives in a gap rather than a hunk.
+  it('finds the gap holding a line', () => {
+    expect(gapForLine(gaps, 20)?.id).toBe('between-0');
+    expect(gapForLine(gaps, 5)?.id).toBe('top');
+  });
+
+  it('includes the gap boundaries', () => {
+    expect(gapForLine(gaps, 13)?.id).toBe('between-0');
+    expect(gapForLine(gaps, 39)?.id).toBe('between-0');
+  });
+
+  it('returns nothing for a line the diff already renders', () => {
+    expect(gapForLine(gaps, 41)).toBeNull();
+    expect(gapForLine(gaps, 11)).toBeNull();
+  });
+});
+
+describe('canAutoExpand', () => {
+  function gap(totalLines: number) {
+    return { id: 'g', position: 'between' as const, oldStart: 1, oldEnd: totalLines, newStart: 1, newEnd: totalLines, totalLines };
+  }
+
+  // Reaching a stop in the middle of a gap means expanding the whole gap, so a huge one is left
+  // alone rather than loading a thousand lines nobody asked for.
+  it('expands a gap small enough to be worth it', () => {
+    expect(canAutoExpand(gap(1))).toBe(true);
+    expect(canAutoExpand(gap(AUTO_EXPAND_GAP_LIMIT))).toBe(true);
+  });
+
+  it('leaves a large gap alone', () => {
+    expect(canAutoExpand(gap(AUTO_EXPAND_GAP_LIMIT + 1))).toBe(false);
   });
 });

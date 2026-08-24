@@ -207,10 +207,16 @@ export function DiffView(props: DiffViewProps) {
       scrollTargetRef.current = filePath;
       setHighlightedFile(filePath);
       virtualizer.scrollToIndex(index, { align: 'start' });
-      settleScrollToElement(
-        `#file-${CSS.escape(encodeURIComponent(filePath))} [data-new-line="${line}"]`,
-        'center',
-      );
+      const fileSelector = `#file-${CSS.escape(encodeURIComponent(filePath))}`;
+      settleScrollToElement(`${fileSelector} [data-new-line="${line}"]`, 'start', () => {
+        // 'start' puts the row at the very top of the container, which is where the file's own
+        // sticky header sits — so the line jumped to would be the one covered up.
+        const container = scrollElementRef.current;
+        const header = document.querySelector(`${fileSelector} [data-file-header]`);
+        if (container && header instanceof HTMLElement) {
+          container.scrollTop -= header.offsetHeight;
+        }
+      });
     },
     scrollToThread: (threadId: string, filePath: string) => {
       const element = document.querySelector(`[data-thread-id="${threadId}"]`);

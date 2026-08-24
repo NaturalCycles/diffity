@@ -109,9 +109,8 @@ describe('FileBlock attention', () => {
 
     expect(tbodyClasses().some(c => c.includes('bg-accent/5'))).toBe(true);
     expect(tbodyClasses().some(c => c.includes('opacity-45'))).toBe(false);
-    expect(document.querySelector('tbody[title]')?.getAttribute('title')).toBe(
-      'Walkthrough stop 1',
-    );
+    // The walkthrough explains itself in the lamp's note, not in a tooltip over the code.
+    expect(document.querySelector('tbody[title]')).toBeNull();
   });
 
   it('highlights only the hunk in range', () => {
