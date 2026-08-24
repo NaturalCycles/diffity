@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import type { DiffHunk, DiffLine as DiffLineType } from '@diffity/parser';
 import type { SyntaxToken } from '../../lib/syntax-token';
 import type { CommentThread as CommentThreadType, CommentAuthor, CommentSide, LineSelection, LineRenderProps } from '../comments/types';
+import type { TourMark } from '../../lib/tour-marks';
 import { getChangeGroups } from '../../lib/diff-utils';
 import { DiffLine } from './diff-line';
 import { HunkHeader, type ExpandControls } from './hunk-header';
@@ -38,6 +39,9 @@ interface HunkBlockProps {
   filePath?: string;
   onRevertChange?: (hunk: DiffHunk, startIndex: number, endIndex: number) => void;
   getOriginalCode?: (side: CommentSide, startLine: number, endLine: number) => string;
+  tourMarks?: TourMark[];
+  activeStepIndex?: number;
+  onTourMarkClick?: (stepIndex: number) => void;
 }
 
 export function renderLineWithComments(
@@ -66,6 +70,9 @@ export function renderLineWithComments(
       onLineMouseDown={props.onLineMouseDown}
       onLineMouseEnter={props.onLineMouseEnter}
       onCommentClick={props.onCommentClick}
+      tourMarks={props.tourMarks}
+      activeStepIndex={props.activeStepIndex}
+      onTourMarkClick={props.onTourMarkClick}
     />
   );
 
@@ -116,6 +123,7 @@ export function HunkBlock(props: HunkBlockProps) {
     onLineMouseDown, onLineMouseEnter, onCommentClick,
     onAddThread, onReply, onResolve, onUnresolve, onDeleteComment, onDeleteThread,
     onCancelPending, filePath, onRevertChange, getOriginalCode,
+    tourMarks, activeStepIndex, onTourMarkClick,
   } = props;
 
   const commentProps = {
@@ -123,6 +131,7 @@ export function HunkBlock(props: HunkBlockProps) {
     threads, pendingSelection, currentAuthor,
     onAddThread, onReply, onResolve, onUnresolve, onDeleteComment, onDeleteThread,
     onCancelPending, filePath, getOriginalCode,
+    tourMarks, activeStepIndex, onTourMarkClick,
   };
 
   const changeGroups = useMemo(() => {

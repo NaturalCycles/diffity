@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { DiffHunk } from '@diffity/parser';
 import type { DiffFile, DiffLine as DiffLineType } from '@diffity/parser';
@@ -6,10 +6,11 @@ import type { SyntaxToken } from '../../lib/syntax-token';
 import type { HighlightedTokens } from '../../hooks/use-highlighter';
 import type { CommentSide, LineSelection } from '../comments/types';
 import { type ViewMode, getFilePath, buildChangeGroupPatch, extractLinesFromDiff, extractLinesFromExpandedLines } from '../../lib/diff-utils';
-import { classifyHunk, hunkIntersectsRanges, MECHANICAL_LABELS } from '../../lib/hunk-attention';
+import { classifyHunk, rangesIntersectingHunk, MECHANICAL_LABELS } from '../../lib/hunk-attention';
+import { anchorLineInHunks, type TourFocusRange, type TourMark } from '../../lib/tour-marks';
 import { revertHunk as apiRevertHunk } from '../../lib/api';
 import { ConfirmDialog } from '../ui/confirm-dialog';
-import { computeGaps, createContextLines, getExpandRange, type ExpandableGap } from '../../lib/context-expansion';
+import { computeGaps, createContextLines, getExpandRange, gapForLine, canAutoExpand, type ExpandableGap } from '../../lib/context-expansion';
 import { fileContentOptions } from '../../queries/file';
 import type { CommentActions } from '../../hooks/use-comment-actions';
 import type { CommentThread } from '../comments/types';
@@ -60,7 +61,12 @@ interface FileBlockProps {
   highlighted?: boolean;
   onHighlightEnd?: () => void;
   /** Line ranges the walkthrough asked the reader to look at, on the new side. */
-  focusRanges?: { startLine: number; endLine: number }[];
+  focusRanges?: TourFocusRange[];
+  /** The walkthrough's stops in this file, for the gutter lamps. */
+  tourMarks?: TourMark[];
+  /** Which stop the header is showing, so the others are not dressed up as current. */
+  activeStepIndex?: number;
+  onTourMarkClick?: (stepIndex: number) => void;
 }
 
 interface GapExpansion {
@@ -73,6 +79,7 @@ interface GapExpansion {
 export function FileBlock(props: FileBlockProps) {
   const {
     file, viewMode, collapsed, onToggleCollapse, reviewed, onReviewedChange, highlightLine, baseRef, canRevert, onRevert, focusRanges,
+    tourMarks, activeStepIndex, onTourMarkClick,
     threads: allThreads, commentsEnabled, commentActions, onAddThread: rawAddThread, pendingSelection, onPendingSelectionChange,
     highlighted, onHighlightEnd,
   } = props;
@@ -277,8 +284,8 @@ export function FileBlock(props: FileBlockProps) {
     [file],
   );
 
-  const isHunkFocused = useCallback(
-    (hunk: DiffHunk) => hunkIntersectsRanges(hunk, focusRanges),
+  const stopsInHunk = useCallback(
+    (hunk: DiffHunk): TourFocusRange[] => rangesIntersectingHunk(hunk, focusRanges),
     [focusRanges],
   );
 
@@ -345,6 +352,23 @@ export function FileBlock(props: FileBlockProps) {
     setLoadingGap(null);
   }, [fileContentPath, queryClient, baseRef]);
 
+  // A walkthrough stop can point at unchanged code, which the diff does not show. Expanding to it
+  // is what the reader would do by hand; the alternative is a stop with no visible line at all.
+  const autoExpanded = useRef(new Set<string>());
+  useEffect(() => {
+    for (const mark of tourMarks ?? []) {
+      if (anchorLineInHunks(file.hunks, mark.startLine, mark.endLine) !== null) {
+        continue;
+      }
+      const gap = gapForLine(gaps, mark.startLine);
+      if (!gap || !canAutoExpand(gap) || autoExpanded.current.has(gap.id) || expansions.has(gap.id)) {
+        continue;
+      }
+      autoExpanded.current.add(gap.id);
+      void handleExpand(gap, 'all');
+    }
+  }, [tourMarks, file.hunks, gaps, expansions, handleExpand]);
+
   const getGapRemaining = useCallback((gap: ExpandableGap): { total: number; up: number; down: number } => {
     const expansion = expansions.get(gap.id);
     if (!expansion) {
@@ -402,6 +426,7 @@ export function FileBlock(props: FileBlockProps) {
       onAnimationEnd={onHighlightEnd}
     >
       <div
+        data-file-header
         className={`group flex items-center gap-2 px-3 py-1.5 border-border text-xs sticky top-0 z-10 shadow-sticky ${highlighted ? 'animate-flash-highlight' : 'bg-bg-secondary'}`}
       >
         <IconButton
@@ -522,17 +547,20 @@ export function FileBlock(props: FileBlockProps) {
               )}
               {file.hunks.map((hunk, i) => {
                 const mechanical = hunkAttention[i];
-                const focused = isHunkFocused(hunk);
-                const attentionClass = focused
-                  ? 'bg-accent/5'
-                  : mechanical
-                    ? 'opacity-45 hover:opacity-100 transition-opacity'
-                    : '';
-                const attentionTitle = focused
-                  ? 'The walkthrough points here'
-                  : mechanical
-                    ? `Dimmed: ${MECHANICAL_LABELS[mechanical]}`
-                    : undefined;
+                const stops = stopsInHunk(hunk);
+                const isCurrentStop = stops.some(stop => stop.stepIndex === activeStepIndex);
+                const attentionClass = isCurrentStop
+                  ? 'bg-accent/15'
+                  : stops.length > 0
+                    ? 'bg-accent/5'
+                    : mechanical
+                      ? 'opacity-45 hover:opacity-100 transition-opacity'
+                      : '';
+                // Only the dimming explains itself on hover. A walkthrough highlight used to as
+                // well, which put a tooltip over the code being read; the lamp's note does it now.
+                const attentionTitle = stops.length === 0 && mechanical
+                  ? `Dimmed: ${MECHANICAL_LABELS[mechanical]}`
+                  : undefined;
                 const betweenGap = i > 0 ? gapMap.get(`between-${i - 1}`) : undefined;
                 const betweenExpansion = betweenGap ? expansions.get(betweenGap.id) : undefined;
                 const topExpansion = i === 0 ? expansions.get('top') : undefined;
@@ -543,6 +571,9 @@ export function FileBlock(props: FileBlockProps) {
                     hunk={hunk}
                     attentionClass={attentionClass}
                     attentionTitle={attentionTitle}
+                    tourMarks={tourMarks}
+                    activeStepIndex={activeStepIndex}
+                    onTourMarkClick={onTourMarkClick}
                     viewMode={viewMode}
                     syntaxMap={syntaxMap}
                     expandControls={getExpandControlsForHunk(i)}

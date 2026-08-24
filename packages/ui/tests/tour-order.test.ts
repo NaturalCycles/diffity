@@ -62,7 +62,7 @@ describe('stopsByPath', () => {
       ['a.ts', 'b.ts'],
     );
 
-    expect(stops.get('a.ts')).toEqual({ position: 1, annotation: 'entry point', body: 'read a.ts' });
+    expect(stops.get('a.ts')).toEqual({ position: 1, count: 2, annotation: 'entry point', body: 'read a.ts' });
     expect(stops.get('b.ts')?.position).toBe(2);
     expect(stops.size).toBe(2);
   });
@@ -104,5 +104,17 @@ describe('pickActiveTour', () => {
   it('returns null when there is none', () => {
     expect(pickActiveTour([])).toBeNull();
     expect(pickActiveTour(undefined)).toBeNull();
+  });
+});
+
+describe('stopsByPath counts', () => {
+  it('counts every stop in a file, so a file read twice says so', () => {
+    const stops = stopsByPath(
+      tour([step('a.ts', 1), step('b.ts', 2), step('a.ts', 3)]),
+      ['a.ts', 'b.ts'],
+    );
+
+    expect(stops.get('a.ts')?.count).toBe(2);
+    expect(stops.get('b.ts')?.count).toBe(1);
   });
 });

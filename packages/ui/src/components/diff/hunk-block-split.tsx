@@ -7,6 +7,8 @@ import type { SyntaxToken } from '../../lib/syntax-token';
 import type { CommentThread as CommentThreadType, CommentAuthor, CommentSide, LineSelection, LineRenderProps } from '../comments/types';
 import { HunkHeader, type ExpandControls } from './hunk-header';
 import { CommentLineNumber } from '../comments/comment-line-number';
+import type { TourMark } from '../../lib/tour-marks';
+import { TourMarkLamp } from './tour-mark-lamp';
 import { CommentThread } from '../comments/comment-thread';
 import { CommentFormRow } from '../comments/comment-form-row';
 import { UndoIcon } from '../icons/undo-icon';
@@ -40,6 +42,9 @@ interface HunkBlockSplitProps {
   filePath?: string;
   onRevertChange?: (hunk: DiffHunk, startIndex: number, endIndex: number) => void;
   getOriginalCode?: (side: CommentSide, startLine: number, endLine: number) => string;
+  tourMarks?: TourMark[];
+  activeStepIndex?: number;
+  onTourMarkClick?: (stepIndex: number) => void;
 }
 
 interface SplitRow {
@@ -113,11 +118,14 @@ function SplitCell(props: {
   syntaxMap?: Map<string, SyntaxToken[]>;
   expanded?: boolean;
   isSelected?: boolean;
-  onMouseDown?: () => void;
+  onMouseDown?: (shiftKey: boolean) => void;
   onMouseEnter?: () => void;
   onCommentClick?: () => void;
+  tourMarks?: TourMark[];
+  activeStepIndex?: number;
+  onTourMarkClick?: (stepIndex: number) => void;
 }) {
-  const { line, side, syntaxMap, expanded, isSelected, onMouseDown, onMouseEnter, onCommentClick } = props;
+  const { line, side, syntaxMap, expanded, isSelected, onMouseDown, onMouseEnter, onCommentClick, tourMarks, activeStepIndex, onTourMarkClick } = props;
   const [contentHovered, setContentHovered] = useState(false);
 
   if (!line) {
@@ -141,6 +149,16 @@ function SplitCell(props: {
         lineNumber={lineNum}
         className={bgClass}
         isSelected={isSelected}
+        leadingMarker={
+          side === 'right' ? (
+            <TourMarkLamp
+              marks={tourMarks}
+              line={line.newLineNumber}
+              activeStepIndex={activeStepIndex}
+              onClick={onTourMarkClick}
+            />
+          ) : undefined
+        }
         showCommentButton={!!onCommentClick && lineNum !== null}
         forceShowButton={contentHovered}
         onMouseDown={onMouseDown}
@@ -176,7 +194,11 @@ export function renderSplitRows(
     const rightNum = rightLine?.newLineNumber ?? null;
 
     result.push(
-      <tr key={`${keyPrefix}-${i}`} className="group/split-row font-mono text-sm leading-6">
+      <tr
+        key={`${keyPrefix}-${i}`}
+        className="group/split-row font-mono text-sm leading-6"
+        data-new-line={rightNum ?? undefined}
+      >
         <SplitCell
           line={leftLine}
           side="left"
@@ -196,6 +218,9 @@ export function renderSplitRows(
           onMouseDown={rightNum !== null ? (shiftKey: boolean) => props.onLineMouseDown?.(rightNum, 'new', shiftKey) : undefined}
           onMouseEnter={rightNum !== null ? () => props.onLineMouseEnter?.(rightNum, 'new') : undefined}
           onCommentClick={rightNum !== null && props.onCommentClick ? () => props.onCommentClick!(rightNum, 'new') : undefined}
+          tourMarks={props.tourMarks}
+          activeStepIndex={props.activeStepIndex}
+          onTourMarkClick={props.onTourMarkClick}
         />
       </tr>
     );
@@ -284,6 +309,7 @@ export function HunkBlockSplit(props: HunkBlockSplitProps) {
     onLineMouseDown, onLineMouseEnter, onCommentClick,
     onAddThread, onReply, onResolve, onUnresolve, onEditComment, onDeleteComment, onDeleteThread,
     onCancelPending, filePath, onRevertChange, getOriginalCode,
+    tourMarks, activeStepIndex, onTourMarkClick,
   } = props;
 
   const commentProps = {
@@ -291,6 +317,7 @@ export function HunkBlockSplit(props: HunkBlockSplitProps) {
     threads, pendingSelection, currentAuthor,
     onAddThread, onReply, onResolve, onUnresolve, onEditComment, onDeleteComment, onDeleteThread,
     onCancelPending, filePath, getOriginalCode,
+    tourMarks, activeStepIndex, onTourMarkClick,
   };
 
   const changeGroups = useMemo(() => {

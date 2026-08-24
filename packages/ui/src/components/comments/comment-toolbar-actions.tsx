@@ -6,6 +6,7 @@ import { CopyIcon } from '../icons/copy-icon';
 import { CheckIcon } from '../icons/check-icon';
 import { ChevronUpIcon } from '../icons/chevron-up-icon';
 import { ChevronDownIcon } from '../icons/chevron-down-icon';
+import { SkipToStartIcon } from '../icons/skip-to-start-icon';
 import { TrashIcon } from '../icons/trash-icon';
 import { ConfirmDialog } from '../ui/confirm-dialog';
 
@@ -26,7 +27,7 @@ export function CommentToolbarActions(props: CommentToolbarActionsProps) {
 
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const { copied, copy } = useCopy();
-  const { currentIndex, count: unresolvedCount, goToPrevious, goToNext } = useThreadNavigation(threads, onScrollToThread);
+  const { currentIndex, count: unresolvedCount, goToFirst, goToPrevious, goToNext } = useThreadNavigation(threads, onScrollToThread);
 
   if (unresolvedCount === 0) {
     return null;
@@ -40,6 +41,15 @@ export function CommentToolbarActions(props: CommentToolbarActionsProps) {
             ? `${currentIndex + 1} of ${unresolvedCount} ${unresolvedCount === 1 ? 'comment' : 'comments'}`
             : `${unresolvedCount} ${unresolvedCount === 1 ? 'comment' : 'comments'}`}
         </span>
+        {currentIndex > 0 && (
+          <button
+            onClick={goToFirst}
+            className="flex items-center px-1.5 text-text-muted hover:bg-hover hover:text-text transition-colors cursor-pointer"
+            title="Back to the first comment"
+          >
+            <SkipToStartIcon className="w-3.5 h-3.5" />
+          </button>
+        )}
         <button
           onClick={goToPrevious}
           className="flex items-center px-1.5 text-text-muted hover:bg-hover hover:text-text transition-colors cursor-pointer"
