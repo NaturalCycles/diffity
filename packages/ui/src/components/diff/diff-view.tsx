@@ -58,6 +58,9 @@ interface DiffViewProps {
   tourMarksByFile?: Map<string, TourMark[]>;
   activeStepIndex?: number;
   onTourMarkClick?: (stepIndex: number) => void;
+  /** Files that have moved since the diff was loaded, so each can offer to reload itself. */
+  staleFiles?: string[];
+  onRefreshFile?: (path: string) => void;
   onAskThread?: (filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor) => void;
   onAskReply?: (threadId: string, body: string, author: CommentAuthor) => void;
   askIsHeard?: boolean;
@@ -91,6 +94,8 @@ export function DiffView(props: DiffViewProps) {
     tourMarksByFile,
     activeStepIndex,
     onTourMarkClick,
+    staleFiles,
+    onRefreshFile,
     onAskThread,
     onAskReply,
     askIsHeard,
@@ -338,6 +343,8 @@ export function DiffView(props: DiffViewProps) {
             >
               <FileBlock
                 focusRanges={focusRangesByFile?.get(filePath)}
+                isStale={staleFiles?.includes(filePath)}
+                onRefreshFile={onRefreshFile}
                 onAskThread={onAskThread}
                 onAskReply={onAskReply}
                 askIsHeard={askIsHeard}

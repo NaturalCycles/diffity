@@ -13,6 +13,13 @@ import { pickActiveTour, orderPathsByTour, stopsByPath } from '../../lib/tour-or
 import { TOUR_NOT_STARTED, clampTourStep } from '../../lib/tour-navigation';
 import { liveStatusOptions } from '../../queries/live';
 import { readReadingPosition, writeReadingPosition } from '../../lib/reading-position';
+import { staleMessage } from '../../lib/stale-files';
+import { patchDiffFile } from '../../lib/patch-diff-file';
+import { newAnswers, dropSeenAlerts, type AnswerAlert } from '../../lib/answer-alerts';
+import { whereIsThread, type ThreadPosition } from '../../lib/thread-visibility';
+import { AnswerBubble } from '../layout/answer-bubble';
+import { fetchDiffFile } from '../../lib/api';
+import { diffOptions } from '../../queries/diff';
 import { tourMarks, marksByPath, focusRangesFromMarks, type TourFocusRange } from '../../lib/tour-marks';
 import { TourStepper } from './tour-stepper';
 import { useCommentActions } from '../../hooks/use-comment-actions';
@@ -28,7 +35,7 @@ import { PageLoader } from '../layout/skeleton';
 import { useDiffStaleness } from '../../hooks/use-diff-staleness';
 import { type ViewMode, getFilePath, getAutoCollapsedPaths } from '../../lib/diff-utils';
 import { buildFirstOpenThreadByFile, buildThreadCountsByFile } from '../../lib/comment-navigation';
-import { getHunkHeaders, scrollToElement } from '../../lib/dom-utils';
+import { getHunkHeaders, scrollToElement, threadBounds } from '../../lib/dom-utils';
 import {
   fingerprintFiles,
   loadViewedFiles,
@@ -38,6 +45,7 @@ import {
 } from '../../lib/viewed-storage';
 import { fetchGitHubDetails, type GitHubDetails } from '../../lib/api';
 import type { LineSelection } from '../comments/types';
+import type { ParsedDiff } from '@diffity/parser';
 import { isThreadResolved } from '../comments/types';
 
 export function DiffPage() {
@@ -67,7 +75,7 @@ export function DiffPage() {
   const reviewsEnabled = !!info?.capabilities?.reviews;
   const sessionId = info?.sessionId ?? null;
   const canRevert = !!info?.capabilities?.revert;
-  const { isStale, resetStaleness } = useDiffStaleness(refParam, !!info?.capabilities?.staleness);
+  const { isStale, staleFiles, resetStaleness, acknowledgeFile } = useDiffStaleness(refParam, !!info?.capabilities?.staleness);
   const [githubDetails, setGithubDetails] = useState<GitHubDetails | null>(null);
 
   useEffect(() => {
@@ -268,6 +276,14 @@ export function DiffPage() {
     requestAnimationFrame(() => diffViewRef.current?.scrollToFile(wasReading));
   }, [orderedDiff, repoRoot, refParam]);
 
+  // Git reports a rename as `src/{old.ts => new.ts}`, which is never a path in the file list. Naming
+  // it would point the reader at a file they cannot find, so anything unmatched falls back to the
+  // count — the whole-diff refresh still covers it.
+  const namedStaleFiles = useMemo(
+    () => staleFiles.filter(path => diffPaths.includes(path)),
+    [staleFiles, diffPaths],
+  );
+
   const handleReviewedChange = useCallback((path: string, reviewed: boolean) => {
     setReviewedFiles((prev) => {
       const next = new Set(prev);
@@ -414,6 +430,27 @@ export function DiffPage() {
     queryClient.invalidateQueries({ queryKey: ['diff'] });
   }, [queryClient]);
 
+  // Reloading one file rather than the diff. Everything the reader has not asked about keeps its
+  // object identity, so their collapse states, their place and the rest of the page are untouched.
+  const handleRefreshFile = useCallback(async (path: string) => {
+    const fresh = await fetchDiffFile(path, hideWhitespace, refParam);
+    queryClient.setQueryData<ParsedDiff>(
+      diffOptions(hideWhitespace, refParam).queryKey,
+      current => {
+        if (!current) {
+          return current;
+        }
+        const patched = patchDiffFile(current, path, fresh);
+        // A patched diff is the same reading of the same diff, so it is already initialised. Left
+        // unsaid, the initialiser would re-derive the viewed set and every collapse state — which
+        // is the cost that replacing one file exists to avoid.
+        initializedDiffRef.current = patched;
+        return patched;
+      },
+    );
+    acknowledgeFile(path);
+  }, [hideWhitespace, refParam, queryClient, acknowledgeFile]);
+
   const handleRefreshDiff = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['diff'] });
     resetStaleness();
@@ -436,6 +473,66 @@ export function DiffPage() {
     });
     diffViewRef.current?.scrollToThread(threadId, filePath);
   }, []);
+
+  // An answer arrives while the reader has moved on, and the thread is somewhere off screen. Held
+  // until they follow it or send it away — and dropped the moment the thread comes into view, since
+  // seeing the reply is an answer to the bubble.
+  const [answerAlerts, setAnswerAlerts] = useState<AnswerAlert[]>([]);
+  const seenThreadsRef = useRef<typeof threads | null>(null);
+
+  useEffect(() => {
+    const arrived = newAnswers(seenThreadsRef.current, threads);
+    seenThreadsRef.current = threads;
+    if (arrived.length === 0) {
+      return;
+    }
+    setAnswerAlerts(prev => [
+      ...prev.filter(alert => !arrived.some(fresh => fresh.threadId === alert.threadId)),
+      ...arrived.filter(alert => {
+        const bounds = threadBounds(alert.threadId);
+        return !bounds || whereIsThread(bounds.thread, bounds.viewport) !== 'on-screen';
+      }),
+    ]);
+  }, [threads]);
+
+  const [alertPosition, setAlertPosition] = useState<ThreadPosition>('below');
+
+  // Both of these have to follow the reader rather than being decided once: a note about a thread
+  // they have since scrolled to is noise, and one pointing down at something now above them is
+  // worse than none. The active file changes far too rarely to hang either off.
+  useEffect(() => {
+    if (answerAlerts.length === 0) {
+      return;
+    }
+
+    const container = document.querySelector('main.overflow-y-auto');
+
+    const settle = () => {
+      const newest = answerAlerts[answerAlerts.length - 1];
+      const bounds = newest ? threadBounds(newest.threadId) : null;
+      setAlertPosition(
+        bounds && whereIsThread(bounds.thread, bounds.viewport) === 'above' ? 'above' : 'below',
+      );
+      setAnswerAlerts(prev =>
+        dropSeenAlerts(prev, threadId => {
+          const seen = threadBounds(threadId);
+          return !!seen && whereIsThread(seen.thread, seen.viewport) === 'on-screen';
+        }),
+      );
+    };
+
+    settle();
+    container?.addEventListener('scroll', settle, { passive: true });
+    return () => container?.removeEventListener('scroll', settle);
+  }, [answerAlerts]);
+
+  const handleGoToAnswer = useCallback((threadId: string) => {
+    const alert = answerAlerts.find(a => a.threadId === threadId);
+    setAnswerAlerts([]);
+    if (alert) {
+      handleScrollToThread(threadId, alert.filePath);
+    }
+  }, [answerAlerts, handleScrollToThread]);
 
   const handleSidebarCommentedFileClick = useCallback((path: string) => {
     const threadId = firstOpenThreadByFile.get(path);
@@ -516,7 +613,7 @@ export function DiffPage() {
         sessionId={sessionId}
         onGitHubPulled={() => queryClient.invalidateQueries({ queryKey: ['threads'] })}
       />
-      {isStale && <StaleDiffBanner onRefresh={handleRefreshDiff} />}
+      {isStale && <StaleDiffBanner onRefresh={handleRefreshDiff} message={staleMessage(namedStaleFiles)} />}
       <PullRequestPanel details={githubDetails} hasPullRequest={!!info?.github} repoRoot={repoRoot} />
       {info?.review?.inProgress && (
         <ReviewProgressBanner review={info.review} findings={threads.length} />
@@ -528,7 +625,13 @@ export function DiffPage() {
           onStepChange={handleTourStepChange}
         />
       )}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="relative flex flex-1 overflow-hidden">
+        <AnswerBubble
+          alerts={answerAlerts}
+          position={alertPosition}
+          onGo={handleGoToAnswer}
+          onDismiss={() => setAnswerAlerts([])}
+        />
         <Sidebar
           files={orderedDiff?.files || []}
           activeFile={activeFile}
@@ -570,6 +673,8 @@ export function DiffPage() {
             pendingSelection={pendingSelection}
             onPendingSelectionChange={setPendingSelection}
             focusRangesByFile={focusRangesByFile}
+            staleFiles={staleFiles}
+            onRefreshFile={handleRefreshFile}
             onAskThread={canAsk ? handleAskThread : undefined}
             onAskReply={canAsk ? handleAskReply : undefined}
             askIsHeard={askIsHeard}

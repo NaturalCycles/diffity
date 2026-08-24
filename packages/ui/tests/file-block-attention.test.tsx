@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, cleanup } from '@testing-library/react';
+import { render, cleanup, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { DiffFile, DiffHunk, DiffLine } from '@diffity/parser';
 import { FileBlock } from '../src/components/diff/file-block';
@@ -120,5 +120,43 @@ describe('FileBlock attention', () => {
     const dimmed = tbodyClasses().filter(c => c.includes('opacity-45'));
     expect(focused.length).toBeGreaterThan(0);
     expect(dimmed.length).toBeGreaterThan(0);
+  });
+});
+
+describe('a file that moved after the diff was loaded', () => {
+  it('offers to reload just itself', () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const onRefreshFile = vi.fn();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <FileBlock
+          file={file('src/a.ts', [hunkAt(40, [line('add', 'doWork();', 40)])])}
+          viewMode="unified"
+          collapsed={false}
+          onToggleCollapse={vi.fn()}
+          reviewed={false}
+          onReviewedChange={vi.fn()}
+          threads={[]}
+          commentsEnabled={false}
+          commentActions={commentActions}
+          onAddThread={vi.fn()}
+          pendingSelection={null}
+          onPendingSelectionChange={vi.fn()}
+          isStale
+          onRefreshFile={onRefreshFile}
+        />
+      </QueryClientProvider>,
+    );
+
+    const button = screen.getByRole('button', { name: /changed — reload/i });
+    button.click();
+
+    expect(onRefreshFile).toHaveBeenCalledWith('src/a.ts');
+  });
+
+  it('says nothing when it has not moved', () => {
+    renderFileBlock(file('src/a.ts', [hunkAt(40, [line('add', 'doWork();', 40)])]));
+
+    expect(screen.queryByRole('button', { name: /changed — reload/i })).toBeNull();
   });
 });

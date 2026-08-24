@@ -298,3 +298,33 @@ describe('a listener that waits', () => {
     expect(elapsed).toBeGreaterThanOrEqual(900);
   });
 });
+
+describe('one file at a time', () => {
+  it('returns just that file', async () => {
+    const { status, text } = await req('/api/diff/file?path=a.ts');
+    const { file } = JSON.parse(text) as { file: { newPath: string } | null };
+
+    expect(status).toBe(200);
+    expect(file?.newPath).toBe('a.ts');
+  });
+
+  // Null rather than an empty diff: an agent can undo its own edit, and the page has to tell
+  // "no longer differs" from "here it is".
+  it('returns nothing for a file that does not differ', async () => {
+    const { text } = await req('/api/diff/file?path=untouched.ts');
+
+    expect(JSON.parse(text)).toEqual({ file: null });
+  });
+
+  it('refuses a path outside the repository', async () => {
+    const { status } = await req('/api/diff/file?path=../outside.txt');
+
+    expect(status).toBe(400);
+  });
+
+  it('needs a path at all', async () => {
+    const { status } = await req('/api/diff/file');
+
+    expect(status).toBe(400);
+  });
+});

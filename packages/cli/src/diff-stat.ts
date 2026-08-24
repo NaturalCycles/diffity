@@ -31,3 +31,26 @@ export function parseDiffStatSummary(stat: string): DiffStatSummary {
     deletions: deletions ? Number(deletions[1]) : 0,
   };
 }
+
+/**
+ * A diffstat, file by file: each path against its own churn. One hash for the whole diff can only
+ * say that something changed, which in live mode — where an agent edits while you read — means the
+ * whole diff is declared stale every time one file moves.
+ */
+export function parseDiffStatFiles(stat: string): Record<string, string> {
+  const files: Record<string, string> = {};
+
+  for (const line of stat.split('\n')) {
+    const separator = line.lastIndexOf('|');
+    if (separator === -1) {
+      continue;
+    }
+    const path = line.slice(0, separator).trim();
+    const churn = line.slice(separator + 1).trim();
+    if (path) {
+      files[path] = churn;
+    }
+  }
+
+  return files;
+}

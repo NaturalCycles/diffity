@@ -1,4 +1,4 @@
-import type { ParsedDiff } from '@diffity/parser';
+import type { DiffFile, ParsedDiff } from '@diffity/parser';
 import type { CommentThread, CommentAuthor, CommentSide, Comment, CommentKind } from '../components/comments/types';
 
 export async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
@@ -108,9 +108,26 @@ export function fetchDiff(hideWhitespace: boolean, ref?: string): Promise<Parsed
   }));
 }
 
-export async function fetchDiffFingerprint(ref?: string): Promise<string> {
-  const json = await apiFetch<{ fingerprint: string }>(buildUrl('/api/diff-fingerprint', { ref }));
-  return json.fingerprint;
+export async function fetchDiffFile(
+  path: string,
+  hideWhitespace: boolean,
+  ref?: string,
+): Promise<DiffFile | null> {
+  const json = await apiFetch<{ file: DiffFile | null }>(
+    buildUrl('/api/diff/file', { path, ref, whitespace: hideWhitespace ? 'hide' : undefined }),
+  );
+  return json.file;
+}
+
+export interface DiffFingerprint {
+  fingerprint: string;
+  /** Each file against its own churn, so the page can say which ones moved. */
+  files: Record<string, string>;
+}
+
+export async function fetchDiffFingerprint(ref?: string): Promise<DiffFingerprint> {
+  const json = await apiFetch<DiffFingerprint>(buildUrl('/api/diff-fingerprint', { ref }));
+  return { fingerprint: json.fingerprint, files: json.files ?? {} };
 }
 
 export function fetchRepoInfo(ref?: string): Promise<RepoInfo> {

@@ -47,6 +47,7 @@ import {
   type ReviewEvent,
 } from '@diffity/github';
 import { findOrCreateSession, resolveSessionId } from './session.js';
+import { mayChangeCode } from './live-permissions.js';
 import {
   liveListenerCount,
   pendingLiveCount,
@@ -54,6 +55,7 @@ import {
   waitForLiveRequest,
 } from './live.js';
 import { computeDiffFingerprint } from './fingerprint.js';
+import { parseDiffStatFiles } from './diff-stat.js';
 import { parseDiffStatSummary } from './diff-stat.js';
 import { getReviewRun } from './review-run.js';
 import { createThread, addReply, getThreadsForSession, markThreadsSubmitted } from './threads.js';
@@ -317,6 +319,18 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
     // VS Code CLI not found
   }
 
+  // Who wrote the pull request does not change between two questions asked a minute apart, and the
+  // lookup is a subprocess on a path that is meant to feel immediate.
+  let authorshipCache: { viewerDidAuthor?: boolean } | null | undefined;
+  function authorship(): { viewerDidAuthor?: boolean } | null {
+    if (authorshipCache === undefined) {
+      authorshipCache = githubRemote
+        ? fetchGitHubDetails(githubRemote.owner, githubRemote.repo, prNumber)
+        : null;
+    }
+    return authorshipCache;
+  }
+
   const server = createServer(
     async (req: IncomingMessage, res: ServerResponse) => {
       try {
@@ -380,9 +394,30 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           const waitMs = Number.isFinite(waitSeconds)
             ? Math.min(Math.max(waitSeconds, 0), MAX_LIVE_WAIT_SECONDS) * 1000
             : 0;
-          waitForLiveRequest(sid, waitMs).then(
-            request => sendJson(res, { request }),
-            err => sendError(res, 500, `Failed to wait for a live request: ${err}`),
+          // The listener going away is the only reliable signal that it is no longer there, and
+          // presence is what the page shows. Without this it stayed counted until the wait ran out.
+          const listenerGone = new AbortController();
+          req.on('close', () => listenerGone.abort());
+
+          waitForLiveRequest(sid, waitMs, listenerGone.signal).then(
+            request => {
+              // The connection may already be gone; writing to it would throw rather than help.
+              if (res.writableEnded || listenerGone.signal.aborted) {
+                return;
+              }
+              if (!request) {
+                sendJson(res, { request: null });
+                return;
+              }
+              // Carried on the request rather than left for the agent to look up: a rule nobody
+              // has to remember is a rule that holds.
+              sendJson(res, { request: { ...request, mayChangeCode: mayChangeCode(authorship()) } });
+            },
+            err => {
+              if (!res.writableEnded && !listenerGone.signal.aborted) {
+                sendError(res, 500, `Failed to wait for a live request: ${err}`);
+              }
+            },
           );
           return;
         }
@@ -487,6 +522,11 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           const ref = url.searchParams.get('ref');
           sendJson(res, {
             fingerprint: computeDiffFingerprint(ref, diffArgs, includeUntracked),
+            // Per file as well as overall, so the page can say which files moved rather than
+            // declaring the whole diff stale because an agent touched one of them.
+            files: parseDiffStatFiles(
+              ref ? getDiffStatForRef(ref) : getDiffStat(diffArgs),
+            ),
           });
           return;
         }
@@ -501,6 +541,39 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             const args = diffArgs.length > 0 ? diffArgs : ['HEAD'];
             sendJson(res, { args: args.join(' ') });
           }
+          return;
+        }
+
+        // One file, so a page that knows only one file moved can replace only that one — reloading
+        // the whole diff to see it costs the reader their collapse states and their place.
+        if (pathname === '/api/diff/file') {
+          const ref = url.searchParams.get('ref');
+          const requested = url.searchParams.get('path');
+          if (!requested) {
+            sendError(res, 400, 'Missing path');
+            return;
+          }
+          const hiding = url.searchParams.get('whitespace') === 'hide';
+          const extraArgs = hiding ? ['-w'] : [];
+          const baseRef = ref ? resolveBaseRef(ref) : 'HEAD';
+
+          // Containment is checked before the path reaches git as a pathspec; the absolute form it
+          // returns is what git is given, since a pathspec outside the repository is a way out of it.
+          let contained: string;
+          try {
+            contained = resolveInRepo(requested);
+          } catch {
+            sendError(res, 400, 'Path is outside the repository');
+            return;
+          }
+
+          const raw = ref
+            ? resolveRef(ref, [...extraArgs, '--', contained])
+            : getFullDiff([...(hiding ? [...diffArgs, '-w'] : diffArgs), '--', contained]);
+          const parsed = enrichWithLineCounts(parseDiff(raw), baseRef);
+          // Null rather than an empty diff: the file may no longer differ at all, which the page
+          // has to be able to tell from "here it is, unchanged".
+          sendJson(res, { file: parsed.files[0] ?? null });
           return;
         }
 

@@ -312,3 +312,36 @@ describe('what the server says it wrote', () => {
     expect(stamp.sessionId).toBeTruthy();
   });
 });
+
+describe('a listener whose connection goes away', () => {
+  // Presence is a parked connection. Nothing noticed the connection closing, so `listening` kept
+  // saying yes for as long as the wait had left — up to four minutes of promising an answer.
+  it('stops being counted at once, not when its wait runs out', async () => {
+    const { waitForLiveRequest, liveListenerCount } = await import('../src/live.js');
+    // Sessions on one branch share their open threads, so an earlier case's request would be
+    // claimed here and this would never park at all.
+    await drainRequests();
+    const s = await session();
+    const controller = new AbortController();
+
+    const parked = waitForLiveRequest(s.id, 60_000, controller.signal);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(liveListenerCount(s.id)).toBe(1);
+
+    controller.abort();
+
+    expect(await parked).toBeNull();
+    expect(liveListenerCount(s.id)).toBe(0);
+  });
+
+  it('is already gone if the connection closed before it parked', async () => {
+    const { waitForLiveRequest, liveListenerCount } = await import('../src/live.js');
+    await drainRequests();
+    const s = await session();
+    const controller = new AbortController();
+    controller.abort();
+
+    expect(await waitForLiveRequest(s.id, 60_000, controller.signal)).toBeNull();
+    expect(liveListenerCount(s.id)).toBe(0);
+  });
+});
