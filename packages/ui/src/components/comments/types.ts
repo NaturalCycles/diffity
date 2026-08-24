@@ -78,6 +78,10 @@ export interface LineRenderProps {
   onDeleteComment?: (threadId: string, commentId: string) => void;
   onDeleteThread?: (threadId: string) => void;
   getOriginalCode?: (side: CommentSide, startLine: number, endLine: number) => string;
+  /** Hands a new comment or a reply to the agent, rather than leaving it for the code's author. */
+  onAskThread?: (filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor) => void;
+  onAskReply?: (threadId: string, body: string, author: CommentAuthor) => void;
+  askIsHeard?: boolean;
   tourMarks?: TourMark[];
   activeStepIndex?: number;
   onTourMarkClick?: (stepIndex: number) => void;

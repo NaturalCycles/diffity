@@ -11,10 +11,13 @@ interface CommentFormRowProps {
   onSubmit: (filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor) => void;
   onCancel: () => void;
   viewMode?: 'unified' | 'split';
+  /** Hands a brand-new comment to the agent — asking about code nobody has commented on yet. */
+  onAsk?: (filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor) => void;
+  askIsHeard?: boolean;
 }
 
 export function CommentFormRow(props: CommentFormRowProps) {
-  const { colSpan, filePath, side, startLine, endLine, currentAuthor, onSubmit, onCancel, viewMode } = props;
+  const { colSpan, filePath, side, startLine, endLine, currentAuthor, onSubmit, onCancel, viewMode, onAsk, askIsHeard } = props;
 
   const lineLabel = startLine === endLine
     ? `${startLine}`
@@ -24,6 +27,8 @@ export function CommentFormRow(props: CommentFormRowProps) {
     <div className="max-w-[700px]">
       <CommentForm
         onSubmit={(body) => onSubmit(filePath, side, startLine, endLine, body, currentAuthor)}
+        onAsk={onAsk && ((body) => onAsk(filePath, side, startLine, endLine, body, currentAuthor))}
+        askIsHeard={askIsHeard}
         onCancel={onCancel}
         lineLabel={`Add a comment on line${startLine !== endLine ? 's' : ''} ${lineLabel}`}
       />

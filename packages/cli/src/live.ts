@@ -14,7 +14,11 @@ export interface LiveRequest {
   side: string;
   startLine: number;
   endLine: number;
-  /** The finding the aside is about, so the agent can answer without another lookup. */
+  /**
+   * The finding the aside is about, so the agent can answer without another lookup. Null when the
+   * thread has no finding — asking about a line nobody had commented on starts one of those, and
+   * handing the question back as its own subject would be nonsense.
+   */
   findingBody: string | null;
 }
 
@@ -55,6 +59,7 @@ export function claimNextLiveRequest(sessionId: string): LiveRequest | null {
               c.author_name AS authorName, t.file_path AS filePath, t.side AS side,
               t.start_line AS startLine, t.end_line AS endLine,
               (SELECT f.body FROM comments f WHERE f.thread_id = t.id
+                 AND COALESCE(f.kind, 'review') = 'review'
                 ORDER BY f.created_at ASC, f.rowid ASC LIMIT 1) AS findingBody
          FROM comments c JOIN comment_threads t ON t.id = c.thread_id
         WHERE c.id = ?`,

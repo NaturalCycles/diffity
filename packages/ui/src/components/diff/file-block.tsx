@@ -4,7 +4,7 @@ import type { DiffHunk } from '@diffity/parser';
 import type { DiffFile, DiffLine as DiffLineType } from '@diffity/parser';
 import type { SyntaxToken } from '../../lib/syntax-token';
 import type { HighlightedTokens } from '../../hooks/use-highlighter';
-import type { CommentSide, LineSelection } from '../comments/types';
+import type { CommentAuthor, CommentSide, LineSelection } from '../comments/types';
 import { type ViewMode, getFilePath, buildChangeGroupPatch, extractLinesFromDiff, extractLinesFromExpandedLines } from '../../lib/diff-utils';
 import { classifyHunk, rangesIntersectingHunk, MECHANICAL_LABELS } from '../../lib/hunk-attention';
 import { anchorLineInHunks, type TourFocusRange, type TourMark } from '../../lib/tour-marks';
@@ -67,6 +67,9 @@ interface FileBlockProps {
   /** Which stop the header is showing, so the others are not dressed up as current. */
   activeStepIndex?: number;
   onTourMarkClick?: (stepIndex: number) => void;
+  onAskThread?: (filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor) => void;
+  onAskReply?: (threadId: string, body: string, author: CommentAuthor) => void;
+  askIsHeard?: boolean;
 }
 
 interface GapExpansion {
@@ -80,6 +83,7 @@ export function FileBlock(props: FileBlockProps) {
   const {
     file, viewMode, collapsed, onToggleCollapse, reviewed, onReviewedChange, highlightLine, baseRef, canRevert, onRevert, focusRanges,
     tourMarks, activeStepIndex, onTourMarkClick,
+    onAskThread, onAskReply, askIsHeard,
     threads: allThreads, commentsEnabled, commentActions, onAddThread: rawAddThread, pendingSelection, onPendingSelectionChange,
     highlighted, onHighlightEnd,
   } = props;
@@ -571,6 +575,9 @@ export function FileBlock(props: FileBlockProps) {
                     hunk={hunk}
                     attentionClass={attentionClass}
                     attentionTitle={attentionTitle}
+                    onAskThread={onAskThread}
+                    onAskReply={onAskReply}
+                    askIsHeard={askIsHeard}
                     tourMarks={tourMarks}
                     activeStepIndex={activeStepIndex}
                     onTourMarkClick={onTourMarkClick}

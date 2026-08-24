@@ -191,3 +191,47 @@ describe('what a thread sends to the forge', () => {
     expect(threadToPayload(thread).body).toContain('old reply');
   });
 });
+
+describe('a thread that is only a conversation', () => {
+  function askOnly(): CommentThread {
+    return {
+      id: 't2',
+      sessionId: 's',
+      filePath: 'src/a.ts',
+      side: 'new',
+      startLine: 4,
+      endLine: 4,
+      status: 'open',
+      createdAt: '2026-08-24T10:00:00.000Z',
+      updatedAt: '2026-08-24T10:00:00.000Z',
+      comments: [{
+        id: 'c0',
+        threadId: 't2',
+        body: 'what does this function do?',
+        kind: 'aside',
+        author: { name: 'You', type: 'user' },
+        createdAt: '2026-08-24T10:00:00.000Z',
+      }],
+    } as unknown as CommentThread;
+  }
+
+  // Asking about a line nobody has commented on starts a thread with no finding in it. Offering
+  // that to the forge would post an empty comment, or crash reading a first review comment that
+  // is not there.
+  it('is not offered to the forge', () => {
+    expect(isSubmittable(askOnly())).toBe(false);
+  });
+
+  it('is offered once a finding is added to it', () => {
+    const thread = askOnly();
+    thread.comments.push({
+      id: 'c1',
+      body: 'P2: and here is the finding',
+      kind: 'review',
+      author: { name: 'Agent', type: 'agent' },
+      createdAt: '2026-08-24T10:00:02.000Z',
+    } as unknown as CommentThread['comments'][number]);
+
+    expect(isSubmittable(thread)).toBe(true);
+  });
+});

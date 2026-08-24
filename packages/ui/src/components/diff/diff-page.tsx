@@ -11,7 +11,6 @@ import { useTours } from '../../hooks/use-tours';
 import { useHideWhitespace } from '../../hooks/use-hide-whitespace';
 import { pickActiveTour, orderPathsByTour, stopsByPath } from '../../lib/tour-order';
 import { TOUR_NOT_STARTED, clampTourStep } from '../../lib/tour-navigation';
-import { readLiveMode, writeLiveMode } from '../../lib/live-mode';
 import { tourMarks, marksByPath, focusRangesFromMarks, type TourFocusRange } from '../../lib/tour-marks';
 import { TourStepper } from './tour-stepper';
 import { useCommentActions } from '../../hooks/use-comment-actions';
@@ -82,33 +81,27 @@ export function DiffPage() {
   const threads = reviewsEnabled && serverThreads ? serverThreads : [];
   const commentActions = useCommentActions(sessionId, reviewsEnabled);
 
-  const [liveMode, setLiveMode] = useState(false);
-  // Read once the page knows which checkout and branch it is showing, since that is what the
-  // setting belongs to.
-  useEffect(() => {
-    if (!info?.root || !info?.branch || typeof window === 'undefined') {
-      return;
-    }
-    setLiveMode(readLiveMode(window.localStorage, info.root, info.branch));
-  }, [info?.root, info?.branch]);
+  // Asking is a button on the comment box, not a mode: a mode you have to remember is a mode you
+  // forget, and the first version of this answered three comments with silence because of it.
+  const canAsk = !!info?.live?.enabled && reviewsEnabled;
+  const askIsHeard = !!info?.live?.listening;
 
-  const handleLiveModeChange = useCallback((on: boolean) => {
-    setLiveMode(on);
-    if (info?.root && info?.branch && typeof window !== 'undefined') {
-      writeLiveMode(window.localStorage, info.root, info.branch, on);
-    }
-  }, [info?.root, info?.branch]);
+  const handleAskReply = useCallback(
+    (threadId: string, body: string, author: Parameters<typeof commentActions.addReply>[2]) =>
+      commentActions.addReply(threadId, body, author, { aside: true, live: true }),
+    [commentActions],
+  );
 
-  // With live on, a reply is a question for the agent rather than a note for whoever wrote the
-  // code — so it is an aside, and it asks. Findings you start are still review comments, which is
-  // why this wraps the reply and nothing else.
-  const liveCommentActions = useMemo(
-    () => ({
-      ...commentActions,
-      addReply: (threadId: string, body: string, author: Parameters<typeof commentActions.addReply>[2]) =>
-        commentActions.addReply(threadId, body, author, liveMode ? { aside: true, live: true } : undefined),
-    }),
-    [commentActions, liveMode],
+  const handleAskThread = useCallback(
+    (
+      filePath: string,
+      side: Parameters<typeof commentActions.addThread>[1],
+      startLine: number,
+      endLine: number,
+      body: string,
+      author: Parameters<typeof commentActions.addThread>[5],
+    ) => commentActions.addThread(filePath, side, startLine, endLine, body, author, undefined, { aside: true, live: true }),
+    [commentActions],
   );
   const commentCountsByFile = useMemo(() => buildThreadCountsByFile(threads), [threads]);
 
@@ -498,8 +491,6 @@ export function DiffPage() {
         githubDetails={githubDetails}
         reviewInProgress={!!info?.review?.inProgress}
         live={info?.live}
-        liveMode={liveMode}
-        onLiveModeChange={handleLiveModeChange}
         sessionId={sessionId}
         onGitHubPulled={() => queryClient.invalidateQueries({ queryKey: ['threads'] })}
       />
@@ -552,11 +543,14 @@ export function DiffPage() {
             }}
             threads={threads}
             commentsEnabled={reviewsEnabled}
-            commentActions={liveCommentActions}
+            commentActions={commentActions}
             onAddThread={handleAddThread}
             pendingSelection={pendingSelection}
             onPendingSelectionChange={setPendingSelection}
             focusRangesByFile={focusRangesByFile}
+            onAskThread={canAsk ? handleAskThread : undefined}
+            onAskReply={canAsk ? handleAskReply : undefined}
+            askIsHeard={askIsHeard}
             tourMarksByFile={tourMarksByFile}
             activeStepIndex={activeStepIndex}
             onTourMarkClick={handleTourStepChange}

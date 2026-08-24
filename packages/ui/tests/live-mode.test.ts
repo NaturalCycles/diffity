@@ -1,11 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import {
-  liveModeKey,
-  readLiveMode,
-  writeLiveMode,
-  requestStateOf,
-  isAside,
-} from '../src/lib/live-mode';
+import { requestStateOf, isAside } from '../src/lib/live-mode';
 import type { Comment } from '../src/components/comments/types';
 
 function comment(fields: Partial<Comment>): Comment {
@@ -17,48 +11,6 @@ function comment(fields: Partial<Comment>): Comment {
     ...fields,
   } as Comment;
 }
-
-function fakeStorage(): Storage {
-  const map = new Map<string, string>();
-  return {
-    getItem: (k: string) => map.get(k) ?? null,
-    setItem: (k: string, v: string) => void map.set(k, v),
-    removeItem: (k: string) => void map.delete(k),
-    clear: () => map.clear(),
-    key: () => null,
-    length: 0,
-  } as unknown as Storage;
-}
-
-describe('remembering live mode', () => {
-  // Left on while working on your own repo, it must not still be on when the next tab is
-  // somebody else's pull request.
-  it('remembers it per checkout and branch', () => {
-    const store = fakeStorage();
-    writeLiveMode(store, '/home/me/proj', 'feature-a', true);
-
-    expect(readLiveMode(store, '/home/me/proj', 'feature-a')).toBe(true);
-    expect(readLiveMode(store, '/home/me/proj', 'feature-b')).toBe(false);
-    expect(readLiveMode(store, '/home/me/other', 'feature-a')).toBe(false);
-  });
-
-  it('is off until it is turned on', () => {
-    expect(readLiveMode(fakeStorage(), '/home/me/proj', 'main')).toBe(false);
-  });
-
-  it('can be turned back off', () => {
-    const store = fakeStorage();
-    writeLiveMode(store, '/p', 'b', true);
-    writeLiveMode(store, '/p', 'b', false);
-
-    expect(readLiveMode(store, '/p', 'b')).toBe(false);
-  });
-
-  it('keys on both, so neither alone collides', () => {
-    expect(liveModeKey('/p', 'b')).not.toBe(liveModeKey('/p', 'c'));
-    expect(liveModeKey('/p', 'b')).not.toBe(liveModeKey('/q', 'b'));
-  });
-});
 
 describe('what a thread says about a request', () => {
   it('says nothing about a comment that asked for nothing', () => {

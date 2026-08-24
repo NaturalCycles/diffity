@@ -42,6 +42,16 @@ async function finding(body = 'P2: a finding') {
   return createThread(s.id, 'a.ts', 'new', 1, 1, body, agent);
 }
 
+
+async function drainRequests() {
+  const { claimNextLiveRequest } = await import('../src/live.js');
+  const s = await session();
+  while (claimNextLiveRequest(s.id)) {
+    // Sessions on one branch share their open threads by design, so earlier cases leave requests
+    // in this queue. A case about "the next one" has to start from empty.
+  }
+}
+
 describe('a comment kind', () => {
   it('is a review comment unless it says otherwise', async () => {
     const thread = await finding();
@@ -185,5 +195,35 @@ describe('a listener that died holding a request', () => {
     claimNextLiveRequest(s.id);
 
     expect(reclaimStaleLiveRequests(10)).toBe(0);
+  });
+});
+
+describe('asking about a line nobody has commented on', () => {
+  it('has no finding to be about', async () => {
+    const { createThread } = await import('../src/threads.js');
+    const { requestLive, claimNextLiveRequest } = await import('../src/live.js');
+    await drainRequests();
+    const s = await session();
+    const thread = createThread(
+      s.id, 'a.ts', 'new', 1, 1, 'what does this do?', you, undefined, 'aside',
+    );
+    requestLive(thread.comments[0].id);
+
+    const claimed = claimNextLiveRequest(s.id);
+
+    expect(claimed?.body).toBe('what does this do?');
+    expect(claimed?.findingBody).toBeNull();
+  });
+
+  it('still reports the finding when there is one', async () => {
+    const { createThread, addReply } = await import('../src/threads.js');
+    const { requestLive, claimNextLiveRequest } = await import('../src/live.js');
+    await drainRequests();
+    const s = await session();
+    const thread = createThread(s.id, 'a.ts', 'new', 2, 2, 'P2: the finding', agent);
+    const asked = addReply(thread.id, 'why?', you, 'aside');
+    requestLive(asked.id);
+
+    expect(claimNextLiveRequest(s.id)?.findingBody).toBe('P2: the finding');
   });
 });

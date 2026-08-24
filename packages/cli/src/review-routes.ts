@@ -50,16 +50,22 @@ export function handleReviewRoute(req: IncomingMessage, res: ServerResponse, pat
 
   if (pathname === '/api/threads' && req.method === 'POST') {
     withJsonBody(res, req, 'Failed to create thread', (body) => {
-      const { sessionId: sid, filePath, side, startLine, endLine, body: commentBody, author, anchorContent } = body;
+      const { sessionId: sid, filePath, side, startLine, endLine, body: commentBody, author, anchorContent, kind, live } = body;
       if (!sid || !filePath || !side || typeof startLine !== 'number' || typeof endLine !== 'number' || !commentBody || !author) {
         sendError(res, 400, 'Missing required fields');
         return;
       }
+      const threadKind: CommentKind = kind === 'aside' ? 'aside' : 'review';
       const thread = createThread(
         sid as string, filePath as string, side as string, startLine, endLine,
         commentBody as string, author as ThreadAuthor,
         anchorContent as string | undefined,
+        threadKind,
       );
+      if (live === true && threadKind === 'aside') {
+        requestLive(thread.comments[0].id);
+        notifyLiveListeners();
+      }
       sendJson(res, thread);
     });
     return true;

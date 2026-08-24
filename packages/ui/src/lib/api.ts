@@ -1,5 +1,5 @@
 import type { ParsedDiff } from '@diffity/parser';
-import type { CommentThread, CommentAuthor, CommentSide, Comment } from '../components/comments/types';
+import type { CommentThread, CommentAuthor, CommentSide, Comment, CommentKind } from '../components/comments/types';
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
@@ -166,6 +166,9 @@ export function createThread(data: {
   body: string;
   author: CommentAuthor;
   anchorContent?: string;
+  /** An aside starts a conversation rather than a finding, and is never posted. */
+  kind?: CommentKind;
+  live?: boolean;
 }): Promise<CommentThread> {
   return apiFetch('/api/threads', {
     method: 'POST',

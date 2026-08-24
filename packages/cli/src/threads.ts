@@ -164,6 +164,7 @@ export function createThread(
   body: string,
   author: ThreadAuthor,
   anchorContent?: string,
+  kind: CommentKind = 'review',
 ): Thread {
   const db = getDb();
   const threadId = randomUUID();
@@ -177,8 +178,8 @@ export function createThread(
   ).run(threadId, sessionId, filePath, side, startLine, endLine, anchorContent ?? null, now, now);
 
   db.prepare(
-    'INSERT INTO comments (id, thread_id, author_name, author_type, body, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(commentId, threadId, author.name, author.type, cleanBody, now);
+    'INSERT INTO comments (id, thread_id, author_name, author_type, body, kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).run(commentId, threadId, author.name, author.type, cleanBody, kind, now);
 
   return {
     id: threadId,
@@ -198,7 +199,7 @@ export function createThread(
       id: commentId,
       author,
       body: cleanBody,
-      kind: 'review',
+      kind,
       createdAt: now,
       liveRequestedAt: null,
       liveClaimedAt: null,
