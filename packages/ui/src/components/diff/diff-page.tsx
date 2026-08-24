@@ -15,6 +15,9 @@ import { liveStatusOptions } from '../../queries/live';
 import { readReadingPosition, writeReadingPosition } from '../../lib/reading-position';
 import { staleMessage } from '../../lib/stale-files';
 import { patchDiffFile } from '../../lib/patch-diff-file';
+import { newAnswers, type AnswerAlert } from '../../lib/answer-alerts';
+import { whereIsThread, type ThreadPosition } from '../../lib/thread-visibility';
+import { AnswerBubble } from '../layout/answer-bubble';
 import { fetchDiffFile } from '../../lib/api';
 import { diffOptions } from '../../queries/diff';
 import { tourMarks, marksByPath, focusRangesFromMarks, type TourFocusRange } from '../../lib/tour-marks';
@@ -32,7 +35,7 @@ import { PageLoader } from '../layout/skeleton';
 import { useDiffStaleness } from '../../hooks/use-diff-staleness';
 import { type ViewMode, getFilePath, getAutoCollapsedPaths } from '../../lib/diff-utils';
 import { buildFirstOpenThreadByFile, buildThreadCountsByFile } from '../../lib/comment-navigation';
-import { getHunkHeaders, scrollToElement } from '../../lib/dom-utils';
+import { getHunkHeaders, scrollToElement, threadBounds } from '../../lib/dom-utils';
 import {
   fingerprintFiles,
   loadViewedFiles,
@@ -471,6 +474,44 @@ export function DiffPage() {
     diffViewRef.current?.scrollToThread(threadId, filePath);
   }, []);
 
+  // An answer arrives while the reader has moved on, and the thread is somewhere off screen. Held
+  // until they follow it or send it away — and dropped the moment the thread comes into view, since
+  // seeing the reply is an answer to the bubble.
+  const [answerAlerts, setAnswerAlerts] = useState<AnswerAlert[]>([]);
+  const seenThreadsRef = useRef<typeof threads | null>(null);
+
+  useEffect(() => {
+    const arrived = newAnswers(seenThreadsRef.current, threads);
+    seenThreadsRef.current = threads;
+    if (arrived.length === 0) {
+      return;
+    }
+    setAnswerAlerts(prev => [
+      ...prev.filter(alert => !arrived.some(fresh => fresh.threadId === alert.threadId)),
+      ...arrived.filter(alert => {
+        const bounds = threadBounds(alert.threadId);
+        return !bounds || whereIsThread(bounds.thread, bounds.viewport) !== 'on-screen';
+      }),
+    ]);
+  }, [threads]);
+
+  const alertPosition = useMemo<ThreadPosition>(() => {
+    const newest = answerAlerts[answerAlerts.length - 1];
+    if (!newest) {
+      return 'below';
+    }
+    const bounds = threadBounds(newest.threadId);
+    return (bounds && whereIsThread(bounds.thread, bounds.viewport)) === 'above' ? 'above' : 'below';
+  }, [answerAlerts, activeFile]);
+
+  const handleGoToAnswer = useCallback((threadId: string) => {
+    const alert = answerAlerts.find(a => a.threadId === threadId);
+    setAnswerAlerts([]);
+    if (alert) {
+      handleScrollToThread(threadId, alert.filePath);
+    }
+  }, [answerAlerts, handleScrollToThread]);
+
   const handleSidebarCommentedFileClick = useCallback((path: string) => {
     const threadId = firstOpenThreadByFile.get(path);
     if (!threadId) {
@@ -562,7 +603,13 @@ export function DiffPage() {
           onStepChange={handleTourStepChange}
         />
       )}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="relative flex flex-1 overflow-hidden">
+        <AnswerBubble
+          alerts={answerAlerts}
+          position={alertPosition}
+          onGo={handleGoToAnswer}
+          onDismiss={() => setAnswerAlerts([])}
+        />
         <Sidebar
           files={orderedDiff?.files || []}
           activeFile={activeFile}
