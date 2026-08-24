@@ -7,7 +7,7 @@ import { useHighlighter } from '../../hooks/use-highlighter';
 import { type ViewMode, getFilePath } from '../../lib/diff-utils';
 import type { TourFocusRange, TourMark } from '../../lib/tour-marks';
 import { isScrolledPastFileTop } from '../../lib/collapse-anchor';
-import type { CommentThread, LineSelection } from '../comments/types';
+import type { CommentAuthor, CommentSide, CommentThread, LineSelection } from '../comments/types';
 import type { CommentActions } from '../../hooks/use-comment-actions';
 
 function flashThreadElement(element: Element) {
@@ -58,6 +58,9 @@ interface DiffViewProps {
   tourMarksByFile?: Map<string, TourMark[]>;
   activeStepIndex?: number;
   onTourMarkClick?: (stepIndex: number) => void;
+  onAskThread?: (filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor) => void;
+  onAskReply?: (threadId: string, body: string, author: CommentAuthor) => void;
+  askIsHeard?: boolean;
 }
 
 function estimateFileHeight(file: { hunks: { lines: { length: number } }[]; isBinary: boolean }, collapsed: boolean): number {
@@ -88,6 +91,9 @@ export function DiffView(props: DiffViewProps) {
     tourMarksByFile,
     activeStepIndex,
     onTourMarkClick,
+    onAskThread,
+    onAskReply,
+    askIsHeard,
   } = props;
   const { highlight } = useHighlighter();
   const scrollElementRef = useRef<HTMLElement>(null);
@@ -332,6 +338,9 @@ export function DiffView(props: DiffViewProps) {
             >
               <FileBlock
                 focusRanges={focusRangesByFile?.get(filePath)}
+                onAskThread={onAskThread}
+                onAskReply={onAskReply}
+                askIsHeard={askIsHeard}
                 tourMarks={tourMarksByFile?.get(filePath)}
                 activeStepIndex={activeStepIndex}
                 onTourMarkClick={onTourMarkClick}

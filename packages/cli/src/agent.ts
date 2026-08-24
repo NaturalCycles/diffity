@@ -10,9 +10,14 @@ import {
   getThread,
   addReply,
   updateThreadStatus,
+  editComment,
   type ThreadStatus,
   type Thread,
 } from './threads.js';
+import { answerLiveRequest, type LiveRequest } from './live.js';
+import { clampClientWait } from './live-wait.js';
+import { findInstanceForRepo, type RegistryEntry } from './registry.js';
+import { createHash } from 'node:crypto';
 import { createTour, addTourStep, updateTourStatus, deleteTour, deleteToursForSession } from './tours.js';
 import { readAnchor, clampToFile, countWorkingTreeLines } from './anchor.js';
 import { startReviewRun, finishReviewRun } from './review-run.js';
@@ -84,6 +89,60 @@ function formatThreadLine(thread: Thread): string {
   const sideLabel = thread.side === 'old' ? '(old)' : '(new)';
 
   return `${statusLabel.padEnd(22)} ${pc.dim(shortId)}  ${location} ${pc.dim(sideLabel)}\n${''.padEnd(15)}${pc.dim('"')}${truncated}${pc.dim('"')}`;
+}
+
+/** A `diffity agent await` that found nothing to do, told apart from one that failed. */
+const NOTHING_ASKED_EXIT_CODE = 3;
+
+interface LiveStatus {
+  available: boolean;
+  reason: string;
+  /**
+   * Reviewing is not editing. A pull request somebody else wrote may be asked about, never rewritten
+   * — so this is derived from who wrote it rather than from a setting somebody can leave on.
+   */
+  mayChangeCode: boolean;
+}
+
+async function fetchLiveStatus(port: number): Promise<LiveStatus | null> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/live/status`);
+    if (!res.ok) {
+      return null;
+    }
+    const info = { live: (await res.json()) as { enabled?: boolean; listening?: boolean } };
+    if (!info.live?.enabled) {
+      return { available: false, reason: 'the server is not bound to loopback', mayChangeCode: false };
+    }
+
+    const details = await fetch(`http://127.0.0.1:${port}/api/github/details`);
+    const pr = details.ok ? ((await details.json()) as { viewerDidAuthor?: boolean } | null) : null;
+    // No pull request means this is your own working tree, which is the case changes exist for.
+    return { available: true, reason: '', mayChangeCode: pr ? pr.viewerDidAuthor === true : true };
+  } catch {
+    return null;
+  }
+}
+
+function findRunningInstance(): RegistryEntry | null {
+  const repoRoot = getRepoRoot();
+  if (!repoRoot) {
+    return null;
+  }
+  return findInstanceForRepo(createHash('sha256').update(repoRoot).digest('hex').slice(0, 12));
+}
+
+/**
+ * The thread a comment belongs to, if that thread has already gone to the forge. Amending then
+ * leaves the pull request showing the old wording, which the reader has to be told.
+ */
+function findSubmittedThreadForComment(commentId: string, sessionId: string): Thread | null {
+  for (const thread of getThreadsForSession(sessionId)) {
+    if (thread.submittedAt && thread.comments.some(comment => comment.id === commentId)) {
+      return thread;
+    }
+  }
+  return null;
 }
 
 export function registerAgentCommands(program: Command): void {
@@ -215,11 +274,138 @@ Examples:
     .description('Reply to a comment thread')
     .argument('<thread-id>', 'Thread ID (or 8-char prefix)')
     .requiredOption('--body <text>', 'Reply body')
-    .action((id: string, opts) => {
+    .option('--aside', 'A note for the reader that never goes to the forge')
+    .option('--answers <comment-id>', 'The request this answers, so the page stops waiting on it')
+    .action((id: string, opts: { body: string; aside?: boolean; answers?: string }) => {
       const session = requireSession();
       const thread = resolveThreadId(id, session.id);
-      addReply(thread.id, opts.body, { name: 'Agent', type: 'agent' });
+      addReply(thread.id, opts.body, { name: 'Agent', type: 'agent' }, opts.aside ? 'aside' : 'review');
+      if (opts.answers && !answerLiveRequest(opts.answers)) {
+        console.error(
+          pc.yellow(
+            `No request matched ${opts.answers}, so the page still says an agent is working on it.`,
+          ),
+        );
+      }
       console.log(pc.green(`Replied to thread ${thread.id.slice(0, 8)}`));
+    });
+
+  agent
+    .command('await')
+    .description('Wait for the reader to ask something, then exit so the agent can answer')
+    .option('--timeout <seconds>', 'How long to wait before giving up', '900')
+    .action(async (opts: { timeout: string }) => {
+      requireSession();
+      const instance = findRunningInstance();
+      if (!instance) {
+        console.error(pc.red('No diffity is running for this repository — start one first'));
+        process.exitCode = 1;
+        return;
+      }
+
+      const asked = Number(opts.timeout);
+      const wait = clampClientWait(asked);
+      if (Number.isFinite(asked) && asked > wait) {
+        console.error(
+          pc.dim(`Waiting ${wait}s at a time (node abandons a request after 300s without headers) — re-arm to keep going.`),
+        );
+      }
+      const startedAt = Date.now();
+      let payload: { request: LiveRequest | null };
+      try {
+        const res = await fetch(`http://127.0.0.1:${instance.port}/api/live/claim?wait=${wait}`, {
+          method: 'POST',
+        });
+        if (!res.ok) {
+          console.error(pc.red(`Could not wait for a request: ${res.status} ${await res.text()}`));
+          process.exitCode = 1;
+          return;
+        }
+        payload = (await res.json()) as { request: LiveRequest | null };
+      } catch (err) {
+        // `fetch failed` on its own says nothing about why a held connection went away, and a
+        // listener dying early is the failure that matters most here. The cause and how long it
+        // lasted are the two things worth having next time.
+        const seconds = Math.round((Date.now() - startedAt) / 1000);
+        const cause = (err as { cause?: unknown }).cause;
+        console.error(
+          pc.red(
+            `Waiting on port ${instance.port} ended after ${seconds}s of ${wait}s: ${err}`
+              + (cause ? `\n  cause: ${cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause)}` : ''),
+          ),
+        );
+        process.exitCode = 1;
+        return;
+      }
+
+      if (!payload.request) {
+        // Its own code, so a loop can tell "nobody asked" from "something broke" and re-arm.
+        console.log(pc.dim('Nothing was asked'));
+        process.exitCode = NOTHING_ASKED_EXIT_CODE;
+        return;
+      }
+
+      // stdout is the request, so a script can parse it. The directive goes to stderr, because the
+      // turn this wakes up may be a long way from whatever armed the loop.
+      console.error(
+        pc.cyan(
+          'A request came back from the review page. Answer it in the thread, amend the finding it '
+            + 'is about, or make the change — then re-arm with `agent await`. The diffity-live skill '
+            + 'has the detail.',
+        ),
+      );
+      console.log(JSON.stringify(payload.request, null, 2));
+    });
+
+  agent
+    .command('live-status')
+    .description('Whether the review page can reach an agent, and what it is allowed to ask for')
+    .option('--json', 'Output as JSON')
+    .action(async (opts: { json?: boolean }) => {
+      requireSession();
+      const instance = findRunningInstance();
+      const status = instance ? await fetchLiveStatus(instance.port) : null;
+
+      if (opts.json) {
+        console.log(JSON.stringify(status ?? { available: false, reason: 'no diffity is running' }));
+        return;
+      }
+
+      if (!status) {
+        console.log(pc.yellow('No diffity is running for this repository'));
+        return;
+      }
+      if (!status.available) {
+        console.log(pc.yellow(`Live mode is not available: ${status.reason}`));
+        return;
+      }
+      console.log(
+        pc.green(
+          `Live mode is available. ${status.mayChangeCode ? 'Changes are allowed — this is your own work.' : 'Answers and amendments only — this pull request is somebody else\'s.'}`,
+        ),
+      );
+    });
+
+  agent
+    .command('amend')
+    .description("Rewrite a comment's body — the way an aside improves the finding it is about")
+    .argument('<comment-id>', 'Comment to rewrite')
+    .requiredOption('--body <text>', 'The new body')
+    .action((commentId: string, opts: { body: string }) => {
+      const session = requireSession();
+      const sent = findSubmittedThreadForComment(commentId, session.id);
+      editComment(commentId, opts.body);
+      if (sent) {
+        // The forge is showing the old wording and will keep showing it; saying so is the only
+        // honest thing available, since a posted review comment cannot be edited from here.
+        console.log(
+          pc.yellow(
+            `Amended, but this finding was already sent${sent.submittedReviewUrl ? ` — ${sent.submittedReviewUrl}` : ''}. The pull request still shows the old wording.`,
+          ),
+        );
+        return;
+      }
+      console.log(pc.green('Amended'));
     });
 
   agent

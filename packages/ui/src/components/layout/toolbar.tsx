@@ -12,6 +12,7 @@ import { GitHubIcon } from '../icons/github-icon';
 import { DiffStats } from '../diff/diff-stats';
 import { GitHubDialog } from './github-dialog';
 import { CommentToolbarActions } from '../comments/comment-toolbar-actions';
+import { LiveIndicator } from './live-indicator';
 import { OptionsMenu, menuItemClass } from './options-menu';
 import { GENERAL_THREAD_FILE_PATH } from '../comments/types';
 import type { ViewMode } from '../../lib/diff-utils';
@@ -20,6 +21,7 @@ import { isThreadResolved } from '../comments/types';
 
 interface ToolbarProps {
   reviewInProgress?: boolean;
+  live?: { enabled: boolean; listening: boolean; waiting: number };
   viewMode: ViewMode;
   onViewModeChange: (mode: ViewMode) => void;
   hideWhitespace: boolean;
@@ -135,6 +137,7 @@ export function Toolbar(props: ToolbarProps) {
     description,
     githubDetails,
     reviewInProgress,
+    live,
     sessionId,
     onGitHubPulled,
   } = props;
@@ -179,6 +182,9 @@ export function Toolbar(props: ToolbarProps) {
         )}
       </div>
       <div className="flex items-center gap-2 ml-auto shrink-0">
+        {live && (
+          <LiveIndicator enabled={live.enabled} listening={live.listening} waiting={live.waiting} />
+        )}
         <SegmentedToggle options={viewModeOptions} value={viewMode} onChange={onViewModeChange} />
         <CommentToolbarActions
           threads={threads}

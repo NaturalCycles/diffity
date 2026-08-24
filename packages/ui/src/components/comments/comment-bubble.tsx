@@ -3,12 +3,33 @@ import type { Comment } from './types';
 import { PencilIcon } from '../icons/pencil-icon';
 import { TrashIcon } from '../icons/trash-icon';
 import { MarkdownContent } from '../layout/markdown-content';
+import { isAside, requestStateOf, type RequestState } from '../../lib/live-mode';
 
 interface CommentBubbleProps {
   comment: Comment;
   onEdit: (body: string) => void;
   onDelete: () => void;
 }
+
+// A request can sit unanswered for half a minute, and without this that looks like nothing
+// happening at all.
+const REQUEST_LABELS: Record<RequestState, string> = {
+  waiting: 'asked',
+  working: 'agent is on it',
+  answered: 'answered',
+};
+
+const REQUEST_TITLES: Record<RequestState, string> = {
+  waiting: 'Sent to the agent. Nobody has picked it up yet.',
+  working: 'An agent has this and is working on it.',
+  answered: 'The agent has answered.',
+};
+
+const REQUEST_STYLES: Record<RequestState, string> = {
+  waiting: 'bg-modified/15 text-modified',
+  working: 'bg-accent/15 text-accent',
+  answered: 'bg-added/15 text-added',
+};
 
 function formatRelativeTime(dateStr: string): string {
   const date = new Date(dateStr);
@@ -94,6 +115,8 @@ export function CommentBubble(props: CommentBubbleProps) {
     }
   };
 
+  const requestState = requestStateOf(comment);
+
   return (
     <div className="px-1.5 py-1 first:pt-1.5 last:pb-1.5 group">
       <div className="bg-bg rounded-lg px-3 py-2.5">
@@ -104,6 +127,22 @@ export function CommentBubble(props: CommentBubbleProps) {
             <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-accent/15 text-accent font-medium">bot</span>
           )}
           <span className="text-[11px] text-text-muted">{formatRelativeTime(comment.createdAt)}</span>
+          {isAside(comment) && (
+            <span
+              className="text-[10px] px-1.5 py-0.5 rounded-full bg-bg-tertiary text-text-muted font-medium"
+              title="Stays on this machine. Asides are never sent to the pull request."
+            >
+              aside
+            </span>
+          )}
+          {requestState && (
+            <span
+              className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${REQUEST_STYLES[requestState]}`}
+              title={REQUEST_TITLES[requestState]}
+            >
+              {REQUEST_LABELS[requestState]}
+            </span>
+          )}
           {!isEditing && (
             <div className="ml-auto flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
               <button

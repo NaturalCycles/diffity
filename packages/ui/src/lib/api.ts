@@ -1,7 +1,7 @@
 import type { ParsedDiff } from '@diffity/parser';
-import type { CommentThread, CommentAuthor, CommentSide, Comment } from '../components/comments/types';
+import type { CommentThread, CommentAuthor, CommentSide, Comment, CommentKind } from '../components/comments/types';
 
-async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
+export async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
   if (!res.ok) {
     const json = await res.json().catch(() => null);
@@ -160,6 +160,9 @@ export function createThread(data: {
   body: string;
   author: CommentAuthor;
   anchorContent?: string;
+  /** An aside starts a conversation rather than a finding, and is never posted. */
+  kind?: CommentKind;
+  live?: boolean;
 }): Promise<CommentThread> {
   return apiFetch('/api/threads', {
     method: 'POST',
@@ -168,11 +171,28 @@ export function createThread(data: {
   });
 }
 
-export function replyToThread(threadId: string, body: string, author: CommentAuthor): Promise<Comment> {
+export interface ReplyOptions {
+  /** An aside stays on this machine. Only an aside can ask the agent for anything. */
+  aside?: boolean;
+  /** Ask the agent to answer, amend or act on it. */
+  live?: boolean;
+}
+
+export function replyToThread(
+  threadId: string,
+  body: string,
+  author: CommentAuthor,
+  options: ReplyOptions = {},
+): Promise<Comment> {
   return apiFetch(`/api/threads/${threadId}/reply`, {
     method: 'POST',
     headers: JSON_HEADERS,
-    body: JSON.stringify({ body, author }),
+    body: JSON.stringify({
+      body,
+      author,
+      kind: options.aside ? 'aside' : 'review',
+      live: options.live === true,
+    }),
   });
 }
 

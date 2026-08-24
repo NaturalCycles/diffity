@@ -45,6 +45,9 @@ interface HunkWithGapProps {
   filePath?: string;
   onRevertChange?: (hunk: DiffHunk, startIndex: number, endIndex: number) => void;
   getOriginalCode?: (side: CommentSide, startLine: number, endLine: number) => string;
+  onAskThread?: (filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor) => void;
+  onAskReply?: (threadId: string, body: string, author: CommentAuthor) => void;
+  askIsHeard?: boolean;
   tourMarks?: TourMark[];
   activeStepIndex?: number;
   onTourMarkClick?: (stepIndex: number) => void;
@@ -58,6 +61,7 @@ export function HunkWithGap(props: HunkWithGapProps) {
     onLineMouseDown, onLineMouseEnter, onCommentClick,
     onAddThread, onReply, onResolve, onUnresolve, onEditComment, onDeleteComment, onDeleteThread,
     onCancelPending, filePath, onRevertChange, getOriginalCode,
+    onAskThread, onAskReply, askIsHeard,
     tourMarks, activeStepIndex, onTourMarkClick,
   } = props;
 
@@ -77,6 +81,7 @@ export function HunkWithGap(props: HunkWithGapProps) {
     threads, pendingSelection, currentAuthor,
     onAddThread, onReply, onResolve, onUnresolve, onEditComment, onDeleteComment, onDeleteThread,
     onCancelPending, filePath,
+    onAskThread, onAskReply, askIsHeard,
     tourMarks, activeStepIndex, onTourMarkClick,
   };
 
@@ -120,6 +125,9 @@ export function HunkWithGap(props: HunkWithGapProps) {
         filePath={filePath}
         onRevertChange={onRevertChange}
         getOriginalCode={getOriginalCode}
+        onAskThread={onAskThread}
+        onAskReply={onAskReply}
+        askIsHeard={askIsHeard}
         tourMarks={tourMarks}
         activeStepIndex={activeStepIndex}
         onTourMarkClick={onTourMarkClick}

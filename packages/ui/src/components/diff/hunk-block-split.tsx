@@ -42,6 +42,9 @@ interface HunkBlockSplitProps {
   filePath?: string;
   onRevertChange?: (hunk: DiffHunk, startIndex: number, endIndex: number) => void;
   getOriginalCode?: (side: CommentSide, startLine: number, endLine: number) => string;
+  onAskThread?: (filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor) => void;
+  onAskReply?: (threadId: string, body: string, author: CommentAuthor) => void;
+  askIsHeard?: boolean;
   tourMarks?: TourMark[];
   activeStepIndex?: number;
   onTourMarkClick?: (stepIndex: number) => void;
@@ -235,6 +238,8 @@ export function renderSplitRows(
             key={`thread-${thread.id}`}
             thread={thread}
             onReply={props.onReply!}
+            onAskReply={props.onAskReply}
+            askIsHeard={props.askIsHeard}
             onResolve={props.onResolve!}
             onUnresolve={props.onUnresolve!}
             onEditComment={props.onEditComment!}
@@ -258,6 +263,8 @@ export function renderSplitRows(
             key={`thread-${thread.id}`}
             thread={thread}
             onReply={props.onReply!}
+            onAskReply={props.onAskReply}
+            askIsHeard={props.askIsHeard}
             onResolve={props.onResolve!}
             onUnresolve={props.onUnresolve!}
             onEditComment={props.onEditComment!}
@@ -287,6 +294,8 @@ export function renderSplitRows(
             endLine={props.pendingSelection.endLine}
             currentAuthor={props.currentAuthor}
             onSubmit={props.onAddThread}
+            onAsk={props.onAskThread}
+            askIsHeard={props.askIsHeard}
             onCancel={props.onCancelPending}
             viewMode="split"
           />
@@ -309,6 +318,7 @@ export function HunkBlockSplit(props: HunkBlockSplitProps) {
     onLineMouseDown, onLineMouseEnter, onCommentClick,
     onAddThread, onReply, onResolve, onUnresolve, onEditComment, onDeleteComment, onDeleteThread,
     onCancelPending, filePath, onRevertChange, getOriginalCode,
+    onAskThread, onAskReply, askIsHeard,
     tourMarks, activeStepIndex, onTourMarkClick,
   } = props;
 
@@ -317,6 +327,7 @@ export function HunkBlockSplit(props: HunkBlockSplitProps) {
     threads, pendingSelection, currentAuthor,
     onAddThread, onReply, onResolve, onUnresolve, onEditComment, onDeleteComment, onDeleteThread,
     onCancelPending, filePath, getOriginalCode,
+    onAskThread, onAskReply, askIsHeard,
     tourMarks, activeStepIndex, onTourMarkClick,
   };
 

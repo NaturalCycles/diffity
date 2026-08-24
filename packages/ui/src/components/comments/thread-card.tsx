@@ -12,6 +12,9 @@ interface ThreadCardProps {
   onDeleteComment: (commentId: string) => void;
   onDeleteThread: () => void;
   onReply?: (body: string) => void;
+  /** Hands the reply to the agent instead. Absent when no agent can be reached. */
+  onAskReply?: (body: string) => void;
+  askIsHeard?: boolean;
   onResolve?: () => void;
   onUnresolve?: () => void;
   headerLeft?: React.ReactNode;
@@ -33,7 +36,7 @@ export function ThreadCard(props: ThreadCardProps) {
     headerRight,
     className,
     children,
-  } = props;
+   onAskReply, askIsHeard,} = props;
   const [showReply, setShowReply] = useState(false);
   const resolved = isThreadResolved(thread);
 
@@ -90,6 +93,11 @@ export function ThreadCard(props: ThreadCardProps) {
                 onReply(body);
                 setShowReply(false);
               }}
+              onAsk={onAskReply && ((body) => {
+                onAskReply(body);
+                setShowReply(false);
+              })}
+              askIsHeard={askIsHeard}
               onCancel={() => setShowReply(false)}
               placeholder="Reply..."
               submitLabel="Reply"

@@ -10,7 +10,9 @@ import {
   deleteComment,
   type ThreadAuthor,
   type ThreadStatus,
+  type CommentKind,
 } from './threads.js';
+import { requestLive, notifyLiveListeners } from './live.js';
 import { getCurrentSession, resolveSessionId } from './session.js';
 import { sendJson, sendError, withJsonBody } from './http-utils.js';
 
@@ -48,16 +50,23 @@ export function handleReviewRoute(req: IncomingMessage, res: ServerResponse, pat
 
   if (pathname === '/api/threads' && req.method === 'POST') {
     withJsonBody(res, req, 'Failed to create thread', (body) => {
-      const { sessionId: sid, filePath, side, startLine, endLine, body: commentBody, author, anchorContent } = body;
+      const { sessionId: sid, filePath, side, startLine, endLine, body: commentBody, author, anchorContent, kind, live } = body;
       if (!sid || !filePath || !side || typeof startLine !== 'number' || typeof endLine !== 'number' || !commentBody || !author) {
         sendError(res, 400, 'Missing required fields');
         return;
       }
+      const threadKind: CommentKind = kind === 'aside' ? 'aside' : 'review';
       const thread = createThread(
         sid as string, filePath as string, side as string, startLine, endLine,
         commentBody as string, author as ThreadAuthor,
         anchorContent as string | undefined,
+        threadKind,
       );
+      if (live === true && threadKind === 'aside') {
+        const stamp = requestLive(thread.comments[0].id);
+        thread.comments[0].liveRequestedAt = stamp.requestedAt;
+        notifyLiveListeners(stamp.sessionId);
+      }
       sendJson(res, thread);
     });
     return true;
@@ -66,13 +75,27 @@ export function handleReviewRoute(req: IncomingMessage, res: ServerResponse, pat
   const threadReplyMatch = pathname.match(/^\/api\/threads\/([^/]+)\/reply$/);
   if (threadReplyMatch && req.method === 'POST') {
     withJsonBody(res, req, 'Failed to add reply', (body) => {
-      const { body: commentBody, author } = body;
+      const { body: commentBody, author, kind, live } = body;
       if (!commentBody || !author) {
         sendError(res, 400, 'Missing body or author');
         return;
       }
-      const comment = addReply(threadReplyMatch[1], commentBody as string, author as ThreadAuthor);
-      sendJson(res, comment);
+      const commentKind: CommentKind = kind === 'aside' ? 'aside' : 'review';
+      const comment = addReply(
+        threadReplyMatch[1],
+        commentBody as string,
+        author as ThreadAuthor,
+        commentKind,
+      );
+      // Only an aside can ask the agent for something: a review comment is addressed to the pull
+      // request's author, and it is going to the forge rather than to a listener here.
+      let requestedAt: string | null = null;
+      if (live === true && commentKind === 'aside') {
+        const stamp = requestLive(comment.id);
+        requestedAt = stamp.requestedAt;
+        notifyLiveListeners(stamp.sessionId);
+      }
+      sendJson(res, { ...comment, liveRequestedAt: requestedAt });
     });
     return true;
   }

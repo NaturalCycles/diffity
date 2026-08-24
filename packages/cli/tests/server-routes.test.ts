@@ -166,3 +166,135 @@ describe('where the server listens', () => {
     delete process.env.DIFFITY_HOST;
   });
 });
+
+describe('the live loop', () => {
+  async function newThread(): Promise<string> {
+    const info = JSON.parse((await req('/api/info')).text) as { sessionId: string };
+    const created = await req('/api/threads', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: info.sessionId, filePath: 'a.ts', side: 'new',
+        startLine: 1, endLine: 1, body: 'P2: a finding',
+        author: { name: 'Agent', type: 'agent' },
+      }),
+    });
+    return (JSON.parse(created.text) as { id: string }).id;
+  }
+
+  it('reports that nobody is listening', async () => {
+    const status = JSON.parse((await req('/api/live/status')).text) as { listening: boolean };
+
+    expect(status.listening).toBe(false);
+  });
+
+  // On /api/info this changed the identity of the object half the page reads, so every arm and
+  // answer re-rendered the diff — which looked like the page reloading.
+  it('keeps the repo info free of it', async () => {
+    const info = JSON.parse((await req('/api/info')).text) as Record<string, unknown>;
+
+    expect(info.live).toBeUndefined();
+  });
+
+  it('has nothing to hand over when nothing was asked', async () => {
+    const claim = await req('/api/live/claim?wait=0', { method: 'POST' });
+
+    expect(claim.status).toBe(200);
+    expect(JSON.parse(claim.text)).toEqual({ request: null });
+  });
+
+  it('hands over an aside that asked for the agent', async () => {
+    const threadId = await newThread();
+    await req(`/api/threads/${threadId}/reply`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        body: 'what do you mean by the marker?',
+        author: { name: 'You', type: 'user' },
+        kind: 'aside',
+        live: true,
+      }),
+    });
+
+    const claim = await req('/api/live/claim?wait=0', { method: 'POST' });
+    const { request } = JSON.parse(claim.text) as { request: { body: string; findingBody: string } | null };
+
+    expect(request?.body).toBe('what do you mean by the marker?');
+    expect(request?.findingBody).toBe('P2: a finding');
+  });
+
+  it('does not hand over an aside that did not ask', async () => {
+    const threadId = await newThread();
+    await req(`/api/threads/${threadId}/reply`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        body: 'thinking aloud, not asking',
+        author: { name: 'You', type: 'user' },
+        kind: 'aside',
+      }),
+    });
+
+    const claim = await req('/api/live/claim?wait=0', { method: 'POST' });
+
+    expect(JSON.parse(claim.text)).toEqual({ request: null });
+  });
+
+  // Claiming mutates, so it must be a write as far as the guard is concerned.
+  it('refuses a claim from a cross-origin page', async () => {
+    const claim = await req('/api/live/claim?wait=0', {
+      method: 'POST',
+      headers: { 'sec-fetch-site': 'cross-site' },
+    });
+
+    expect(claim.status).toBe(403);
+  });
+
+  it('counts what is still waiting', async () => {
+    const threadId = await newThread();
+    for (const body of ['first', 'second']) {
+      await req(`/api/threads/${threadId}/reply`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ body, author: { name: 'You', type: 'user' }, kind: 'aside', live: true }),
+      });
+    }
+
+    const status = JSON.parse((await req('/api/live/status')).text) as { waiting: number };
+
+    expect(status.waiting).toBe(2);
+  });
+});
+
+describe('a listener that waits', () => {
+  // The first real run of the loop died here: a response held for the full wait outlived node's
+  // default requestTimeout of 300s and the socket was destroyed under it.
+  it('is not cut off by the request timeout', async () => {
+    const { startServer } = await import('../src/server.js');
+    const started = await startServer({ port: 0, diffArgs: [], effectiveRef: 'work' });
+    try {
+      expect(started.requestTimeoutMs).toBeGreaterThan(900_000);
+    } finally {
+      started.close();
+    }
+  });
+
+  it('comes back when the wait runs out, rather than hanging', async () => {
+    // Earlier cases leave requests queued, and a wait with something to hand over returns at once —
+    // which is the opposite of what this is about.
+    for (let i = 0; i < 20; i++) {
+      const drained = await req('/api/live/claim?wait=0', { method: 'POST' });
+      if (JSON.parse(drained.text).request === null) {
+        break;
+      }
+    }
+
+    const before = Date.now();
+    const claim = await req('/api/live/claim?wait=1', { method: 'POST' });
+    const elapsed = Date.now() - before;
+
+    expect(claim.status).toBe(200);
+    expect(JSON.parse(claim.text)).toEqual({ request: null });
+    expect(elapsed).toBeGreaterThanOrEqual(900);
+  });
+});

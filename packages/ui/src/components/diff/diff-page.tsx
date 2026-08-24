@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useLoaderData } from 'react-router';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useDiff } from '../../hooks/use-diff';
 import { useInfo } from '../../hooks/use-info';
 import { useTheme } from '../../hooks/use-theme';
@@ -11,6 +11,8 @@ import { useTours } from '../../hooks/use-tours';
 import { useHideWhitespace } from '../../hooks/use-hide-whitespace';
 import { pickActiveTour, orderPathsByTour, stopsByPath } from '../../lib/tour-order';
 import { TOUR_NOT_STARTED, clampTourStep } from '../../lib/tour-navigation';
+import { liveStatusOptions } from '../../queries/live';
+import { readReadingPosition, writeReadingPosition } from '../../lib/reading-position';
 import { tourMarks, marksByPath, focusRangesFromMarks, type TourFocusRange } from '../../lib/tour-marks';
 import { TourStepper } from './tour-stepper';
 import { useCommentActions } from '../../hooks/use-comment-actions';
@@ -80,6 +82,30 @@ export function DiffPage() {
   const { data: serverThreads, isFetched: threadsFetched } = useReviewThreads(reviewsEnabled ? sessionId : null);
   const threads = reviewsEnabled && serverThreads ? serverThreads : [];
   const commentActions = useCommentActions(sessionId, reviewsEnabled);
+
+  // Asking is a button on the comment box, not a mode: a mode you have to remember is a mode you
+  // forget, and the first version of this answered three comments with silence because of it.
+  const { data: liveStatus } = useQuery(liveStatusOptions(refParam));
+  const canAsk = !!liveStatus?.enabled && reviewsEnabled;
+  const askIsHeard = !!liveStatus?.listening;
+
+  const handleAskReply = useCallback(
+    (threadId: string, body: string, author: Parameters<typeof commentActions.addReply>[2]) =>
+      commentActions.addReply(threadId, body, author, { aside: true, live: true }),
+    [commentActions],
+  );
+
+  const handleAskThread = useCallback(
+    (
+      filePath: string,
+      side: Parameters<typeof commentActions.addThread>[1],
+      startLine: number,
+      endLine: number,
+      body: string,
+      author: Parameters<typeof commentActions.addThread>[5],
+    ) => commentActions.addThread(filePath, side, startLine, endLine, body, author, undefined, { aside: true, live: true }),
+    [commentActions],
+  );
   const commentCountsByFile = useMemo(() => buildThreadCountsByFile(threads), [threads]);
 
   const { data: tours } = useTours(reviewsEnabled ? sessionId : null);
@@ -225,6 +251,22 @@ export function DiffPage() {
       return next;
     });
   }, []);
+
+  // A restart or a failed poll rebuilds this page from scratch. Without this the reader lands at
+  // the top of the diff, which on a long review is worse than the interruption itself.
+  const restoredPositionRef = useRef(false);
+  useEffect(() => {
+    if (restoredPositionRef.current || !orderedDiff || !repoRoot || typeof window === 'undefined') {
+      return;
+    }
+    restoredPositionRef.current = true;
+    const wasReading = readReadingPosition(window.localStorage, repoRoot, refParam ?? '');
+    if (!wasReading || !orderedDiff.files.some(file => getFilePath(file) === wasReading)) {
+      return;
+    }
+    setActiveFile(wasReading);
+    requestAnimationFrame(() => diffViewRef.current?.scrollToFile(wasReading));
+  }, [orderedDiff, repoRoot, refParam]);
 
   const handleReviewedChange = useCallback((path: string, reviewed: boolean) => {
     setReviewedFiles((prev) => {
@@ -406,7 +448,10 @@ export function DiffPage() {
 
   const handleActiveFileFromScroll = useCallback((path: string) => {
     setActiveFile(path);
-  }, []);
+    if (repoRoot && typeof window !== 'undefined') {
+      writeReadingPosition(window.localStorage, repoRoot, refParam ?? '', path);
+    }
+  }, [repoRoot, refParam]);
 
   if (error) {
     return (
@@ -467,11 +512,12 @@ export function DiffPage() {
         description={whitespaceNotice ?? info?.description ?? null}
         githubDetails={githubDetails}
         reviewInProgress={!!info?.review?.inProgress}
+        live={liveStatus}
         sessionId={sessionId}
         onGitHubPulled={() => queryClient.invalidateQueries({ queryKey: ['threads'] })}
       />
       {isStale && <StaleDiffBanner onRefresh={handleRefreshDiff} />}
-      <PullRequestPanel details={githubDetails} />
+      <PullRequestPanel details={githubDetails} hasPullRequest={!!info?.github} repoRoot={repoRoot} />
       {info?.review?.inProgress && (
         <ReviewProgressBanner review={info.review} findings={threads.length} />
       )}
@@ -524,6 +570,9 @@ export function DiffPage() {
             pendingSelection={pendingSelection}
             onPendingSelectionChange={setPendingSelection}
             focusRangesByFile={focusRangesByFile}
+            onAskThread={canAsk ? handleAskThread : undefined}
+            onAskReply={canAsk ? handleAskReply : undefined}
+            askIsHeard={askIsHeard}
             tourMarksByFile={tourMarksByFile}
             activeStepIndex={activeStepIndex}
             onTourMarkClick={handleTourStepChange}

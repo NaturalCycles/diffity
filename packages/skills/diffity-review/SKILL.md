@@ -300,3 +300,22 @@ one, unless the change is a single file:
    > When you're ready, run **{{slash}}resolve** to fix them.
 
    Report the counts using the same labels you used in the comments.
+
+### Step 6: Stay for the questions
+
+Check whether the page can reach you: `{{binary}} agent live-status`. If it reports that live mode is
+available, arm the loop as the last thing you do:
+
+```
+{{binary}} agent await --timeout 240
+```
+
+Run it as a **background** command. It blocks until the reader asks something in the page and then
+exits, which is what wakes you; nothing asked exits 3, and you re-arm. Follow the **{{slash}}live**
+skill when it hands you a request.
+
+This does not replace anything above. The review — the findings, the reading order, `review-done` —
+is done first and in full. Arming the loop only means you are still there afterwards, so a question
+about a finding gets an answer instead of a shrug.
+
+If live mode is not available, say so once and stop: the reader can turn it on in the page.
