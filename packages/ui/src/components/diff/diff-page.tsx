@@ -15,7 +15,7 @@ import { liveStatusOptions } from '../../queries/live';
 import { readReadingPosition, writeReadingPosition } from '../../lib/reading-position';
 import { staleMessage } from '../../lib/stale-files';
 import { patchDiffFile } from '../../lib/patch-diff-file';
-import { newAnswers, type AnswerAlert } from '../../lib/answer-alerts';
+import { newAnswers, dropSeenAlerts, type AnswerAlert } from '../../lib/answer-alerts';
 import { whereIsThread, type ThreadPosition } from '../../lib/thread-visibility';
 import { AnswerBubble } from '../layout/answer-bubble';
 import { fetchDiffFile } from '../../lib/api';
@@ -495,14 +495,36 @@ export function DiffPage() {
     ]);
   }, [threads]);
 
-  const alertPosition = useMemo<ThreadPosition>(() => {
-    const newest = answerAlerts[answerAlerts.length - 1];
-    if (!newest) {
-      return 'below';
+  const [alertPosition, setAlertPosition] = useState<ThreadPosition>('below');
+
+  // Both of these have to follow the reader rather than being decided once: a note about a thread
+  // they have since scrolled to is noise, and one pointing down at something now above them is
+  // worse than none. The active file changes far too rarely to hang either off.
+  useEffect(() => {
+    if (answerAlerts.length === 0) {
+      return;
     }
-    const bounds = threadBounds(newest.threadId);
-    return (bounds && whereIsThread(bounds.thread, bounds.viewport)) === 'above' ? 'above' : 'below';
-  }, [answerAlerts, activeFile]);
+
+    const container = document.querySelector('main.overflow-y-auto');
+
+    const settle = () => {
+      const newest = answerAlerts[answerAlerts.length - 1];
+      const bounds = newest ? threadBounds(newest.threadId) : null;
+      setAlertPosition(
+        bounds && whereIsThread(bounds.thread, bounds.viewport) === 'above' ? 'above' : 'below',
+      );
+      setAnswerAlerts(prev =>
+        dropSeenAlerts(prev, threadId => {
+          const seen = threadBounds(threadId);
+          return !!seen && whereIsThread(seen.thread, seen.viewport) === 'on-screen';
+        }),
+      );
+    };
+
+    settle();
+    container?.addEventListener('scroll', settle, { passive: true });
+    return () => container?.removeEventListener('scroll', settle);
+  }, [answerAlerts]);
 
   const handleGoToAnswer = useCallback((threadId: string) => {
     const alert = answerAlerts.find(a => a.threadId === threadId);

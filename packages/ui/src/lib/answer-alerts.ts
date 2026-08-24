@@ -61,3 +61,16 @@ export function previewOf(body: string): string {
   }
   return `${kept.slice(0, PREVIEW_CHARS).trimEnd()}…`;
 }
+
+/**
+ * Seeing the reply is an answer to the note about it, so a thread the reader has scrolled to no
+ * longer needs announcing. Returns the same array when nothing changed, so a caller can skip the
+ * state update.
+ */
+export function dropSeenAlerts(
+  alerts: AnswerAlert[],
+  isOnScreen: (threadId: string) => boolean,
+): AnswerAlert[] {
+  const kept = alerts.filter(alert => !isOnScreen(alert.threadId));
+  return kept.length === alerts.length ? alerts : kept;
+}

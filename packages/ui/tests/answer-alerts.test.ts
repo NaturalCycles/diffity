@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { newAnswers, previewOf, PREVIEW_LINES } from '../src/lib/answer-alerts';
+import { newAnswers, previewOf, dropSeenAlerts, PREVIEW_LINES } from '../src/lib/answer-alerts';
 import type { CommentThread } from '../src/components/comments/types';
 
 function thread(id: string, comments: { id: string; type: 'user' | 'agent'; kind?: 'review' | 'aside'; body?: string }[]): CommentThread {
@@ -100,5 +100,24 @@ describe('how much of the answer is shown', () => {
 
     expect(preview.length).toBeLessThan(500);
     expect(preview.endsWith('…')).toBe(true);
+  });
+});
+
+describe('dropping notes the reader has caught up with', () => {
+  const alerts = [
+    { threadId: 'a', filePath: 'a.ts', authorName: 'Agent', preview: 'one' },
+    { threadId: 'b', filePath: 'b.ts', authorName: 'Agent', preview: 'two' },
+  ];
+
+  it('drops the one now on screen and keeps the other', () => {
+    expect(dropSeenAlerts(alerts, id => id === 'a').map(a => a.threadId)).toEqual(['b']);
+  });
+
+  it('keeps everything while nothing is on screen', () => {
+    expect(dropSeenAlerts(alerts, () => false)).toBe(alerts);
+  });
+
+  it('empties out when the reader has caught up with all of them', () => {
+    expect(dropSeenAlerts(alerts, () => true)).toEqual([]);
   });
 });
