@@ -108,9 +108,15 @@ export function fetchDiff(hideWhitespace: boolean, ref?: string): Promise<Parsed
   }));
 }
 
-export async function fetchDiffFingerprint(ref?: string): Promise<string> {
-  const json = await apiFetch<{ fingerprint: string }>(buildUrl('/api/diff-fingerprint', { ref }));
-  return json.fingerprint;
+export interface DiffFingerprint {
+  fingerprint: string;
+  /** Each file against its own churn, so the page can say which ones moved. */
+  files: Record<string, string>;
+}
+
+export async function fetchDiffFingerprint(ref?: string): Promise<DiffFingerprint> {
+  const json = await apiFetch<DiffFingerprint>(buildUrl('/api/diff-fingerprint', { ref }));
+  return { fingerprint: json.fingerprint, files: json.files ?? {} };
 }
 
 export function fetchRepoInfo(ref?: string): Promise<RepoInfo> {

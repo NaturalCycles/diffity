@@ -13,6 +13,7 @@ import { pickActiveTour, orderPathsByTour, stopsByPath } from '../../lib/tour-or
 import { TOUR_NOT_STARTED, clampTourStep } from '../../lib/tour-navigation';
 import { liveStatusOptions } from '../../queries/live';
 import { readReadingPosition, writeReadingPosition } from '../../lib/reading-position';
+import { staleMessage } from '../../lib/stale-files';
 import { tourMarks, marksByPath, focusRangesFromMarks, type TourFocusRange } from '../../lib/tour-marks';
 import { TourStepper } from './tour-stepper';
 import { useCommentActions } from '../../hooks/use-comment-actions';
@@ -67,7 +68,7 @@ export function DiffPage() {
   const reviewsEnabled = !!info?.capabilities?.reviews;
   const sessionId = info?.sessionId ?? null;
   const canRevert = !!info?.capabilities?.revert;
-  const { isStale, resetStaleness } = useDiffStaleness(refParam, !!info?.capabilities?.staleness);
+  const { isStale, staleFiles, resetStaleness } = useDiffStaleness(refParam, !!info?.capabilities?.staleness);
   const [githubDetails, setGithubDetails] = useState<GitHubDetails | null>(null);
 
   useEffect(() => {
@@ -516,7 +517,7 @@ export function DiffPage() {
         sessionId={sessionId}
         onGitHubPulled={() => queryClient.invalidateQueries({ queryKey: ['threads'] })}
       />
-      {isStale && <StaleDiffBanner onRefresh={handleRefreshDiff} />}
+      {isStale && <StaleDiffBanner onRefresh={handleRefreshDiff} message={staleMessage(staleFiles)} />}
       <PullRequestPanel details={githubDetails} hasPullRequest={!!info?.github} repoRoot={repoRoot} />
       {info?.review?.inProgress && (
         <ReviewProgressBanner review={info.review} findings={threads.length} />

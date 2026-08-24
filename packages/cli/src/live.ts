@@ -20,6 +20,11 @@ export interface LiveRequest {
    * handing the question back as its own subject would be nonsense.
    */
   findingBody: string | null;
+  /**
+   * Whether the agent may edit code for this request. Derived from who wrote the pull request, and
+   * filled in by the route that hands the request over.
+   */
+  mayChangeCode?: boolean;
 }
 
 export interface LiveRequestStamp {

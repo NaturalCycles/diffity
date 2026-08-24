@@ -47,6 +47,7 @@ import {
   type ReviewEvent,
 } from '@diffity/github';
 import { findOrCreateSession, resolveSessionId } from './session.js';
+import { mayChangeCode } from './live-permissions.js';
 import {
   liveListenerCount,
   pendingLiveCount,
@@ -54,6 +55,7 @@ import {
   waitForLiveRequest,
 } from './live.js';
 import { computeDiffFingerprint } from './fingerprint.js';
+import { parseDiffStatFiles } from './diff-stat.js';
 import { parseDiffStatSummary } from './diff-stat.js';
 import { getReviewRun } from './review-run.js';
 import { createThread, addReply, getThreadsForSession, markThreadsSubmitted } from './threads.js';
@@ -381,7 +383,18 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             ? Math.min(Math.max(waitSeconds, 0), MAX_LIVE_WAIT_SECONDS) * 1000
             : 0;
           waitForLiveRequest(sid, waitMs).then(
-            request => sendJson(res, { request }),
+            request => {
+              if (!request) {
+                sendJson(res, { request: null });
+                return;
+              }
+              // Carried on the request rather than left for the agent to look up: a rule nobody
+              // has to remember is a rule that holds.
+              const details = githubRemote
+                ? fetchGitHubDetails(githubRemote.owner, githubRemote.repo, prNumber)
+                : null;
+              sendJson(res, { request: { ...request, mayChangeCode: mayChangeCode(details) } });
+            },
             err => sendError(res, 500, `Failed to wait for a live request: ${err}`),
           );
           return;
@@ -487,6 +500,11 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           const ref = url.searchParams.get('ref');
           sendJson(res, {
             fingerprint: computeDiffFingerprint(ref, diffArgs, includeUntracked),
+            // Per file as well as overall, so the page can say which files moved rather than
+            // declaring the whole diff stale because an agent touched one of them.
+            files: parseDiffStatFiles(
+              ref ? getDiffStatForRef(ref) : getDiffStat(diffArgs),
+            ),
           });
           return;
         }

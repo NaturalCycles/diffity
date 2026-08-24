@@ -347,11 +347,15 @@ Examples:
 
       // stdout is the request, so a script can parse it. The directive goes to stderr, because the
       // turn this wakes up may be a long way from whatever armed the loop.
+      const mayChange = payload.request.mayChangeCode !== false;
       console.error(
         pc.cyan(
-          'A request came back from the review page. Answer it in the thread, amend the finding it '
-            + 'is about, or make the change — then re-arm with `agent await`. The diffity-live skill '
-            + 'has the detail.',
+          'A request came back from the review page. '
+            + (mayChange
+              ? 'Answer it in the thread, amend the finding it is about, or make the change'
+              : 'Answer it in the thread or amend the finding it is about — this pull request is '
+                + 'somebody else\'s, so do not edit its code')
+            + ' — then re-arm with `agent await`. The diffity-live skill has the detail.',
         ),
       );
       console.log(JSON.stringify(payload.request, null, 2));
