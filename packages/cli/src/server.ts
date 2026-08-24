@@ -50,7 +50,7 @@ import { findOrCreateSession } from './session.js';
 import { computeDiffFingerprint } from './fingerprint.js';
 import { parseDiffStatSummary } from './diff-stat.js';
 import { getReviewRun } from './review-run.js';
-import { createThread, addReply, getThreadsForSession } from './threads.js';
+import { createThread, addReply, getThreadsForSession, markThreadsSubmitted } from './threads.js';
 import { handleReviewRoute } from './review-routes.js';
 import { handleTourRoute } from './tour-routes.js';
 import { sendJson, sendError, readBody } from './http-utils.js';
@@ -550,6 +550,10 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             details.headSha,
             { event, body: summary, comments },
           );
+          markThreadsSubmitted(result.submittedThreadIds, {
+            reviewUrl: result.reviewUrl,
+            headSha: details.headSha,
+          });
           sendJson(res, result);
           return;
         }

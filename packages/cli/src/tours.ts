@@ -200,3 +200,34 @@ export function updateTourStatus(tourId: string, status: TourStatus): void {
   const db = getDb();
   db.prepare('UPDATE tours SET status = ? WHERE id = ?').run(status, tourId);
 }
+
+/**
+ * A walkthrough can be wrong — a mistaken step, a body mangled on the way in — and until now the
+ * only remedy was to add another and rely on the newest winning, leaving the bad one behind.
+ */
+export function deleteTour(tourId: string): void {
+  const db = getDb();
+  db.prepare('DELETE FROM tour_steps WHERE tour_id = ?').run(tourId);
+  db.prepare('DELETE FROM tours WHERE id = ?').run(tourId);
+}
+
+/**
+ * Spares a walkthrough that is still being written unless told otherwise: the whole point of the
+ * building state is that something is mid-flight, and two agents on one session should not erase
+ * each other. An agent replacing its own half-written walkthrough knows it is doing that, and says
+ * so with `keepBuilding: false`.
+ */
+export function deleteToursForSession(
+  sessionId: string,
+  options: { keepBuilding?: boolean } = {},
+): void {
+  const keepBuilding = options.keepBuilding ?? true;
+  const filter = keepBuilding ? " AND status != 'building'" : '';
+  const db = getDb();
+  db.prepare(
+    `DELETE FROM tour_steps WHERE tour_id IN (
+       SELECT id FROM tours WHERE session_id = ?${filter}
+     )`,
+  ).run(sessionId);
+  db.prepare(`DELETE FROM tours WHERE session_id = ?${filter}`).run(sessionId);
+}

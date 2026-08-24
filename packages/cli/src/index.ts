@@ -169,7 +169,7 @@ range syntax (main..feature, main...feature) also work.`)
         if (!opts.quiet) {
           console.log(pc.dim(`  Checking out PR #${parsed.number}...`));
         }
-        checkoutPr(parsed.number);
+        checkoutPr(parsed.number, parsed.owner, parsed.repo);
       } catch (err) {
         console.error(pc.red(`Error: Failed to checkout PR #${parsed.number}.`));
         console.log(`  ${err}`);
@@ -177,7 +177,7 @@ range syntax (main..feature, main...feature) also work.`)
       }
 
       try {
-        prBase = getPrBase(parsed.number);
+        prBase = getPrBase(parsed.number, parsed.owner, parsed.repo);
       } catch {
         console.error(pc.red(`Error: Could not determine base branch for PR #${parsed.number}.`));
         process.exit(1);

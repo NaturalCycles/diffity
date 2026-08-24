@@ -13,7 +13,7 @@ import {
   type ThreadStatus,
   type Thread,
 } from './threads.js';
-import { createTour, addTourStep, updateTourStatus } from './tours.js';
+import { createTour, addTourStep, updateTourStatus, deleteTour, deleteToursForSession } from './tours.js';
 import { readAnchor, clampToFile, countWorkingTreeLines } from './anchor.js';
 import { startReviewRun, finishReviewRun } from './review-run.js';
 import { readRepoConfig, DEFAULT_SEVERITIES, resolveInRepo, REPO_CONFIG_FILE } from '@diffity/git';
@@ -349,6 +349,30 @@ Examples:
         return;
       }
       console.log(pc.green(`Added step ${step.sortOrder} to tour`));
+    });
+
+  agent
+    .command('tour-delete')
+    .description('Remove a walkthrough')
+    .argument('[tour-id]', 'Walkthrough to remove')
+    .option('--all', 'Remove every finished walkthrough in this session instead')
+    .option('--include-building', 'With --all, also remove one another agent may still be writing')
+    .action((tourId: string | undefined, opts: { all?: boolean; includeBuilding?: boolean }) => {
+      const session = requireSession();
+      if (tourId) {
+        deleteTour(tourId);
+        console.log(pc.green(`Removed walkthrough ${tourId.slice(0, 8)}`));
+        return;
+      }
+      // Deleting every walkthrough has to be asked for. Reaching it by leaving the id off meant
+      // an agent told to "fix the walkthrough" could wipe one a human recorded.
+      if (!opts.all) {
+        console.error(pc.red('Give a walkthrough id, or --all to remove every one in this session'));
+        process.exitCode = 1;
+        return;
+      }
+      deleteToursForSession(session.id, { keepBuilding: !opts.includeBuilding });
+      console.log(pc.green('Removed every walkthrough in this session'));
     });
 
   agent

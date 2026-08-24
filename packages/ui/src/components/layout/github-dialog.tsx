@@ -16,6 +16,7 @@ import type { CommentThread } from '../comments/types';
 import {
   canSubmitReview,
   isSubmittable,
+  wasSubmitted,
   summaryFromGeneralThreads,
   threadToPayload,
 } from '../../lib/review-submission';
@@ -62,7 +63,7 @@ export function GitHubDialog(props: GitHubDialogProps) {
     setSelected(prev => {
       const next = new Set(prev);
       for (const thread of submittable) {
-        if (!prev.has(`-${thread.id}`)) {
+        if (!prev.has(`-${thread.id}`) && !wasSubmitted(thread)) {
           next.add(thread.id);
         }
       }
@@ -255,6 +256,11 @@ export function GitHubDialog(props: GitHubDialogProps) {
                         <span className="text-[11px] text-text-muted tabular-nums shrink-0">
                           {lineLabel(thread)}
                         </span>
+                        {wasSubmitted(thread) && (
+                          <span className="text-[10px] text-text-muted shrink-0">
+                            already on the pull request
+                          </span>
+                        )}
                         {thread.comments.length > 1 && (
                           <span className="text-[10px] text-text-muted shrink-0">
                             +{thread.comments.length - 1} repl{thread.comments.length === 2 ? 'y' : 'ies'}

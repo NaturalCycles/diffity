@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { exec } from './exec.js';
+import { exec, gh } from './exec.js';
 import type { PrBase } from './types.js';
 
 const PR_URL_REGEX = /(?:https?:\/\/)?github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/;
@@ -21,9 +21,11 @@ export function parseGitHubPrUrl(url: string): { owner: string; repo: string; nu
   };
 }
 
-export function checkoutPr(prNumber: number): void {
+export function checkoutPr(prNumber: number, owner: string, repo: string): void {
   try {
-    exec(`gh pr checkout ${prNumber}`);
+    // Pinned to the repository asked for: gh resolves a fork's parent, so an unpinned checkout
+    // fetches whichever pull request happens to carry that number upstream.
+    gh(['pr', 'checkout', String(prNumber), '--repo', `${owner}/${repo}`]);
     return;
   } catch (err) {
     // A merged pull request usually has its branch deleted, and gh can only check out a branch.
@@ -50,6 +52,8 @@ export function parsePrBase(json: string): PrBase {
   return { name: baseRefName, oid: baseRefOid };
 }
 
-export function getPrBase(prNumber: number): PrBase {
-  return parsePrBase(exec(`gh pr view ${prNumber} --json baseRefName,baseRefOid`));
+export function getPrBase(prNumber: number, owner: string, repo: string): PrBase {
+  return parsePrBase(
+    gh(['pr', 'view', String(prNumber), '--repo', `${owner}/${repo}`, '--json', 'baseRefName,baseRefOid']),
+  );
 }

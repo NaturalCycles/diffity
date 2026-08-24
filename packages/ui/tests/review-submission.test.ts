@@ -29,6 +29,7 @@ function thread(overrides: Partial<CommentThread> = {}): CommentThread {
 describe('threadToPayload', () => {
   it('maps a single-line comment on the new side', () => {
     expect(threadToPayload(thread())).toEqual({
+      threadId: 't1',
       filePath: 'src/a.ts',
       side: 'RIGHT',
       startLine: null,

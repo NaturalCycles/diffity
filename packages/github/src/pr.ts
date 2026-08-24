@@ -143,6 +143,7 @@ export function createReview(
 
   const errors: string[] = [];
   const comments: ReviewCommentPayload[] = [];
+  const sentThreadIds: string[] = [];
   let skipped = 0;
 
   for (const comment of submission.comments) {
@@ -164,13 +165,16 @@ export function createReview(
       continue;
     }
     comments.push(toReviewComment(comment));
+    if (comment.threadId) {
+      sentThreadIds.push(comment.threadId);
+    }
   }
 
   const dropped = errors.length;
   const body = submission.body.trim();
 
   if (comments.length === 0 && !body && submission.event === 'COMMENT') {
-    return { submitted: 0, skipped, failed: dropped, errors, reviewUrl: null };
+    return { submitted: 0, submittedThreadIds: [], skipped, failed: dropped, errors, reviewUrl: null };
   }
 
   try {
@@ -186,6 +190,7 @@ export function createReview(
     const review = JSON.parse(raw) as { html_url?: string };
     return {
       submitted: comments.length,
+      submittedThreadIds: sentThreadIds,
       skipped,
       failed: dropped,
       errors,
@@ -196,6 +201,7 @@ export function createReview(
     const ghLine = msg.split('\n').find(line => line.includes('gh:'));
     return {
       submitted: 0,
+      submittedThreadIds: [],
       skipped,
       failed: dropped + comments.length,
       errors: [...errors, ghLine ? ghLine.trim() : 'GitHub rejected the review'],

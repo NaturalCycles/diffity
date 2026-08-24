@@ -27,6 +27,8 @@ export interface ReviewSubmission {
 
 export interface ReviewResult {
   submitted: number;
+  /** The findings that actually left the machine, which is not every one that was offered. */
+  submittedThreadIds: string[];
   skipped: number;
   failed: number;
   errors: string[];
@@ -68,6 +70,8 @@ export interface PulledThread {
 }
 
 export interface PrComment {
+  /** The finding this came from, so a successful review can mark it as sent. */
+  threadId?: string;
   filePath: string;
   side: 'LEFT' | 'RIGHT';
   startLine: number | null;

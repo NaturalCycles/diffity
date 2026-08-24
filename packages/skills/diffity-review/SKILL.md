@@ -32,6 +32,7 @@ You are reviewing a diff and leaving inline comments using the `{{binary}} agent
 {{binary}} agent tour-start --topic "<text>" [--body "<text>"] --json
 {{binary}} agent tour-step --tour <id> --file <path> --line <n> [--end-line <n>] --body "<text>" [--annotation "<text>"]
 {{binary}} agent tour-done --tour <id>
+{{binary}} agent tour-delete [<id>]
 ```
 
 - `--file`, `--line`, `--body` are required for `comment`
@@ -279,6 +280,9 @@ one, unless the change is a single file:
 3. The `--annotation` becomes the file's label in the reordered file list, so make it say *why* this
    file is read at this point ("the primitive", "first consumer", "where the P1 lives") rather than
    restating its name. Point a step at the most important lines in the file, not line 1.
+4. Check what you recorded — `{{binary}} agent tour-start --json` and the steps you added. If a step
+   went in wrong, `{{binary}} agent tour-delete` and build it again. Adding a second walkthrough
+   leaves the wrong one in place, and the reader only ever sees the newest.
 
 ### Step 5: Open the browser
 
