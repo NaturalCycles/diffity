@@ -36,12 +36,14 @@ function reviewScope(ref: string): ReviewScope {
 }
 
 /**
- * A row written before sessions recorded their branch has none. It still belongs to this checkout
- * — a working tree is on one branch at a time — so an unknown branch matches rather than
- * stranding the findings it holds.
+ * A branch nobody recorded matches any branch, on either side of the comparison. The row side is a
+ * session written before sessions recorded their branch; the argument side is a tab asking about
+ * one of those rows, through `resolveSessionId`, where the branch comes from the row rather than
+ * from git. Either way it still belongs to this checkout — a working tree is on one branch at a
+ * time — so an unknown branch matches rather than stranding the findings it holds.
  */
-function branchMatches(rowBranch: string | null, branch: string): boolean {
-  return rowBranch === null || rowBranch === branch;
+function branchMatches(rowBranch: string | null, branch: string | null): boolean {
+  return rowBranch === null || branch === null || rowBranch === branch;
 }
 
 /**
@@ -49,7 +51,7 @@ function branchMatches(rowBranch: string | null, branch: string): boolean {
  */
 function sessionsInScope(
   repoRoot: string | null,
-  branch: string,
+  branch: string | null,
   ref: string,
 ): { id: string; ref: string }[] {
   const scope = reviewScope(ref);
@@ -129,9 +131,13 @@ function openSession(
 ): { session: Session; created: boolean } {
   const db = getDb();
 
+  // A row for this branch and a row with no branch can both qualify. Prefer the one that names
+  // the branch, rather than adopting the other and backfilling it alongside a row that already
+  // exists for the same review.
   const existing = queryOne<{ id: string; ref: string; head_hash: string }>(
     `SELECT id, ref, head_hash FROM review_sessions
-      WHERE ref = ? AND head_hash = ? AND repo_root IS ? AND (branch IS ? OR branch IS NULL)`,
+      WHERE ref = ? AND head_hash = ? AND repo_root IS ? AND (branch IS ? OR branch IS NULL)
+      ORDER BY branch IS NULL`,
     ref,
     headHash,
     repoRoot,

@@ -183,6 +183,20 @@ describe('a session written before sessions recorded their branch', () => {
     expect(getThreadsForSession(afterUpgrade.id).map(t => t.id)).toContain(finding.id);
   });
 
+  // A tab can be holding one of these ids, and the row it names has no branch to compare with.
+  it('still redirects a tab that is holding its id', async () => {
+    const { findOrCreateSession, resolveSessionId } = await import('../src/session.js');
+    const { getDb } = await import('../src/db.js');
+
+    const legacy = findOrCreateSession('legacy-stale-tab');
+    getDb().prepare('UPDATE review_sessions SET branch = NULL WHERE id = ?').run(legacy.id);
+
+    const current = findOrCreateSession('legacy-stale-tab-two');
+
+    expect(current.id).not.toBe(legacy.id);
+    expect(resolveSessionId(legacy.id)).toBe(current.id);
+  });
+
   it('is reused rather than duplicated when opened with the same base', async () => {
     const { findOrCreateSession } = await import('../src/session.js');
     const { getDb } = await import('../src/db.js');
@@ -250,24 +264,31 @@ describe('re-opening a session that is already current', () => {
     const { createThread, getThread } = await import('../src/threads.js');
 
     // Its own branch, so the sessions the earlier cases left behind are out of scope and this
-    // really is the "nothing to gather" case.
+    // really is the "nothing to gather" case. Put back afterwards, or every case appended after
+    // this one would quietly run somewhere else.
+    const wasOn = git(['rev-parse', '--abbrev-ref', 'HEAD']);
     git(['checkout', '-b', 'poll-only']);
-    writeFileSync(join(repoDir, 'poll.ts'), 'const a = 1;\nconst target = 2;\n');
-    git(['add', '.']);
-    git(['commit', '-m', 'poll.ts']);
-    const first = findOrCreateSession('HEAD~1');
-    const thread = createThread(
-      first.id, 'poll.ts', 'new', 2, 2, 'P2: about the target',
-      agent, 'const target = 2;',
-    );
+    try {
+      writeFileSync(join(repoDir, 'poll.ts'), 'const a = 1;\nconst target = 2;\n');
+      git(['add', '.']);
+      git(['commit', '-m', 'poll.ts']);
+      const first = findOrCreateSession('HEAD~1');
+      const thread = createThread(
+        first.id, 'poll.ts', 'new', 2, 2, 'P2: about the target',
+        agent, 'const target = 2;',
+      );
 
-    // Same base, same commit: this is the poll case, and the anchor must be left alone even
-    // though the line it points at has moved in the working tree.
-    writeFileSync(join(repoDir, 'poll.ts'), 'const a = 1;\nconst inserted = 0;\nconst target = 2;\n');
-    const again = findOrCreateSession('HEAD~1');
+      // Same base, same commit: this is the poll case, and the anchor must be left alone even
+      // though the line it points at has moved in the working tree.
+      writeFileSync(join(repoDir, 'poll.ts'), 'const a = 1;\nconst inserted = 0;\nconst target = 2;\n');
+      const again = findOrCreateSession('HEAD~1');
 
-    expect(again.id).toBe(first.id);
-    expect(getThread(thread.id)?.startLine).toBe(2);
+      expect(again.id).toBe(first.id);
+      expect(getThread(thread.id)?.startLine).toBe(2);
+    } finally {
+      // --force: the case leaves an edit behind on purpose, which would block the switch.
+      git(['checkout', '--force', wasOn]);
+    }
   });
 
   it('still gathers when a sibling is holding a finding', async () => {
