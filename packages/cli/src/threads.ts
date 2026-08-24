@@ -7,11 +7,17 @@ export interface ThreadAuthor {
   type: 'user' | 'agent';
 }
 
+export type CommentKind = 'review' | 'aside';
+
 export interface ThreadComment {
   id: string;
   author: ThreadAuthor;
   body: string;
+  kind: CommentKind;
   createdAt: string;
+  liveRequestedAt: string | null;
+  liveClaimedAt: string | null;
+  liveAnsweredAt: string | null;
 }
 
 export type ThreadStatus = 'open' | 'resolved' | 'dismissed';
@@ -56,7 +62,11 @@ interface CommentRow {
   author_name: string;
   author_type: string;
   body: string;
+  kind?: string | null;
   created_at: string;
+  live_requested_at?: string | null;
+  live_claimed_at?: string | null;
+  live_answered_at?: string | null;
 }
 
 function rowToThread(row: ThreadRow, comments: ThreadComment[]): Thread {
@@ -83,7 +93,11 @@ function rowToComment(row: CommentRow): ThreadComment {
     id: row.id,
     author: { name: row.author_name, type: row.author_type as 'user' | 'agent' },
     body: row.body,
+    kind: (row.kind as CommentKind | null) ?? 'review',
     createdAt: row.created_at,
+    liveRequestedAt: row.live_requested_at ?? null,
+    liveClaimedAt: row.live_claimed_at ?? null,
+    liveAnsweredAt: row.live_answered_at ?? null,
   };
 }
 
@@ -184,7 +198,11 @@ export function createThread(
       id: commentId,
       author,
       body: cleanBody,
+      kind: 'review',
       createdAt: now,
+      liveRequestedAt: null,
+      liveClaimedAt: null,
+      liveAnsweredAt: null,
     }],
   };
 }
@@ -194,7 +212,11 @@ interface JoinedRow extends ThreadRow {
   c_author_name: string | null;
   c_author_type: string | null;
   c_body: string | null;
+  c_kind: string | null;
   c_created_at: string | null;
+  c_live_requested_at: string | null;
+  c_live_claimed_at: string | null;
+  c_live_answered_at: string | null;
 }
 
 export function getThreadsForSession(sessionId: string, status?: ThreadStatus): Thread[] {
@@ -206,7 +228,9 @@ export function getThreadsForSession(sessionId: string, status?: ThreadStatus): 
   const rows = queryAll<JoinedRow>(`
     SELECT t.*,
            c.id AS c_id, c.author_name AS c_author_name, c.author_type AS c_author_type,
-           c.body AS c_body, c.created_at AS c_created_at
+           c.body AS c_body, c.kind AS c_kind, c.created_at AS c_created_at,
+           c.live_requested_at AS c_live_requested_at, c.live_claimed_at AS c_live_claimed_at,
+           c.live_answered_at AS c_live_answered_at
     FROM comment_threads t
     LEFT JOIN comments c ON c.thread_id = t.id
     ${where}
@@ -225,7 +249,11 @@ export function getThreadsForSession(sessionId: string, status?: ThreadStatus): 
         id: row.c_id,
         author: { name: row.c_author_name!, type: row.c_author_type as 'user' | 'agent' },
         body: row.c_body!,
+        kind: (row.c_kind as CommentKind | null) ?? 'review',
         createdAt: row.c_created_at!,
+        liveRequestedAt: row.c_live_requested_at ?? null,
+        liveClaimedAt: row.c_live_claimed_at ?? null,
+        liveAnsweredAt: row.c_live_answered_at ?? null,
       });
     }
   }
@@ -246,15 +274,20 @@ export function getThread(idOrPrefix: string): Thread | null {
   return rowToThread(row, getCommentsForThread(row.id));
 }
 
-export function addReply(threadId: string, body: string, author: ThreadAuthor): ThreadComment {
+export function addReply(
+  threadId: string,
+  body: string,
+  author: ThreadAuthor,
+  kind: CommentKind = 'review',
+): ThreadComment {
   const db = getDb();
   const commentId = randomUUID();
   const now = new Date().toISOString();
   const cleanBody = unescapeMarkdown(body);
 
   db.prepare(
-    'INSERT INTO comments (id, thread_id, author_name, author_type, body, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(commentId, threadId, author.name, author.type, cleanBody, now);
+    'INSERT INTO comments (id, thread_id, author_name, author_type, body, kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).run(commentId, threadId, author.name, author.type, cleanBody, kind, now);
 
   if (author.type === 'user') {
     db.prepare(
@@ -270,7 +303,11 @@ export function addReply(threadId: string, body: string, author: ThreadAuthor): 
     id: commentId,
     author,
     body: cleanBody,
+    kind,
     createdAt: now,
+    liveRequestedAt: null,
+    liveClaimedAt: null,
+    liveAnsweredAt: null,
   };
 }
 

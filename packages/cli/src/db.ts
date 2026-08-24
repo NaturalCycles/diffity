@@ -133,6 +133,16 @@ function migrateDb(db: DatabaseSync): void {
   addColumn(db, 'review_sessions', 'branch', 'TEXT');
   // Sending a finding to the forge is not the same as resolving it, so this is its own column
   // rather than a status: a submitted thread is still open until someone deals with it.
+  // What a comment is for, which decides where it can go: a review comment can be posted, an
+  // aside is the conversation about the review and stays here. Absent means review, so every
+  // comment written before this keeps its meaning.
+  addColumn(db, 'comments', 'kind', 'TEXT');
+  // An aside can be a request for the agent to answer or amend. Three stamps rather than a status,
+  // because "asked but not yet picked up" and "picked up but not answered" are both waiting, and
+  // the page says different things about them.
+  addColumn(db, 'comments', 'live_requested_at', 'TEXT');
+  addColumn(db, 'comments', 'live_claimed_at', 'TEXT');
+  addColumn(db, 'comments', 'live_answered_at', 'TEXT');
   addColumn(db, 'comment_threads', 'submitted_at', 'TEXT');
   // Sending is not resolving, and a timestamp alone cannot answer "did this go out against the
   // code that is there now?" — so the review and the commit it went out against are kept too.

@@ -46,7 +46,13 @@ import {
   type PrComment,
   type ReviewEvent,
 } from '@diffity/github';
-import { findOrCreateSession } from './session.js';
+import { findOrCreateSession, resolveSessionId } from './session.js';
+import {
+  liveListenerCount,
+  pendingLiveCount,
+  reclaimStaleLiveRequests,
+  waitForLiveRequest,
+} from './live.js';
 import { computeDiffFingerprint } from './fingerprint.js';
 import { parseDiffStatSummary } from './diff-stat.js';
 import { getReviewRun } from './review-run.js';
@@ -143,6 +149,10 @@ export function getBindHost(): string {
 }
 
 const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+/** Long enough that a listener is not re-arming constantly, short enough to notice a dead server. */
+const MAX_LIVE_WAIT_SECONDS = 900;
+const RECLAIM_AFTER_MINUTES = 10;
 
 function isLoopbackBind(host: string): boolean {
   return LOOPBACK_HOSTNAMES.has(host) || host === '::1';
@@ -328,6 +338,30 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           return;
         }
 
+        if (pathname === '/api/live/claim' && req.method === 'POST') {
+          if (!isLoopbackBind(getBindHost())) {
+            sendError(res, 403, 'Live mode is only available on a loopback bind');
+            return;
+          }
+          const sid = resolveSessionId(url.searchParams.get('session'));
+          if (!sid) {
+            sendError(res, 400, 'No review session');
+            return;
+          }
+          // Anything left claimed by a listener that went away goes back in the queue first,
+          // otherwise the thread would say the agent was working on it forever.
+          reclaimStaleLiveRequests(RECLAIM_AFTER_MINUTES);
+          const waitSeconds = Number(url.searchParams.get('wait') ?? '0');
+          const waitMs = Number.isFinite(waitSeconds)
+            ? Math.min(Math.max(waitSeconds, 0), MAX_LIVE_WAIT_SECONDS) * 1000
+            : 0;
+          waitForLiveRequest(sid, waitMs).then(
+            request => sendJson(res, { request }),
+            err => sendError(res, 500, `Failed to wait for a live request: ${err}`),
+          );
+          return;
+        }
+
         if (pathname === '/api/revert-file' && req.method === 'POST') {
           try {
             const body = JSON.parse(await readBody(req));
@@ -499,6 +533,13 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             capabilities,
             sessionId,
             review: sessionId ? getReviewRun(sessionId) : null,
+            live: {
+              // A comment box that drives an agent is only as safe as the loopback bind, so live
+              // mode is not offered at all when the server is reachable from elsewhere.
+              enabled: isLoopbackBind(getBindHost()),
+              listening: liveListenerCount() > 0,
+              waiting: sessionId ? pendingLiveCount(sessionId) : 0,
+            },
             github: githubRemote,
             editor: editorAvailable,
           });

@@ -127,3 +127,67 @@ describe('canSubmitReview', () => {
     expect(canSubmitReview({ event: 'COMMENT', comments: 5, summary: 'x', reviewInProgress: true })).toBe(false);
   });
 });
+
+describe('what a thread sends to the forge', () => {
+  function withComments(comments: { body: string; kind?: 'review' | 'aside'; name?: string }[]): CommentThread {
+    return {
+      id: 't1',
+      sessionId: 's',
+      filePath: 'src/a.ts',
+      side: 'new',
+      startLine: 10,
+      endLine: 10,
+      status: 'open',
+      createdAt: '2026-08-24T10:00:00.000Z',
+      updatedAt: '2026-08-24T10:00:00.000Z',
+      comments: comments.map((c, i) => ({
+        id: `c${i}`,
+        threadId: 't1',
+        body: c.body,
+        kind: c.kind ?? 'review',
+        author: { name: c.name ?? 'Agent', type: 'agent' },
+        createdAt: '2026-08-24T10:00:00.000Z',
+      })),
+    } as unknown as CommentThread;
+  }
+
+  it('sends the finding and the discussion of it', () => {
+    const payload = threadToPayload(withComments([
+      { body: 'P2: the finding' },
+      { body: 'and a reply the author should see', name: 'You' },
+    ]));
+
+    expect(payload.body).toContain('P2: the finding');
+    expect(payload.body).toContain('and a reply the author should see');
+  });
+
+  // An aside is a conversation with the agent about the review. Posting it would put the whole
+  // exchange on the pull request, where nobody asked for it.
+  it('leaves an aside behind', () => {
+    const payload = threadToPayload(withComments([
+      { body: 'P2: the finding' },
+      { body: 'what do you mean by the marker?', kind: 'aside', name: 'You' },
+      { body: 'the submitted_at column', kind: 'aside' },
+    ]));
+
+    expect(payload.body).toBe('P2: the finding');
+  });
+
+  it('sends nothing but the finding when every reply is an aside', () => {
+    const payload = threadToPayload(withComments([
+      { body: 'P3: a small thing' },
+      { body: 'is this worth doing?', kind: 'aside', name: 'You' },
+    ]));
+
+    expect(payload.body).toBe('P3: a small thing');
+  });
+
+  it('treats a comment written before kinds existed as a review comment', () => {
+    const thread = withComments([{ body: 'P1: old finding' }, { body: 'old reply', name: 'You' }]);
+    for (const comment of thread.comments) {
+      delete (comment as { kind?: string }).kind;
+    }
+
+    expect(threadToPayload(thread).body).toContain('old reply');
+  });
+});

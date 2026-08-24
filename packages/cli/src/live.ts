@@ -1,0 +1,145 @@
+import { getDb, queryOne } from './db.js';
+
+/**
+ * A question or an instruction the reader left for the agent, taken from the comment it was written
+ * as. The request is the comment: a separate queue would be a second thing to keep in step with the
+ * thread it belongs to, and would not survive a commit the way a comment does.
+ */
+export interface LiveRequest {
+  commentId: string;
+  threadId: string;
+  body: string;
+  authorName: string;
+  filePath: string;
+  side: string;
+  startLine: number;
+  endLine: number;
+  /** The finding the aside is about, so the agent can answer without another lookup. */
+  findingBody: string | null;
+}
+
+export function requestLive(commentId: string): void {
+  getDb()
+    .prepare("UPDATE comments SET live_requested_at = datetime('now') WHERE id = ?")
+    .run(commentId);
+}
+
+/**
+ * Takes the oldest request nobody has picked up, in one statement: two listeners on one session
+ * must not both go and answer the same question.
+ */
+export function claimNextLiveRequest(sessionId: string): LiveRequest | null {
+  const claimed = queryOne<{ id: string }>(
+    `UPDATE comments SET live_claimed_at = datetime('now')
+      WHERE id = (
+        SELECT c.id FROM comments c
+          JOIN comment_threads t ON t.id = c.thread_id
+         WHERE t.session_id = ?
+           AND c.live_requested_at IS NOT NULL
+           AND c.live_claimed_at IS NULL
+           AND c.live_answered_at IS NULL
+         ORDER BY c.live_requested_at ASC, c.rowid ASC
+         LIMIT 1
+      )
+      RETURNING id`,
+    sessionId,
+  );
+
+  if (!claimed) {
+    return null;
+  }
+
+  return (
+    queryOne<LiveRequest>(
+      `SELECT c.id AS commentId, c.thread_id AS threadId, c.body AS body,
+              c.author_name AS authorName, t.file_path AS filePath, t.side AS side,
+              t.start_line AS startLine, t.end_line AS endLine,
+              (SELECT f.body FROM comments f WHERE f.thread_id = t.id
+                ORDER BY f.created_at ASC, f.rowid ASC LIMIT 1) AS findingBody
+         FROM comments c JOIN comment_threads t ON t.id = c.thread_id
+        WHERE c.id = ?`,
+      claimed.id,
+    ) ?? null
+  );
+}
+
+export function answerLiveRequest(commentId: string): void {
+  getDb()
+    .prepare("UPDATE comments SET live_answered_at = datetime('now') WHERE id = ?")
+    .run(commentId);
+}
+
+/** How many requests are waiting for somebody to pick them up. */
+export function pendingLiveCount(sessionId: string): number {
+  const row = queryOne<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM comments c JOIN comment_threads t ON t.id = c.thread_id
+      WHERE t.session_id = ?
+        AND c.live_requested_at IS NOT NULL
+        AND c.live_claimed_at IS NULL
+        AND c.live_answered_at IS NULL`,
+    sessionId,
+  );
+  return row?.n ?? 0;
+}
+
+/**
+ * An agent can be claimed and then go away — a crash, a closed terminal. Without this the request
+ * would sit claimed forever and the thread would say the agent was working on it.
+ */
+export function reclaimStaleLiveRequests(olderThanMinutes: number): number {
+  const result = getDb()
+    .prepare(
+      `UPDATE comments SET live_claimed_at = NULL
+        WHERE live_requested_at IS NOT NULL
+          AND live_claimed_at IS NOT NULL
+          AND live_answered_at IS NULL
+          AND live_claimed_at < datetime('now', ?)`,
+    )
+    .run(`-${olderThanMinutes} minutes`);
+  return Number(result.changes ?? 0);
+}
+
+/**
+ * Presence is a request parked on the claim route, not a row in the database. A listener that dies
+ * takes its connection with it, so nothing has to expire and nothing can lie about being there.
+ */
+const listeners = new Set<() => void>();
+
+export function liveListenerCount(): number {
+  return listeners.size;
+}
+
+export function notifyLiveListeners(): void {
+  for (const wake of [...listeners]) {
+    wake();
+  }
+}
+
+/**
+ * Waits for something to be asked, up to `waitMs`. Resolves with null on timeout so the caller can
+ * tell "nothing was asked" from "something went wrong" and re-arm.
+ */
+export function waitForLiveRequest(sessionId: string, waitMs: number): Promise<LiveRequest | null> {
+  const claimed = claimNextLiveRequest(sessionId);
+  if (claimed || waitMs <= 0) {
+    return Promise.resolve(claimed);
+  }
+
+  return new Promise(resolve => {
+    let settled = false;
+    const finish = (request: LiveRequest | null) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      listeners.delete(wake);
+      clearTimeout(timer);
+      resolve(request);
+    };
+
+    const wake = () => finish(claimNextLiveRequest(sessionId));
+    const timer = setTimeout(() => finish(null), waitMs);
+    timer.unref?.();
+    listeners.add(wake);
+  });
+}

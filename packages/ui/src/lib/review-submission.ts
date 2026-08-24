@@ -1,4 +1,4 @@
-import type { CommentThread } from '../components/comments/types';
+import type { CommentKind, CommentThread } from '../components/comments/types';
 import { GENERAL_THREAD_FILE_PATH, isThreadResolved } from '../components/comments/types';
 import type { PrCommentPayload, ReviewEvent } from './api';
 
@@ -6,8 +6,14 @@ import type { PrCommentPayload, ReviewEvent } from './api';
  * A thread's replies are part of the same finding, so they are folded into the one comment
  * GitHub will hold — a review comment has no thread of its own until it exists.
  */
+export function isReviewComment(comment: { kind?: CommentKind }): boolean {
+  return (comment.kind ?? 'review') === 'review';
+}
+
 export function threadToPayload(thread: CommentThread): PrCommentPayload {
-  const [first, ...replies] = thread.comments;
+  // An aside is a conversation with the agent about the review, not part of it. Sending one would
+  // put the whole exchange on the pull request.
+  const [first, ...replies] = thread.comments.filter(isReviewComment);
   const body = replies.length
     ? [first.body, ...replies.map(reply => `**${reply.author.name}:** ${reply.body}`)].join('\n\n---\n\n')
     : first.body;
