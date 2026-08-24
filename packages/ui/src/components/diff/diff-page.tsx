@@ -12,6 +12,7 @@ import { useHideWhitespace } from '../../hooks/use-hide-whitespace';
 import { pickActiveTour, orderPathsByTour, stopsByPath } from '../../lib/tour-order';
 import { TOUR_NOT_STARTED, clampTourStep } from '../../lib/tour-navigation';
 import { liveStatusOptions } from '../../queries/live';
+import { readReadingPosition, writeReadingPosition } from '../../lib/reading-position';
 import { tourMarks, marksByPath, focusRangesFromMarks, type TourFocusRange } from '../../lib/tour-marks';
 import { TourStepper } from './tour-stepper';
 import { useCommentActions } from '../../hooks/use-comment-actions';
@@ -251,6 +252,22 @@ export function DiffPage() {
     });
   }, []);
 
+  // A restart or a failed poll rebuilds this page from scratch. Without this the reader lands at
+  // the top of the diff, which on a long review is worse than the interruption itself.
+  const restoredPositionRef = useRef(false);
+  useEffect(() => {
+    if (restoredPositionRef.current || !orderedDiff || !repoRoot || typeof window === 'undefined') {
+      return;
+    }
+    restoredPositionRef.current = true;
+    const wasReading = readReadingPosition(window.localStorage, repoRoot, refParam ?? '');
+    if (!wasReading || !orderedDiff.files.some(file => getFilePath(file) === wasReading)) {
+      return;
+    }
+    setActiveFile(wasReading);
+    requestAnimationFrame(() => diffViewRef.current?.scrollToFile(wasReading));
+  }, [orderedDiff, repoRoot, refParam]);
+
   const handleReviewedChange = useCallback((path: string, reviewed: boolean) => {
     setReviewedFiles((prev) => {
       const next = new Set(prev);
@@ -431,7 +448,10 @@ export function DiffPage() {
 
   const handleActiveFileFromScroll = useCallback((path: string) => {
     setActiveFile(path);
-  }, []);
+    if (repoRoot && typeof window !== 'undefined') {
+      writeReadingPosition(window.localStorage, repoRoot, refParam ?? '', path);
+    }
+  }, [repoRoot, refParam]);
 
   if (error) {
     return (
@@ -497,7 +517,7 @@ export function DiffPage() {
         onGitHubPulled={() => queryClient.invalidateQueries({ queryKey: ['threads'] })}
       />
       {isStale && <StaleDiffBanner onRefresh={handleRefreshDiff} />}
-      <PullRequestPanel details={githubDetails} repoRoot={repoRoot} />
+      <PullRequestPanel details={githubDetails} hasPullRequest={!!info?.github} repoRoot={repoRoot} />
       {info?.review?.inProgress && (
         <ReviewProgressBanner review={info.review} findings={threads.length} />
       )}

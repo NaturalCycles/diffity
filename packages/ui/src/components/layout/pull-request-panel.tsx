@@ -11,6 +11,8 @@ dayjs.extend(relativeTime);
 
 interface PullRequestPanelProps {
   details: GitHubDetails | null;
+  /** Known before the details arrive, so the panel can hold its place rather than pop in. */
+  hasPullRequest?: boolean;
   /** Scopes the remembered open state, so one checkout does not speak for another. */
   repoRoot?: string | null;
 }
@@ -31,7 +33,7 @@ function stateClass(state: string): string {
  * else has already made.
  */
 export function PullRequestPanel(props: PullRequestPanelProps) {
-  const { details, repoRoot } = props;
+  const { details, hasPullRequest, repoRoot } = props;
   const scope = repoRoot ?? '';
   const [open, setOpen] = useState(() =>
     typeof window === 'undefined' ? true : readPanelOpen(window.localStorage, 'pull-request', scope),
@@ -45,8 +47,10 @@ export function PullRequestPanel(props: PullRequestPanelProps) {
     }
   };
 
+  // Rendered as soon as we know there is a pull request, not when its body arrives. Appearing a
+  // few seconds late shifted everything below it down, which reads as the page jumping.
   if (!details) {
-    return null;
+    return hasPullRequest ? <div className="border-b border-border bg-bg-secondary h-9" /> : null;
   }
 
   const { prBody, reviews } = details;
