@@ -131,6 +131,10 @@ function migrateDb(db: DatabaseSync): void {
   // Sending a finding to the forge is not the same as resolving it, so this is its own column
   // rather than a status: a submitted thread is still open until someone deals with it.
   addColumn(db, 'comment_threads', 'submitted_at', 'TEXT');
+  // Sending is not resolving, and a timestamp alone cannot answer "did this go out against the
+  // code that is there now?" — so the review and the commit it went out against are kept too.
+  addColumn(db, 'comment_threads', 'submitted_review_url', 'TEXT');
+  addColumn(db, 'comment_threads', 'submitted_head_sha', 'TEXT');
 }
 
 function addColumn(db: DatabaseSync, table: string, column: string, type: string): void {

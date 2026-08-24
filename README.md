@@ -289,7 +289,8 @@ diffity agent dismiss <id> [--reason <text>]
 diffity agent tour-start --topic <text> [--body <text>] [--json]
 diffity agent tour-step --tour <id> --file <path> --line <n> [--end-line <n>] --body <text> [--annotation <text>]
 diffity agent tour-done --tour <id>
-diffity agent tour-delete [<id>]        # correct a walkthrough instead of adding another
+diffity agent tour-delete <id>          # correct a walkthrough instead of adding another
+diffity agent tour-delete --all         # or clear the session's finished ones
 ```
 
 A comment's line range is trimmed to the file's length, and you are told when that happens: a range

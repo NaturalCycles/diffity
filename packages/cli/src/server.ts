@@ -550,7 +550,10 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             details.headSha,
             { event, body: summary, comments },
           );
-          markThreadsSubmitted(result.submittedThreadIds);
+          markThreadsSubmitted(result.submittedThreadIds, {
+            reviewUrl: result.reviewUrl,
+            headSha: details.headSha,
+          });
           sendJson(res, result);
           return;
         }

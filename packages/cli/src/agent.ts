@@ -353,16 +353,25 @@ Examples:
 
   agent
     .command('tour-delete')
-    .description('Remove a walkthrough, or all of them for this session')
-    .argument('[tour-id]', 'Walkthrough to remove; omit to remove every one in this session')
-    .action((tourId?: string) => {
+    .description('Remove a walkthrough')
+    .argument('[tour-id]', 'Walkthrough to remove')
+    .option('--all', 'Remove every finished walkthrough in this session instead')
+    .option('--include-building', 'With --all, also remove one another agent may still be writing')
+    .action((tourId: string | undefined, opts: { all?: boolean; includeBuilding?: boolean }) => {
       const session = requireSession();
       if (tourId) {
         deleteTour(tourId);
         console.log(pc.green(`Removed walkthrough ${tourId.slice(0, 8)}`));
         return;
       }
-      deleteToursForSession(session.id);
+      // Deleting every walkthrough has to be asked for. Reaching it by leaving the id off meant
+      // an agent told to "fix the walkthrough" could wipe one a human recorded.
+      if (!opts.all) {
+        console.error(pc.red('Give a walkthrough id, or --all to remove every one in this session'));
+        process.exitCode = 1;
+        return;
+      }
+      deleteToursForSession(session.id, { keepBuilding: !opts.includeBuilding });
       console.log(pc.green('Removed every walkthrough in this session'));
     });
 

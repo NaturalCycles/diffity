@@ -29,11 +29,15 @@ export interface Thread {
   updatedAt: string;
   /** When this finding was last sent to the forge, or null while it has never left the machine. */
   submittedAt: string | null;
+  submittedReviewUrl: string | null;
+  submittedHeadSha: string | null;
   comments: ThreadComment[];
 }
 
 interface ThreadRow {
   submitted_at?: string | null;
+  submitted_review_url?: string | null;
+  submitted_head_sha?: string | null;
   id: string;
   session_id: string;
   file_path: string;
@@ -68,6 +72,8 @@ function rowToThread(row: ThreadRow, comments: ThreadComment[]): Thread {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     submittedAt: row.submitted_at ?? null,
+    submittedReviewUrl: row.submitted_review_url ?? null,
+    submittedHeadSha: row.submitted_head_sha ?? null,
     comments,
   };
 }
@@ -105,7 +111,12 @@ function getCommentsForThread(threadId: string): ThreadComment[] {
   return map.get(threadId) ?? [];
 }
 
-export function markThreadsSubmitted(threadIds: string[]): void {
+export interface SubmittedIn {
+  reviewUrl?: string | null;
+  headSha?: string | null;
+}
+
+export function markThreadsSubmitted(threadIds: string[], submittedIn: SubmittedIn = {}): void {
   if (threadIds.length === 0) {
     return;
   }
@@ -113,8 +124,12 @@ export function markThreadsSubmitted(threadIds: string[]): void {
   const db = getDb();
   const placeholders = threadIds.map(() => '?').join(', ');
   db.prepare(
-    `UPDATE comment_threads SET submitted_at = datetime('now') WHERE id IN (${placeholders})`,
-  ).run(...threadIds);
+    `UPDATE comment_threads
+        SET submitted_at = datetime('now'),
+            submitted_review_url = ?,
+            submitted_head_sha = ?
+      WHERE id IN (${placeholders})`,
+  ).run(submittedIn.reviewUrl ?? null, submittedIn.headSha ?? null, ...threadIds);
 }
 
 export function updateThreadLines(threadId: string, startLine: number, endLine: number): void {
@@ -163,6 +178,8 @@ export function createThread(
     createdAt: now,
     updatedAt: now,
     submittedAt: null,
+    submittedReviewUrl: null,
+    submittedHeadSha: null,
     comments: [{
       id: commentId,
       author,
