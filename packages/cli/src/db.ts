@@ -128,6 +128,9 @@ function migrateDb(db: DatabaseSync): void {
   // identified by ref and commit alone, which two repositories sharing a data directory can
   // collide on -- `work` and `master` are not unique names.
   addColumn(db, 'review_sessions', 'repo_root', 'TEXT');
+  // Which branch the review is of. The base it is compared against changes as the branch is
+  // updated, so the base cannot be what identifies the review.
+  addColumn(db, 'review_sessions', 'branch', 'TEXT');
   // Sending a finding to the forge is not the same as resolving it, so this is its own column
   // rather than a status: a submitted thread is still open until someone deals with it.
   addColumn(db, 'comment_threads', 'submitted_at', 'TEXT');

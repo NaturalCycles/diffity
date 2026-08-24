@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { getHeadHash, getDiffityDir, getRepoRoot } from '@diffity/git';
+import { getHeadHash, getDiffityDir, getRepoRoot, getCurrentBranch, WORKING_TREE_REFS } from '@diffity/git';
 import { getDb, queryAll, queryOne } from './db.js';
 import { reanchorInWorkingTree } from './anchor.js';
 import { carryReviewRun } from './review-run.js';
@@ -17,23 +17,95 @@ function sessionFilePath(): string {
   return join(getDiffityDir(), 'current-session');
 }
 
-export function findOrCreateSession(ref: string): Session {
-  const db = getDb();
-  const headHash = getHeadHash();
+/** Browsing files is not reviewing a change, and its notes are not about a diff. */
+const TREE_REF = '__tree__';
 
+/**
+ * What a ref asks to review. Sessions continue each other only within one of these: the base a
+ * branch is compared against changes every time the branch is updated, but reviewing uncommitted
+ * work, reviewing a branch against a base, and browsing the file tree are three different
+ * activities over three different sets of lines.
+ */
+type ReviewScope = 'tree' | 'working-tree' | 'base';
+
+function reviewScope(ref: string): ReviewScope {
+  if (ref === TREE_REF) {
+    return 'tree';
+  }
+  return WORKING_TREE_REFS.has(ref) ? 'working-tree' : 'base';
+}
+
+/**
+ * A row written before sessions recorded their branch has none. It still belongs to this checkout
+ * — a working tree is on one branch at a time — so an unknown branch matches rather than
+ * stranding the findings it holds.
+ */
+function branchMatches(rowBranch: string | null, branch: string | null): boolean {
+  return rowBranch === null || branch === null || rowBranch === branch;
+}
+
+/**
+ * Every session for this checkout that is part of the same review, newest first.
+ */
+function sessionsInScope(
+  repoRoot: string | null,
+  branch: string | null,
+  ref: string,
+): { id: string; ref: string }[] {
+  const scope = reviewScope(ref);
+  return queryAll<{ id: string; ref: string; branch: string | null }>(
+    'SELECT id, ref, branch FROM review_sessions WHERE repo_root IS ? ORDER BY created_at DESC, rowid DESC',
+    repoRoot,
+  ).filter(row => branchMatches(row.branch, branch) && reviewScope(row.ref) === scope);
+}
+
+export function findOrCreateSession(ref: string): Session {
+  const headHash = getHeadHash();
   const repoRoot = getRepoRoot();
+  const branch = getCurrentBranch();
+
+  const session = openSession(ref, headHash, repoRoot, branch);
+
+  // A session is identified by the commit and the base as well, so both committing and updating
+  // the branch from its base start a new one. Anything still open has to come along: the whole
+  // point of reviewing your own change is to act on the findings, and acting on them moves HEAD.
+  const siblings = sessionsInScope(repoRoot, branch, ref).filter(row => row.id !== session.id);
+
+  if (siblings.length > 0) {
+    gatherOpenWork(siblings.map(row => row.id), session.id);
+    // A run belongs to the session the review was last read through. Taking one from any older
+    // sibling would bring a review finished two commits ago back to life.
+    carryReviewRun(siblings[0].id, session.id);
+    reanchorThreads(session.id);
+  }
+
+  writeFileSync(sessionFilePath(), JSON.stringify(session));
+  return session;
+}
+
+function openSession(
+  ref: string,
+  headHash: string,
+  repoRoot: string | null,
+  branch: string,
+): Session {
+  const db = getDb();
 
   const existing = queryOne<{ id: string; ref: string; head_hash: string }>(
-    'SELECT id, ref, head_hash FROM review_sessions WHERE ref = ? AND head_hash = ? AND repo_root IS ?',
+    `SELECT id, ref, head_hash FROM review_sessions
+      WHERE ref = ? AND head_hash = ? AND repo_root IS ? AND (branch IS ? OR branch IS NULL)`,
     ref,
     headHash,
     repoRoot,
+    branch,
   );
 
   if (existing) {
-    const session: Session = { id: existing.id, ref: existing.ref, headHash: existing.head_hash };
-    writeFileSync(sessionFilePath(), JSON.stringify(session));
-    return session;
+    db.prepare('UPDATE review_sessions SET branch = ? WHERE id = ? AND branch IS NULL').run(
+      branch,
+      existing.id,
+    );
+    return { id: existing.id, ref: existing.ref, headHash: existing.head_hash };
   }
 
   // A session written before sessions recorded their repository has no repo_root. Adopt it
@@ -45,33 +117,20 @@ export function findOrCreateSession(ref: string): Session {
   );
 
   if (legacy) {
-    db.prepare('UPDATE review_sessions SET repo_root = ? WHERE id = ?').run(repoRoot, legacy.id);
-    const session: Session = { id: legacy.id, ref: legacy.ref, headHash: legacy.head_hash };
-    writeFileSync(sessionFilePath(), JSON.stringify(session));
-    return session;
+    db.prepare('UPDATE review_sessions SET repo_root = ?, branch = ? WHERE id = ?').run(
+      repoRoot,
+      branch,
+      legacy.id,
+    );
+    return { id: legacy.id, ref: legacy.ref, headHash: legacy.head_hash };
   }
-
-  // A session is identified by the commit as well as the ref, so committing creates a new
-  // one. Anything still open has to come with it: the whole point of reviewing your own
-  // change is to act on the findings, and acting on them moves HEAD.
-  const previous = queryOne<{ id: string }>(
-    'SELECT id FROM review_sessions WHERE ref = ? AND (repo_root IS ? OR repo_root IS NULL) ORDER BY created_at DESC, rowid DESC LIMIT 1',
-    ref,
-    repoRoot,
-  );
 
   const id = randomUUID();
   db.prepare(
-    'INSERT INTO review_sessions (id, ref, head_hash, repo_root) VALUES (?, ?, ?, ?)'
-  ).run(id, ref, headHash, repoRoot);
+    'INSERT INTO review_sessions (id, ref, head_hash, repo_root, branch) VALUES (?, ?, ?, ?, ?)',
+  ).run(id, ref, headHash, repoRoot, branch);
 
-  if (previous) {
-    carryForward(previous.id, id);
-  }
-
-  const session: Session = { id, ref, headHash };
-  writeFileSync(sessionFilePath(), JSON.stringify(session));
-  return session;
+  return { id, ref, headHash };
 }
 
 /**
@@ -83,19 +142,29 @@ export function findOrCreateSession(ref: string): Session {
  * it was written against.
  */
 export function carryForward(fromSessionId: string, toSessionId: string): void {
-  const db = getDb();
-
-  db.prepare(
-    "UPDATE comment_threads SET session_id = ? WHERE session_id = ? AND status = 'open'",
-  ).run(toSessionId, fromSessionId);
-
-  db.prepare('UPDATE tours SET session_id = ? WHERE session_id = ?').run(
-    toSessionId,
-    fromSessionId,
-  );
-
+  gatherOpenWork([fromSessionId], toSessionId);
   carryReviewRun(fromSessionId, toSessionId);
   reanchorThreads(toSessionId);
+}
+
+function gatherOpenWork(fromSessionIds: string[], toSessionId: string): void {
+  // An empty list would render as `IN ()`, and getting that wrong once moved every thread there is.
+  if (fromSessionIds.length === 0) {
+    return;
+  }
+
+  const db = getDb();
+  const placeholders = fromSessionIds.map(() => '?').join(', ');
+
+  db.prepare(
+    `UPDATE comment_threads SET session_id = ?
+      WHERE status = 'open' AND session_id IN (${placeholders})`,
+  ).run(toSessionId, ...fromSessionIds);
+
+  db.prepare(`UPDATE tours SET session_id = ? WHERE session_id IN (${placeholders})`).run(
+    toSessionId,
+    ...fromSessionIds,
+  );
 }
 
 /**
@@ -123,28 +192,24 @@ function reanchorThreads(sessionId: string): void {
 }
 
 /**
- * The session a request is about. A browser tab holds whichever id it loaded with, and a commit
- * since then will have carried the threads into a newer session for the same ref — so honouring a
- * stale id literally would tell the tab the review is empty.
+ * The session a request is about. A browser tab holds whichever id it loaded with, and a commit or
+ * a change of base since then will have carried the threads into a newer session for the same
+ * branch — so honouring a stale id literally would tell the tab the review is empty.
  */
 export function resolveSessionId(sessionId: string | null | undefined): string {
   if (!sessionId) {
     return getCurrentSession()?.id ?? '';
   }
 
-  const known = queryOne<{ ref: string; repo_root: string | null }>(
-    'SELECT ref, repo_root FROM review_sessions WHERE id = ?',
+  const known = queryOne<{ ref: string; repo_root: string | null; branch: string | null }>(
+    'SELECT ref, repo_root, branch FROM review_sessions WHERE id = ?',
     sessionId,
   );
   if (!known) {
     return sessionId;
   }
 
-  const newest = queryOne<{ id: string }>(
-    'SELECT id FROM review_sessions WHERE ref = ? AND repo_root IS ? ORDER BY created_at DESC, rowid DESC LIMIT 1',
-    known.ref,
-    known.repo_root,
-  );
+  const [newest] = sessionsInScope(known.repo_root, known.branch, known.ref);
 
   return newest?.id ?? sessionId;
 }
