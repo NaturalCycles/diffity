@@ -40,8 +40,8 @@ function reviewScope(ref: string): ReviewScope {
  * — a working tree is on one branch at a time — so an unknown branch matches rather than
  * stranding the findings it holds.
  */
-function branchMatches(rowBranch: string | null, branch: string | null): boolean {
-  return rowBranch === null || branch === null || rowBranch === branch;
+function branchMatches(rowBranch: string | null, branch: string): boolean {
+  return rowBranch === null || rowBranch === branch;
 }
 
 /**
@@ -49,7 +49,7 @@ function branchMatches(rowBranch: string | null, branch: string | null): boolean
  */
 function sessionsInScope(
   repoRoot: string | null,
-  branch: string | null,
+  branch: string,
   ref: string,
 ): { id: string; ref: string }[] {
   const scope = reviewScope(ref);
@@ -64,18 +64,29 @@ export function findOrCreateSession(ref: string): Session {
   const repoRoot = getRepoRoot();
   const branch = getCurrentBranch();
 
-  const session = openSession(ref, headHash, repoRoot, branch);
+  const { session, created } = openSession(ref, headHash, repoRoot, branch);
 
   // A session is identified by the commit and the base as well, so both committing and updating
   // the branch from its base start a new one. Anything still open has to come along: the whole
   // point of reviewing your own change is to act on the findings, and acting on them moves HEAD.
+  //
+  // A superseded session is never deleted, so "a sibling exists" stays true forever and cannot be
+  // what decides this. `/api/info` calls in here on a five-second poll, and the work below moves
+  // rows and reads the working tree once per anchored finding.
   const siblings = sessionsInScope(repoRoot, branch, ref).filter(row => row.id !== session.id);
+  const donors = sessionsHoldingWork(siblings.map(row => row.id));
 
-  if (siblings.length > 0) {
-    gatherOpenWork(siblings.map(row => row.id), session.id);
-    // A run belongs to the session the review was last read through. Taking one from any older
-    // sibling would bring a review finished two commits ago back to life.
-    carryReviewRun(siblings[0].id, session.id);
+  if (donors.length > 0) {
+    gatherOpenWork(donors, session.id);
+  }
+
+  if (created || donors.length > 0) {
+    // A run belongs to the session the review was last read through — the newest sibling, which is
+    // not necessarily one holding findings. Taking one from any older sibling would bring a review
+    // finished two commits ago back to life.
+    if (siblings.length > 0) {
+      carryReviewRun(siblings[0].id, session.id);
+    }
     reanchorThreads(session.id);
   }
 
@@ -83,12 +94,39 @@ export function findOrCreateSession(ref: string): Session {
   return session;
 }
 
+/**
+ * Which of these sessions still hold anything worth taking, newest first. A finding that has been
+ * resolved stays where it was dealt with, so it is not work; an unfinished review run is, because
+ * the page has to keep saying a review is under way across a commit.
+ */
+function sessionsHoldingWork(sessionIds: string[]): string[] {
+  if (sessionIds.length === 0) {
+    return [];
+  }
+
+  const placeholders = sessionIds.map(() => '?').join(', ');
+  const holders = new Set(
+    queryAll<{ session_id: string }>(
+      `SELECT session_id FROM comment_threads WHERE status = 'open' AND session_id IN (${placeholders})
+       UNION
+       SELECT session_id FROM tours WHERE session_id IN (${placeholders})
+       UNION
+       SELECT session_id FROM review_runs WHERE finished_at IS NULL AND session_id IN (${placeholders})`,
+      ...sessionIds,
+      ...sessionIds,
+      ...sessionIds,
+    ).map(row => row.session_id),
+  );
+
+  return sessionIds.filter(id => holders.has(id));
+}
+
 function openSession(
   ref: string,
   headHash: string,
   repoRoot: string | null,
   branch: string,
-): Session {
+): { session: Session; created: boolean } {
   const db = getDb();
 
   const existing = queryOne<{ id: string; ref: string; head_hash: string }>(
@@ -105,7 +143,10 @@ function openSession(
       branch,
       existing.id,
     );
-    return { id: existing.id, ref: existing.ref, headHash: existing.head_hash };
+    return {
+      session: { id: existing.id, ref: existing.ref, headHash: existing.head_hash },
+      created: false,
+    };
   }
 
   // A session written before sessions recorded their repository has no repo_root. Adopt it
@@ -122,7 +163,10 @@ function openSession(
       branch,
       legacy.id,
     );
-    return { id: legacy.id, ref: legacy.ref, headHash: legacy.head_hash };
+    return {
+      session: { id: legacy.id, ref: legacy.ref, headHash: legacy.head_hash },
+      created: false,
+    };
   }
 
   const id = randomUUID();
@@ -130,7 +174,7 @@ function openSession(
     'INSERT INTO review_sessions (id, ref, head_hash, repo_root, branch) VALUES (?, ?, ?, ?, ?)',
   ).run(id, ref, headHash, repoRoot, branch);
 
-  return { id, ref, headHash };
+  return { session: { id, ref, headHash }, created: true };
 }
 
 /**

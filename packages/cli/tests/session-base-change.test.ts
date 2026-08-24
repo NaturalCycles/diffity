@@ -240,3 +240,48 @@ describe('findings stranded by an earlier build', () => {
     expect(getReviewRun(second.id).note).toBe('still going');
   });
 });
+
+describe('re-opening a session that is already current', () => {
+  // /api/info is polled every 5s per tab and calls findOrCreateSession. Superseded sessions are
+  // never deleted, so "a sibling exists" is permanently true — if that were the condition, every
+  // poll would move threads, carry runs and read the working tree for every anchored finding.
+  it('does not re-anchor when there is nothing left to gather', async () => {
+    const { findOrCreateSession } = await import('../src/session.js');
+    const { createThread, getThread } = await import('../src/threads.js');
+
+    // Its own branch, so the sessions the earlier cases left behind are out of scope and this
+    // really is the "nothing to gather" case.
+    git(['checkout', '-b', 'poll-only']);
+    writeFileSync(join(repoDir, 'poll.ts'), 'const a = 1;\nconst target = 2;\n');
+    git(['add', '.']);
+    git(['commit', '-m', 'poll.ts']);
+    const first = findOrCreateSession('HEAD~1');
+    const thread = createThread(
+      first.id, 'poll.ts', 'new', 2, 2, 'P2: about the target',
+      agent, 'const target = 2;',
+    );
+
+    // Same base, same commit: this is the poll case, and the anchor must be left alone even
+    // though the line it points at has moved in the working tree.
+    writeFileSync(join(repoDir, 'poll.ts'), 'const a = 1;\nconst inserted = 0;\nconst target = 2;\n');
+    const again = findOrCreateSession('HEAD~1');
+
+    expect(again.id).toBe(first.id);
+    expect(getThread(thread.id)?.startLine).toBe(2);
+  });
+
+  it('still gathers when a sibling is holding a finding', async () => {
+    const { findOrCreateSession } = await import('../src/session.js');
+    const { createThread, getThreadsForSession } = await import('../src/threads.js');
+
+    const onBaseA = findOrCreateSession('HEAD~1');
+    const thread = createThread(
+      onBaseA.id, 'a.ts', 'new', 1, 1, 'P3: written against one base', agent,
+    );
+
+    const onBaseB = findOrCreateSession('HEAD~2');
+
+    expect(onBaseB.id).not.toBe(onBaseA.id);
+    expect(getThreadsForSession(onBaseB.id).map(t => t.id)).toContain(thread.id);
+  });
+});
