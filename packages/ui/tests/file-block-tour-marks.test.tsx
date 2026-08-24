@@ -165,3 +165,19 @@ describe('FileBlock line anchors', () => {
     expect(document.querySelector('[data-new-line="42"]')).toBeTruthy();
   });
 });
+
+describe('FileBlock lamps for stops outside the diff', () => {
+  it('moves the lamp to the first rendered line of the stop', () => {
+    // The stop starts at 20, which is not in the diff; the hunk starts at 40.
+    renderWithMarks(file('src/a.ts', [threeLines]), [mark(0, 20, 41)]);
+
+    const lamp = screen.getByRole('button', { name: /walkthrough stop 1/i });
+    expect(lamp.closest('tr')?.getAttribute('data-new-line')).toBe('40');
+  });
+
+  it('shows no lamp when the whole stop is outside the diff', () => {
+    renderWithMarks(file('src/a.ts', [threeLines]), [mark(0, 10, 20)]);
+
+    expect(screen.queryByRole('button', { name: /walkthrough stop/i })).toBeNull();
+  });
+});

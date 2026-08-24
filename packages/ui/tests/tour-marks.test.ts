@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { tourMarks, marksByPath, marksStartingAt, focusRangesFromMarks, stopTitle } from '../src/lib/tour-marks';
+import { tourMarks, marksByPath, marksStartingAt, focusRangesFromMarks, stopTitle, anchorLineInHunks } from '../src/lib/tour-marks';
 import { TOUR_NOT_STARTED } from '../src/lib/tour-navigation';
 import type { Tour, TourStep } from '../src/lib/api';
 
@@ -124,5 +124,46 @@ describe('stopTitle', () => {
 
   it('has nothing to say without a stop', () => {
     expect(stopTitle([], 0)).toBeUndefined();
+  });
+});
+
+describe('stopTitle with several stops in one hunk', () => {
+  const marks = tourMarks(tour([
+    step('a.ts', 1, 10, 14, 'the marker'),
+    step('a.ts', 2, 12, 13),
+  ]));
+
+  // The hunk still gets the current-stop highlight, so the label has to agree with it.
+  it('says which of them you are on', () => {
+    expect(stopTitle(marks, 1)).toBe('Walkthrough stops 1, 2 — you are on 2');
+  });
+
+  it('says nothing extra when none of them is current', () => {
+    expect(stopTitle(marks, TOUR_NOT_STARTED)).toBe('Walkthrough stops 1, 2');
+  });
+});
+
+describe('anchorLineInHunks', () => {
+  const hunks = [
+    { header: '', oldStart: 10, oldCount: 3, newStart: 10, newCount: 3, lines: [] },
+    { header: '', oldStart: 40, oldCount: 5, newStart: 40, newCount: 5, lines: [] },
+  ];
+
+  it('keeps a start line that the diff renders', () => {
+    expect(anchorLineInHunks(hunks, 41, 43)).toBe(41);
+  });
+
+  // A step can point at a line in the gap between two hunks — unchanged code the diff does not
+  // show. The lamp then belongs on the first line of the stop that is actually on screen.
+  it('moves to the first rendered line of the range', () => {
+    expect(anchorLineInHunks(hunks, 20, 41)).toBe(40);
+  });
+
+  it('has nowhere to go when no line of the range is rendered', () => {
+    expect(anchorLineInHunks(hunks, 20, 30)).toBeNull();
+  });
+
+  it('handles a single-line stop inside a hunk', () => {
+    expect(anchorLineInHunks(hunks, 12, 12)).toBe(12);
   });
 });

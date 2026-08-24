@@ -7,7 +7,7 @@ import type { HighlightedTokens } from '../../hooks/use-highlighter';
 import type { CommentSide, LineSelection } from '../comments/types';
 import { type ViewMode, getFilePath, buildChangeGroupPatch, extractLinesFromDiff, extractLinesFromExpandedLines } from '../../lib/diff-utils';
 import { classifyHunk, rangesIntersectingHunk, MECHANICAL_LABELS } from '../../lib/hunk-attention';
-import { stopTitle, type TourFocusRange, type TourMark, type TourStopRef } from '../../lib/tour-marks';
+import { stopTitle, anchorLineInHunks, type TourFocusRange, type TourMark, type TourStopRef } from '../../lib/tour-marks';
 import { TOUR_NOT_STARTED } from '../../lib/tour-navigation';
 import { revertHunk as apiRevertHunk } from '../../lib/api';
 import { ConfirmDialog } from '../ui/confirm-dialog';
@@ -284,6 +284,23 @@ export function FileBlock(props: FileBlockProps) {
     () => file.hunks.map(hunk => classifyHunk(file, hunk)),
     [file],
   );
+
+  // A stop can begin on a line the diff does not render, so the lamp is moved to the first line
+  // of the stop that is on screen. A stop with no rendered line keeps its place in the file list
+  // and gets no lamp, since there is nowhere honest to put one.
+  const anchoredMarks = useMemo(() => {
+    if (!tourMarks) {
+      return undefined;
+    }
+    const anchored: TourMark[] = [];
+    for (const mark of tourMarks) {
+      const line = anchorLineInHunks(file.hunks, mark.startLine, mark.endLine);
+      if (line !== null) {
+        anchored.push({ ...mark, startLine: line });
+      }
+    }
+    return anchored;
+  }, [tourMarks, file.hunks]);
 
   const annotationByStep = useMemo(() => {
     const byStep = new Map<number, string>();
@@ -566,7 +583,7 @@ export function FileBlock(props: FileBlockProps) {
                     hunk={hunk}
                     attentionClass={attentionClass}
                     attentionTitle={attentionTitle}
-                    tourMarks={tourMarks}
+                    tourMarks={anchoredMarks}
                     activeStepIndex={activeStepIndex}
                     onTourMarkClick={onTourMarkClick}
                     viewMode={viewMode}

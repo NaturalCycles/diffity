@@ -10,7 +10,7 @@ import { useReviewThreads } from '../../hooks/use-review-threads';
 import { useTours } from '../../hooks/use-tours';
 import { useHideWhitespace } from '../../hooks/use-hide-whitespace';
 import { pickActiveTour, orderPathsByTour, stopsByPath } from '../../lib/tour-order';
-import { TOUR_NOT_STARTED } from '../../lib/tour-navigation';
+import { TOUR_NOT_STARTED, clampTourStep } from '../../lib/tour-navigation';
 import { tourMarks, marksByPath, focusRangesFromMarks, type TourFocusRange } from '../../lib/tour-marks';
 import { TourStepper } from './tour-stepper';
 import { useCommentActions } from '../../hooks/use-comment-actions';
@@ -89,6 +89,12 @@ export function DiffPage() {
 
   const diffPaths = useMemo(() => (diff ? diff.files.map(file => getFilePath(file)) : []), [diff]);
   const tourStops = useMemo(() => stopsByPath(activeTour, diffPaths), [activeTour, diffPaths]);
+  const activeStepIndex = clampTourStep(tourStepIndex, activeTour?.steps.length ?? 0);
+
+  // A different walkthrough is a different reading order, so the position does not carry over.
+  useEffect(() => {
+    setTourStepIndex(TOUR_NOT_STARTED);
+  }, [activeTour?.id]);
 
   // Naming the amount matters: a filtered diff disagrees with the forge's own counts, and after
   // the stale-base episode an unexplained disagreement is the last thing this page should show.
@@ -236,6 +242,9 @@ export function DiffPage() {
         next.add(path);
         return next;
       });
+      // The header is sticky, so it was under the cursor when it was clicked. Put the collapsed
+      // file back there rather than letting the page shorten under the reader.
+      requestAnimationFrame(() => diffViewRef.current?.anchorFileTop(path));
     } else {
       setCollapsedFiles((prev) => {
         const next = new Set(prev);
@@ -464,7 +473,7 @@ export function DiffPage() {
       {activeTour && (
         <TourStepper
           tour={activeTour}
-          stepIndex={tourStepIndex}
+          stepIndex={activeStepIndex}
           onStepChange={handleTourStepChange}
         />
       )}
@@ -511,7 +520,7 @@ export function DiffPage() {
             onPendingSelectionChange={setPendingSelection}
             focusRangesByFile={focusRangesByFile}
             tourMarksByFile={tourMarksByFile}
-            activeStepIndex={tourStepIndex}
+            activeStepIndex={activeStepIndex}
             onTourMarkClick={handleTourStepChange}
           />
         ) : null}

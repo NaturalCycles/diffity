@@ -6,6 +6,7 @@ import { GeneralComments } from '../comments/general-comments';
 import { useHighlighter } from '../../hooks/use-highlighter';
 import { type ViewMode, getFilePath } from '../../lib/diff-utils';
 import type { TourFocusRange, TourMark } from '../../lib/tour-marks';
+import { isScrolledPastFileTop } from '../../lib/collapse-anchor';
 import type { CommentThread, LineSelection } from '../comments/types';
 import type { CommentActions } from '../../hooks/use-comment-actions';
 
@@ -20,6 +21,8 @@ export interface DiffViewHandle {
   scrollToFile: (path: string) => void;
   scrollToThread: (threadId: string, filePath: string) => void;
   scrollToLine: (filePath: string, line: number) => void;
+  /** Keep a file's header where the reader is looking, once collapsing it has shortened the page. */
+  anchorFileTop: (filePath: string) => void;
 }
 
 const VIRTUALIZER_OVERSCAN = 3;
@@ -174,6 +177,25 @@ export function DiffView(props: DiffViewProps) {
         virtualizer.scrollToIndex(index, { align: 'start' });
         settleScrollToElement(`#file-${CSS.escape(encodeURIComponent(path))}`, 'start');
       }
+    },
+    anchorFileTop: (filePath: string) => {
+      const selector = `#file-${CSS.escape(encodeURIComponent(filePath))}`;
+      const element = document.querySelector(selector);
+      const container = scrollElementRef.current;
+      if (!element || !container) {
+        return;
+      }
+      if (!isScrolledPastFileTop(element.getBoundingClientRect().top, container.getBoundingClientRect().top)) {
+        return;
+      }
+
+      const index = diff.files.findIndex((f) => getFilePath(f) === filePath);
+      if (index < 0) {
+        return;
+      }
+      scrollTargetRef.current = filePath;
+      virtualizer.scrollToIndex(index, { align: 'start' });
+      settleScrollToElement(selector, 'start');
     },
     scrollToLine: (filePath: string, line: number) => {
       const index = diff.files.findIndex((f) => getFilePath(f) === filePath);

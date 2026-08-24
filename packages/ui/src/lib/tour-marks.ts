@@ -1,3 +1,4 @@
+import type { DiffHunk } from '@diffity/parser';
 import type { Tour } from './api';
 
 export interface TourMark {
@@ -80,11 +81,37 @@ export function stopTitle(stops: TourStopRef[], activeStepIndex: number): string
   }
 
   if (stops.length > 1) {
-    return `Walkthrough stops ${stops.map(stop => stop.stepIndex + 1).join(', ')}`;
+    const positions = stops.map(stop => stop.stepIndex + 1).join(', ');
+    const current = stops.find(stop => stop.stepIndex === activeStepIndex);
+    const here = current ? ` — you are on ${current.stepIndex + 1}` : '';
+    return `Walkthrough stops ${positions}${here}`;
   }
 
   const [stop] = stops;
   const annotation = stop.annotation ? ` — ${stop.annotation}` : '';
   const here = stop.stepIndex === activeStepIndex ? ' (you are here)' : '';
   return `Walkthrough stop ${stop.stepIndex + 1}${annotation}${here}`;
+}
+
+/**
+ * Where a stop's lamp belongs. A step can point at a line the diff does not render — unchanged
+ * code between two hunks — so the lamp goes on the first line of the range that is on screen.
+ * Null means the whole range is outside the diff, and the file list is the only place it shows.
+ */
+export function anchorLineInHunks(
+  hunks: Pick<DiffHunk, 'newStart' | 'newCount'>[],
+  startLine: number,
+  endLine: number,
+): number | null {
+  let best: number | null = null;
+
+  for (const hunk of hunks) {
+    const from = Math.max(hunk.newStart, startLine);
+    const to = Math.min(hunk.newStart + hunk.newCount - 1, endLine);
+    if (from <= to && (best === null || from < best)) {
+      best = from;
+    }
+  }
+
+  return best;
 }

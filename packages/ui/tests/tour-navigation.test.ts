@@ -5,6 +5,7 @@ import {
   nextTourStep,
   prevTourStep,
   canRestartTour,
+  clampTourStep,
 } from '../src/lib/tour-navigation';
 
 describe('tourPositionLabel', () => {
@@ -58,5 +59,26 @@ describe('canRestartTour', () => {
     expect(canRestartTour(TOUR_NOT_STARTED)).toBe(false);
     expect(canRestartTour(0)).toBe(false);
     expect(canRestartTour(1)).toBe(true);
+  });
+});
+
+describe('clampTourStep', () => {
+  // The stepper used to clamp for its own display while the diff got the raw value, so a
+  // walkthrough replaced mid-session left the header on the last stop and nothing marked current.
+  it('leaves a valid index alone', () => {
+    expect(clampTourStep(3, 7)).toBe(3);
+    expect(clampTourStep(6, 7)).toBe(6);
+  });
+
+  it('pulls an index past the end back to the last stop', () => {
+    expect(clampTourStep(6, 3)).toBe(2);
+  });
+
+  it('keeps the not-started state', () => {
+    expect(clampTourStep(TOUR_NOT_STARTED, 7)).toBe(TOUR_NOT_STARTED);
+  });
+
+  it('has nothing to point at in an empty walkthrough', () => {
+    expect(clampTourStep(0, 0)).toBe(TOUR_NOT_STARTED);
   });
 });

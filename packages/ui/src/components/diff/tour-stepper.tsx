@@ -40,9 +40,8 @@ export function TourStepper(props: TourStepperProps) {
     );
   }
 
-  const index = Math.min(stepIndex, steps.length - 1);
-  const started = index >= 0;
-  const step = started ? steps[index] : null;
+  const index = stepIndex;
+  const step = index >= 0 ? steps[index] ?? null : null;
   const next = nextTourStep(index, steps.length);
   const previous = prevTourStep(index, steps.length);
 
@@ -101,7 +100,7 @@ export function TourStepper(props: TourStepperProps) {
           className={buttonClass}
           onClick={() => next !== null && onStepChange(next)}
           disabled={next === null}
-          title={started ? 'Next stop' : 'Start the walkthrough'}
+          title={step ? 'Next stop' : 'Start the walkthrough'}
         >
           <ChevronDownIcon className="w-3.5 h-3.5" />
         </button>
