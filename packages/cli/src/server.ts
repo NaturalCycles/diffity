@@ -394,8 +394,17 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           const waitMs = Number.isFinite(waitSeconds)
             ? Math.min(Math.max(waitSeconds, 0), MAX_LIVE_WAIT_SECONDS) * 1000
             : 0;
-          waitForLiveRequest(sid, waitMs).then(
+          // The listener going away is the only reliable signal that it is no longer there, and
+          // presence is what the page shows. Without this it stayed counted until the wait ran out.
+          const listenerGone = new AbortController();
+          req.on('close', () => listenerGone.abort());
+
+          waitForLiveRequest(sid, waitMs, listenerGone.signal).then(
             request => {
+              // The connection may already be gone; writing to it would throw rather than help.
+              if (res.writableEnded || listenerGone.signal.aborted) {
+                return;
+              }
               if (!request) {
                 sendJson(res, { request: null });
                 return;
@@ -404,7 +413,11 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
               // has to remember is a rule that holds.
               sendJson(res, { request: { ...request, mayChangeCode: mayChangeCode(authorship()) } });
             },
-            err => sendError(res, 500, `Failed to wait for a live request: ${err}`),
+            err => {
+              if (!res.writableEnded && !listenerGone.signal.aborted) {
+                sendError(res, 500, `Failed to wait for a live request: ${err}`);
+              }
+            },
           );
           return;
         }

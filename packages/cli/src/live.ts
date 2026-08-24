@@ -130,8 +130,9 @@ export function reclaimStaleLiveRequests(olderThanMinutes: number): number {
 }
 
 /**
- * Presence is a request parked on the claim route, not a row in the database: a listener that dies
- * takes its connection with it, so nothing has to expire.
+ * Presence is a request parked on the claim route, not a row in the database. Nothing expires,
+ * because the connection closing is what ends the wait — which only became true once something
+ * listened for it: before that a dead listener stayed counted until its wait ran out.
  *
  * Kept per session rather than per process, because one server holds a whole checkout — the file
  * browser is its own session and each ref gets one. A single set would have every session claiming
@@ -156,9 +157,17 @@ export function notifyLiveListeners(sessionId: string | null): void {
  * Waits for something to be asked, up to `waitMs`. Resolves with null on timeout so the caller can
  * tell "nothing was asked" from "something went wrong" and re-arm.
  */
-export function waitForLiveRequest(sessionId: string, waitMs: number): Promise<LiveRequest | null> {
+/**
+ * `signal` is the listener's connection going away. Without it a listener that died stayed counted
+ * until its wait ran out, and the page went on saying an agent was there for up to that long.
+ */
+export function waitForLiveRequest(
+  sessionId: string,
+  waitMs: number,
+  signal?: AbortSignal,
+): Promise<LiveRequest | null> {
   const claimed = claimNextLiveRequest(sessionId);
-  if (claimed || waitMs <= 0) {
+  if (claimed || waitMs <= 0 || signal?.aborted) {
     return Promise.resolve(claimed);
   }
 
@@ -175,8 +184,11 @@ export function waitForLiveRequest(sessionId: string, waitMs: number): Promise<L
         listeners.delete(sessionId);
       }
       clearTimeout(timer);
+      signal?.removeEventListener('abort', giveUp);
       resolve(request);
     };
+
+    const giveUp = () => finish(null);
 
     // Only a request this listener could take ends its wait. Waking on anything else would end it
     // with "nothing asked" and send the agent round the loop for someone else's question.
@@ -188,6 +200,7 @@ export function waitForLiveRequest(sessionId: string, waitMs: number): Promise<L
     };
     const timer = setTimeout(() => finish(null), waitMs);
     timer.unref?.();
+    signal?.addEventListener('abort', giveUp, { once: true });
 
     const forSession = listeners.get(sessionId) ?? new Set<() => void>();
     forSession.add(wake);
