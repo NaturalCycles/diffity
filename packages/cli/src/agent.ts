@@ -314,9 +314,15 @@ Examples:
       const startedAt = Date.now();
       let payload: { request: LiveRequest | null };
       try {
-        const res = await fetch(`http://127.0.0.1:${instance.port}/api/live/claim?wait=${wait}`, {
-          method: 'POST',
-        });
+        // Park on the session the server is serving, not on whatever the shared current-session
+        // file last named — those differ whenever another worktree has opened a review since.
+        const info = await fetch(`http://127.0.0.1:${instance.port}/api/info`);
+        const sessionId = info.ok
+          ? ((await info.json()) as { sessionId?: string }).sessionId
+          : undefined;
+        const claimUrl = `http://127.0.0.1:${instance.port}/api/live/claim?wait=${wait}`
+          + (sessionId ? `&session=${encodeURIComponent(sessionId)}` : '');
+        const res = await fetch(claimUrl, { method: 'POST' });
         if (!res.ok) {
           console.error(pc.red(`Could not wait for a request: ${res.status} ${await res.text()}`));
           process.exitCode = 1;

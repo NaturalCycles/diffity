@@ -371,8 +371,19 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
         // as one arms and answers, and react-query keeps an unchanged object's identity — so
         // carrying this on the info payload made every consumer of it re-render each time a
         // listener came or went, which reads as the page reloading under you.
+        // The page asks about the session it is showing, which is the one for its ref — not
+        // whichever session the ambient current-session file last named, which is shared by every
+        // worktree using this data directory.
+        const liveSessionId = (): string => {
+          const asked = url.searchParams.get('session');
+          if (asked) {
+            return resolveSessionId(asked);
+          }
+          return findOrCreateSession(url.searchParams.get('ref') || effectiveRef).id;
+        };
+
         if (pathname === '/api/live/status') {
-          const sid = resolveSessionId(url.searchParams.get('session'));
+          const sid = liveSessionId();
           sendJson(res, {
             enabled: isLoopbackBind(getBindHost()),
             listening: sid ? liveListenerCount(sid) > 0 : false,
@@ -387,7 +398,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             sendError(res, 403, 'Live mode is only available on a loopback bind');
             return;
           }
-          const sid = resolveSessionId(url.searchParams.get('session'));
+          const sid = liveSessionId();
           if (!sid) {
             sendError(res, 400, 'No review session');
             return;
