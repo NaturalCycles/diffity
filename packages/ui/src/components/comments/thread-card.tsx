@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { CommentThread as CommentThreadType } from './types';
 import { isThreadResolved } from './types';
+import { submittedLabel } from '../../lib/submitted-marker';
 import { CommentBubble } from './comment-bubble';
 import { CommentForm } from './comment-form';
 import { TrashIcon } from '../icons/trash-icon';
@@ -41,12 +42,18 @@ export function ThreadCard(props: ThreadCardProps) {
    onAskReply, onActReply, askIsHeard,} = props;
   const [showReply, setShowReply] = useState(false);
   const resolved = isThreadResolved(thread);
+  const sentLabel = submittedLabel(thread.submittedAt);
 
   return (
     <div className={cn('rounded-lg overflow-hidden', className)} data-thread-id={thread.id}>
       <div className="flex items-center justify-between px-3 pt-2.5 pb-1.5">
         <div className="flex items-center gap-2">
           {headerLeft}
+          {sentLabel && (
+            <span className="text-[10px] text-text-muted shrink-0" data-testid="submitted-marker">
+              {sentLabel}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-1">
           {onResolve && onUnresolve && (

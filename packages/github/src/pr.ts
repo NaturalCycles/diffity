@@ -52,6 +52,81 @@ interface GitHubCommentRaw {
   created_at: string;
 }
 
+export interface RemoteThreadState {
+  filePath: string;
+  side: 'old' | 'new';
+  endLine: number | null;
+  body: string;
+  isResolved: boolean;
+}
+
+const REVIEW_THREADS_QUERY = `query($owner:String!,$repo:String!,$number:Int!){
+  repository(owner:$owner,name:$repo){
+    pullRequest(number:$number){
+      reviewThreads(first:100){
+        nodes{
+          isResolved
+          line
+          originalLine
+          diffSide
+          path
+          comments(first:1){ nodes{ body } }
+        }
+      }
+    }
+  }
+}`;
+
+/**
+ * Whether the author has ticked a thread off. REST does not carry it — resolution lives on
+ * `PullRequestReviewThread`, which is GraphQL only — so this is a second call rather than a field
+ * on the comments we already fetch.
+ *
+ * One page. A review with more than a hundred threads reports the first hundred, which is wrong in
+ * a way that only under-reports: a thread we do not see is left open here, never wrongly closed.
+ */
+export function pullThreadState(owner: string, repo: string, prNumber: number): RemoteThreadState[] {
+  try {
+    const json = gh([
+      'api', 'graphql',
+      '-f', `query=${REVIEW_THREADS_QUERY}`,
+      '-F', `owner=${owner}`,
+      '-F', `repo=${repo}`,
+      '-F', `number=${prNumber}`,
+    ]);
+    if (!json) return [];
+
+    const data = JSON.parse(json) as {
+      data?: { repository?: { pullRequest?: { reviewThreads?: { nodes?: RawReviewThread[] } } } };
+    };
+    const nodes = data.data?.repository?.pullRequest?.reviewThreads?.nodes ?? [];
+
+    return nodes.flatMap(node => {
+      const body = node.comments?.nodes?.[0]?.body;
+      if (!body || !node.path) return [];
+      return [{
+        filePath: node.path,
+        side: node.diffSide === 'LEFT' ? 'old' as const : 'new' as const,
+        // Null once the thread goes outdated, which is why it is not part of the identity.
+        endLine: node.line ?? node.originalLine ?? null,
+        body,
+        isResolved: !!node.isResolved,
+      }];
+    });
+  } catch {
+    return [];
+  }
+}
+
+interface RawReviewThread {
+  isResolved: boolean;
+  line: number | null;
+  originalLine: number | null;
+  diffSide: string;
+  path: string;
+  comments?: { nodes?: { body: string }[] };
+}
+
 export function pullComments(owner: string, repo: string, prNumber: number): PulledThread[] {
   try {
     const json = gh([

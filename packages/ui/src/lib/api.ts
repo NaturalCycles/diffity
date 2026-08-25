@@ -314,6 +314,7 @@ export function createReviewOnGitHub(review: {
 
 export interface PullCommentsResult {
   pulled: number;
+  resolved: number;
   skipped: number;
 }
 
