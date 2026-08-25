@@ -24,6 +24,8 @@ export interface Comment {
   createdAt: string;
   /** Set when an aside asked the agent for something, and as that request is picked up and answered. */
   liveRequestedAt?: string | null;
+  /** Which button was pressed. Absent is a question. */
+  liveIntent?: 'ask' | 'act';
   liveClaimedAt?: string | null;
   liveAnsweredAt?: string | null;
 }

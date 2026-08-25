@@ -14,6 +14,7 @@ import { TOUR_NOT_STARTED, clampTourStep } from '../../lib/tour-navigation';
 import { liveStatusOptions } from '../../queries/live';
 import { readReadingPosition, writeReadingPosition } from '../../lib/reading-position';
 import { staleMessage } from '../../lib/stale-files';
+import { canAskAgent, canActOnCode } from '../../lib/live-mode';
 import { patchDiffFile } from '../../lib/patch-diff-file';
 import { newAnswers, dropSeenAlerts, type AnswerAlert } from '../../lib/answer-alerts';
 import { whereIsThread, type ThreadPosition } from '../../lib/thread-visibility';
@@ -94,10 +95,8 @@ export function DiffPage() {
   // Asking is a button on the comment box, not a mode: a mode you have to remember is a mode you
   // forget, and the first version of this answered three comments with silence because of it.
   const { data: liveStatus } = useQuery(liveStatusOptions(refParam));
-  const canAsk = !!liveStatus?.enabled && reviewsEnabled;
-  // Act is not offered on a pull request somebody else wrote. Better than offering it and refusing:
-  // a button that is there is a promise.
-  const canAct = canAsk && !!liveStatus?.mayChangeCode;
+  const canAsk = canAskAgent(liveStatus, reviewsEnabled);
+  const canAct = canActOnCode(liveStatus, reviewsEnabled);
   const askIsHeard = !!liveStatus?.listening;
 
   const askOrAct = useCallback(

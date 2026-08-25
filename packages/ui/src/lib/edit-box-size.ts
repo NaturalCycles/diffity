@@ -1,18 +1,20 @@
 export const MIN_EDIT_ROWS = 4;
-export const MAX_EDIT_ROWS = 24;
 
-/** Roughly how many characters fit on a line in the comment column before it wraps. */
-const CHARS_PER_ROW = 80;
+/** Roughly the line height at the size comments are set in, for turning rows into pixels. */
+const ROW_HEIGHT = 21;
+const MAX_EDIT_ROWS = 24;
+
+export const MIN_EDIT_HEIGHT = MIN_EDIT_ROWS * ROW_HEIGHT;
+export const MAX_EDIT_HEIGHT = MAX_EDIT_ROWS * ROW_HEIGHT;
 
 /**
- * How tall the box should be to edit a body without scrolling it. A fixed three rows meant editing
- * a long finding through a letterbox; past MAX_EDIT_ROWS the box would push the diff off screen,
- * and scrolling inside it becomes the lesser evil.
+ * How tall the box for editing a comment should be. The height comes from the element measuring its
+ * own wrapped content — a character count guesses, and guesses differently in split and unified view
+ * — and this only decides how far it is allowed to go.
+ *
+ * A fixed three rows meant editing a long finding through a letterbox; past the maximum the box
+ * would push the diff off screen, and scrolling inside it is the lesser evil.
  */
-export function rowsForBody(body: string): number {
-  const rows = body
-    .split('\n')
-    .reduce((total, line) => total + Math.max(1, Math.ceil(line.length / CHARS_PER_ROW)), 0);
-
-  return Math.min(MAX_EDIT_ROWS, Math.max(MIN_EDIT_ROWS, rows));
+export function clampEditHeight(measured: number): number {
+  return Math.min(MAX_EDIT_HEIGHT, Math.max(MIN_EDIT_HEIGHT, measured));
 }
