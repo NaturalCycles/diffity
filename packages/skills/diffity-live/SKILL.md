@@ -80,7 +80,13 @@ merge — those wait to be asked for, here as everywhere.
 
 ### When you must not change code
 
-Run `{{binary}} agent live-status` if you are unsure. Editing is off the table when the diff is
+Run `{{binary}} agent live-status` if you are unsure.
+
+Whether changes are allowed is decided when diffity is launched. `--review` says you are reviewing
+somebody's change, `--work` says you are working on the branch — which is the case authorship gets
+wrong, since taking over a colleague's branch leaves their name on the pull request. Said neither
+way, it falls back to who wrote it. It lasts as long as that server and no longer, so a reader who
+hands work over restarts rather than unticking something. Editing is off the table when the diff is
 somebody else's pull request, however the conversation goes: reviewing is not editing, and a reader
 asking a follow-up has not asked you to rewrite their branch. Answer and amend instead, and say that
 is what you did.

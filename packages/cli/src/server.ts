@@ -47,7 +47,7 @@ import {
   type ReviewEvent,
 } from '@diffity/github';
 import { findOrCreateSession, resolveSessionId } from './session.js';
-import { mayChangeCode } from './live-permissions.js';
+import { resolveMayChangeCode, type SessionPurpose } from './live-permissions.js';
 import {
   liveListenerCount,
   pendingLiveCount,
@@ -190,6 +190,11 @@ function isSameOriginRequest(req: IncomingMessage): boolean {
 }
 
 interface ServerOptions {
+  /**
+   * What the agent launching this said it was here for. Unsaid means derived from who wrote the
+   * pull request, which is wrong exactly when work has been handed over.
+   */
+  purpose?: SessionPurpose;
   port: number;
   portIsExplicit?: boolean;
   diffArgs: string[];
@@ -247,6 +252,7 @@ interface ServerResult {
 
 export function startServer(options: ServerOptions): Promise<ServerResult> {
   const {
+    purpose,
     port,
     portIsExplicit,
     diffArgs,
@@ -374,7 +380,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             listening: sid ? liveListenerCount(sid) > 0 : false,
             waiting: sid ? pendingLiveCount(sid) : 0,
             // So the page can decline to offer Act at all, rather than offering it and refusing.
-            mayChangeCode: mayChangeCode(authorship()),
+            mayChangeCode: resolveMayChangeCode(purpose, authorship()),
           });
           return;
         }
@@ -413,7 +419,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
               }
               // Carried on the request rather than left for the agent to look up: a rule nobody
               // has to remember is a rule that holds.
-              sendJson(res, { request: { ...request, mayChangeCode: mayChangeCode(authorship()) } });
+              sendJson(res, { request: { ...request, mayChangeCode: resolveMayChangeCode(purpose, authorship()) } });
             },
             err => {
               if (!res.writableEnded && !listenerGone.signal.aborted) {

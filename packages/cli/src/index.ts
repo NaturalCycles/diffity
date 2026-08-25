@@ -72,6 +72,8 @@ program
   .option('--dark', 'Open in dark mode (default: light)')
   .option('--unified', 'Open in unified view (default: split)')
   .option('--new', 'Stop existing instance and start fresh')
+  .option('--work', 'You are working on this branch, so the agent may change code')
+  .option('--review', 'You are reviewing it, so the agent may not — even if you wrote it')
   .addHelpText('after', `
 Common usage:
   $ diffity                              See all uncommitted changes
@@ -331,6 +333,7 @@ range syntax (main..feature, main...feature) also work.`)
         prNumber: parsedPrNumber,
         version: pkg.version,
         registryInfo: { repoRoot, repoHash, repoName },
+        purpose: opts.work ? 'work' : opts.review ? 'review' : undefined,
       });
       const urlParams = new URLSearchParams({ ref: effectiveRef });
       if (opts.dark) {
