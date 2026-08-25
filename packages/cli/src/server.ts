@@ -43,6 +43,7 @@ import {
   fetchDetails as fetchGitHubDetails,
   createReview as createGitHubReview,
   pullComments as pullGitHubComments,
+  pullThreadState as pullGitHubThreadState,
   type PrComment,
   type ReviewEvent,
 } from '@diffity/github';
@@ -59,7 +60,8 @@ import { computeDiffFingerprint } from './fingerprint.js';
 import { parseDiffStatFiles } from './diff-stat.js';
 import { parseDiffStatSummary } from './diff-stat.js';
 import { getReviewRun } from './review-run.js';
-import { createThread, addReply, getThreadsForSession, markThreadsSubmitted } from './threads.js';
+import { createThread, addReply, getThreadsForSession, markThreadsSubmitted, updateThreadStatus } from './threads.js';
+import { threadsResolvedRemotely } from './github-resolution.js';
 import { handleReviewRoute } from './review-routes.js';
 import { handleTourRoute } from './tour-routes.js';
 import { sendJson, sendError, readBody } from './http-utils.js';
@@ -700,10 +702,14 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             details.headSha,
             { event, body: summary, comments },
           );
-          markThreadsSubmitted(result.submittedThreadIds, {
-            reviewUrl: result.reviewUrl,
-            headSha: details.headSha,
-          });
+          const sentBodies = new Map(comments.map(comment => [comment.threadId, comment.body]));
+          markThreadsSubmitted(
+            result.submittedThreadIds.map(threadId => ({ threadId, body: sentBodies.get(threadId) })),
+            {
+              reviewUrl: result.reviewUrl,
+              headSha: details.headSha,
+            },
+          );
           sendJson(res, result);
           return;
         }
@@ -738,6 +744,12 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           const remoteThreads = pullGitHubComments(githubRemote.owner, githubRemote.repo, details.prNumber);
           const localThreads = getThreadsForSession(sid);
 
+          const remoteState = pullGitHubThreadState(githubRemote.owner, githubRemote.repo, details.prNumber);
+          const settled = remoteState ? threadsResolvedRemotely(localThreads, remoteState) : [];
+          for (const threadId of settled) {
+            updateThreadStatus(threadId, 'resolved');
+          }
+
           let pulled = 0;
           let skipped = 0;
           for (const rt of remoteThreads) {
@@ -766,7 +778,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             }
             pulled++;
           }
-          sendJson(res, { pulled, skipped });
+          sendJson(res, { pulled, skipped, resolved: settled.length, resolutionUnavailable: remoteState === null });
           return;
         }
 

@@ -20,6 +20,7 @@ import {
   summaryFromGeneralThreads,
   threadToPayload,
 } from '../../lib/review-submission';
+import { pullOutcome } from '../../lib/pull-outcome';
 
 dayjs.extend(relativeTime);
 
@@ -156,10 +157,9 @@ export function GitHubDialog(props: GitHubDialogProps) {
     setPulling(true);
     try {
       const result = await pullCommentsFromGitHub(sessionId);
-      if (result.pulled === 0 && result.skipped > 0) {
-        toast.info('All GitHub comments already exist locally');
-      } else if (result.pulled > 0) {
-        toast.success(`Pulled ${result.pulled} comment${result.pulled !== 1 ? 's' : ''} from PR`);
+      const outcome = pullOutcome(result);
+      toast[outcome.kind](outcome.message);
+      if (outcome.refresh) {
         onPulled();
       }
     } catch (err) {

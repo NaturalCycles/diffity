@@ -1,7 +1,9 @@
 import { useCallback } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import type { CommentAuthor, CommentSide } from '../components/comments/types';
+import { toast } from 'sonner';
+import type { CommentAuthor, CommentSide, CommentThread } from '../components/comments/types';
 import * as api from '../lib/api';
+import { localResolveNotice } from '../lib/submitted-marker';
 
 export function useCommentActions(sessionId: string | null, enabled: boolean) {
   const queryClient = useQueryClient();
@@ -37,10 +39,16 @@ export function useCommentActions(sessionId: string | null, enabled: boolean) {
     if (!enabled) {
       return;
     }
+    const threads = queryClient.getQueryData<CommentThread[]>(['threads', sessionId]);
+    const notice = localResolveNotice(threads?.find(thread => thread.id === threadId)?.submittedAt);
+
     api.updateThreadStatus(threadId, 'resolved').then(() => {
       invalidateThreads();
+      if (notice) {
+        toast.info(notice);
+      }
     });
-  }, [enabled, invalidateThreads]);
+  }, [enabled, invalidateThreads, queryClient, sessionId]);
 
   const unresolveThread = useCallback((threadId: string) => {
     if (!enabled) {
@@ -55,10 +63,19 @@ export function useCommentActions(sessionId: string | null, enabled: boolean) {
     if (!enabled) {
       return;
     }
+    const threads = queryClient.getQueryData<CommentThread[]>(['threads', sessionId]);
+    const notice = localResolveNotice(
+      threads?.find(thread => thread.id === threadId)?.submittedAt,
+      'dismissed',
+    );
+
     api.updateThreadStatus(threadId, 'dismissed').then(() => {
       invalidateThreads();
+      if (notice) {
+        toast.info(notice);
+      }
     });
-  }, [enabled, invalidateThreads]);
+  }, [enabled, invalidateThreads, queryClient, sessionId]);
 
   const editComment = useCallback((commentId: string, body: string) => {
     if (!enabled) {
