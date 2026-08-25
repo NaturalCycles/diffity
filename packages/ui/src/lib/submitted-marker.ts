@@ -32,7 +32,10 @@ export function submittedLabel(submittedAt: string | null | undefined, now = new
  * Resolving here does not resolve there. Only worth saying about a finding that was posted — for
  * anything else, local is the only place it could be resolved.
  */
-export function localResolveNotice(submittedAt: string | null | undefined): string | null {
+export function localResolveNotice(
+  submittedAt: string | null | undefined,
+  action: 'resolved' | 'dismissed' = 'resolved',
+): string | null {
   if (!submittedAt) return null;
-  return 'Resolved here only — the thread on the pull request stays open';
+  return `${action === 'resolved' ? 'Resolved' : 'Dismissed'} here only — the thread on the pull request stays open`;
 }

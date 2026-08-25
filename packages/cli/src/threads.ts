@@ -38,12 +38,15 @@ export interface Thread {
   submittedAt: string | null;
   submittedReviewUrl: string | null;
   submittedHeadSha: string | null;
+  /** The body as it was sent, which an amendment here does not change. */
+  submittedBody: string | null;
   comments: ThreadComment[];
 }
 
 interface ThreadRow {
   submitted_at?: string | null;
   submitted_review_url?: string | null;
+  submitted_body?: string | null;
   submitted_head_sha?: string | null;
   id: string;
   session_id: string;
@@ -85,6 +88,7 @@ function rowToThread(row: ThreadRow, comments: ThreadComment[]): Thread {
     updatedAt: row.updated_at,
     submittedAt: row.submitted_at ?? null,
     submittedReviewUrl: row.submitted_review_url ?? null,
+    submittedBody: row.submitted_body ?? null,
     submittedHeadSha: row.submitted_head_sha ?? null,
     comments,
   };
@@ -133,20 +137,28 @@ export interface SubmittedIn {
   headSha?: string | null;
 }
 
-export function markThreadsSubmitted(threadIds: string[], submittedIn: SubmittedIn = {}): void {
-  if (threadIds.length === 0) {
+export function markThreadsSubmitted(
+  sent: (string | { threadId: string; body?: string })[],
+  submittedIn: SubmittedIn = {},
+): void {
+  if (sent.length === 0) {
     return;
   }
 
   const db = getDb();
-  const placeholders = threadIds.map(() => '?').join(', ');
-  db.prepare(
+  const statement = db.prepare(
     `UPDATE comment_threads
         SET submitted_at = datetime('now'),
             submitted_review_url = ?,
-            submitted_head_sha = ?
-      WHERE id IN (${placeholders})`,
-  ).run(submittedIn.reviewUrl ?? null, submittedIn.headSha ?? null, ...threadIds);
+            submitted_head_sha = ?,
+            submitted_body = COALESCE(?, submitted_body)
+      WHERE id = ?`,
+  );
+
+  for (const entry of sent) {
+    const { threadId, body } = typeof entry === 'string' ? { threadId: entry, body: undefined } : entry;
+    statement.run(submittedIn.reviewUrl ?? null, submittedIn.headSha ?? null, body ?? null, threadId);
+  }
 }
 
 export function updateThreadLines(threadId: string, startLine: number, endLine: number): void {
@@ -197,6 +209,7 @@ export function createThread(
     updatedAt: now,
     submittedAt: null,
     submittedReviewUrl: null,
+    submittedBody: null,
     submittedHeadSha: null,
     comments: [{
       id: commentId,

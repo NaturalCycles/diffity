@@ -84,8 +84,12 @@ const REVIEW_THREADS_QUERY = `query($owner:String!,$repo:String!,$number:Int!){
  *
  * One page. A review with more than a hundred threads reports the first hundred, which is wrong in
  * a way that only under-reports: a thread we do not see is left open here, never wrongly closed.
+ *
+ * `null` means the question could not be asked — an expired token, a rate limit, a schema change —
+ * as opposed to `[]`, which means it was asked and nothing came back. The two look identical to a
+ * reader otherwise, and this whole change exists because a thread was quiet about what it knew.
  */
-export function pullThreadState(owner: string, repo: string, prNumber: number): RemoteThreadState[] {
+export function pullThreadState(owner: string, repo: string, prNumber: number): RemoteThreadState[] | null {
   try {
     const json = gh([
       'api', 'graphql',
@@ -94,7 +98,7 @@ export function pullThreadState(owner: string, repo: string, prNumber: number): 
       '-F', `repo=${repo}`,
       '-F', `number=${prNumber}`,
     ]);
-    if (!json) return [];
+    if (!json) return null;
 
     const data = JSON.parse(json) as {
       data?: { repository?: { pullRequest?: { reviewThreads?: { nodes?: RawReviewThread[] } } } };
@@ -114,7 +118,7 @@ export function pullThreadState(owner: string, repo: string, prNumber: number): 
       }];
     });
   } catch {
-    return [];
+    return null;
   }
 }
 

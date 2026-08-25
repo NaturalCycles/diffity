@@ -149,6 +149,9 @@ function migrateDb(db: DatabaseSync): void {
   // code that is there now?" — so the review and the commit it went out against are kept too.
   addColumn(db, 'comment_threads', 'submitted_review_url', 'TEXT');
   addColumn(db, 'comment_threads', 'submitted_head_sha', 'TEXT');
+  // The wording that went out. Amending a finding rewrites its body in place, so without this there
+  // is nothing left to recognise the forge's copy of it by.
+  addColumn(db, 'comment_threads', 'submitted_body', 'TEXT');
 }
 
 function addColumn(db: DatabaseSync, table: string, column: string, type: string): void {

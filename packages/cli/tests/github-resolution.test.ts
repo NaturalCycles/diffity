@@ -65,9 +65,25 @@ describe('threadsResolvedRemotely', () => {
     expect(threadsResolvedRemotely(threads, [remote()])).toEqual(['a']);
   });
 
+  // Amending rewrites the body in place, so the wording that went out survives only here. Without
+  // it an amended finding stops matching, which since #32 is most of the ones that carry an answer.
   it('matches an amended finding on the wording that was sent', () => {
-    const amended = local({ comments: [{ body: 'P2: the finding, reworded' }, { body: 'P2: the finding' }] });
+    const amended = local({
+      comments: [{ body: 'P2: the finding, amended to carry the answer' }],
+      submittedBody: 'P2: the finding',
+    });
 
     expect(threadsResolvedRemotely([amended], [remote()])).toEqual(['t1']);
+  });
+
+  it('does not match a thread whose sent wording was something else entirely', () => {
+    const other = local({ comments: [{ body: 'P2: the finding' }], submittedBody: 'P3: unrelated' });
+
+    expect(threadsResolvedRemotely([other], [remote()])).toEqual([]);
+  });
+
+  // Everything sent before the column existed has no record of its wording.
+  it('falls back to the current wording when none was recorded', () => {
+    expect(threadsResolvedRemotely([local({ submittedBody: null })], [remote()])).toEqual(['t1']);
   });
 });

@@ -33,3 +33,18 @@ describe('pullOutcome', () => {
     expect(pullOutcome({ pulled: 0, skipped: 0, resolved: 0 }).message).toBe('Nothing to pull');
   });
 });
+
+describe('when the forge could not be asked about resolution', () => {
+  it('says so rather than implying nothing was resolved', () => {
+    const outcome = pullOutcome({ pulled: 0, skipped: 3, resolved: 0, resolutionUnavailable: true });
+
+    expect(outcome.message).toBe('could not read which are resolved');
+    expect(outcome.kind).toBe('info');
+    expect(outcome.refresh).toBe(false);
+  });
+
+  it('still reports what did arrive', () => {
+    expect(pullOutcome({ pulled: 2, skipped: 0, resolved: 0, resolutionUnavailable: true }).message)
+      .toBe('Pulled 2 comments, could not read which are resolved');
+  });
+});

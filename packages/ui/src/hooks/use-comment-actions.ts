@@ -63,10 +63,19 @@ export function useCommentActions(sessionId: string | null, enabled: boolean) {
     if (!enabled) {
       return;
     }
+    const threads = queryClient.getQueryData<CommentThread[]>(['threads', sessionId]);
+    const notice = localResolveNotice(
+      threads?.find(thread => thread.id === threadId)?.submittedAt,
+      'dismissed',
+    );
+
     api.updateThreadStatus(threadId, 'dismissed').then(() => {
       invalidateThreads();
+      if (notice) {
+        toast.info(notice);
+      }
     });
-  }, [enabled, invalidateThreads]);
+  }, [enabled, invalidateThreads, queryClient, sessionId]);
 
   const editComment = useCallback((commentId: string, body: string) => {
     if (!enabled) {

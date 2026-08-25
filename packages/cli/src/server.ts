@@ -702,10 +702,14 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             details.headSha,
             { event, body: summary, comments },
           );
-          markThreadsSubmitted(result.submittedThreadIds, {
-            reviewUrl: result.reviewUrl,
-            headSha: details.headSha,
-          });
+          const sentBodies = new Map(comments.map(comment => [comment.threadId, comment.body]));
+          markThreadsSubmitted(
+            result.submittedThreadIds.map(threadId => ({ threadId, body: sentBodies.get(threadId) })),
+            {
+              reviewUrl: result.reviewUrl,
+              headSha: details.headSha,
+            },
+          );
           sendJson(res, result);
           return;
         }
@@ -740,10 +744,8 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           const remoteThreads = pullGitHubComments(githubRemote.owner, githubRemote.repo, details.prNumber);
           const localThreads = getThreadsForSession(sid);
 
-          const settled = threadsResolvedRemotely(
-            localThreads,
-            pullGitHubThreadState(githubRemote.owner, githubRemote.repo, details.prNumber),
-          );
+          const remoteState = pullGitHubThreadState(githubRemote.owner, githubRemote.repo, details.prNumber);
+          const settled = remoteState ? threadsResolvedRemotely(localThreads, remoteState) : [];
           for (const threadId of settled) {
             updateThreadStatus(threadId, 'resolved');
           }
@@ -776,7 +778,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             }
             pulled++;
           }
-          sendJson(res, { pulled, skipped, resolved: settled.length });
+          sendJson(res, { pulled, skipped, resolved: settled.length, resolutionUnavailable: remoteState === null });
           return;
         }
 

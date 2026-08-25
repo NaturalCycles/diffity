@@ -2,6 +2,8 @@ export interface PullCounts {
   pulled: number;
   skipped: number;
   resolved: number;
+  /** The forge could not be asked which threads are resolved, as opposed to answering "none". */
+  resolutionUnavailable?: boolean;
 }
 
 export interface PullOutcome {
@@ -15,10 +17,14 @@ function count(n: number, noun: string): string {
   return `${n} ${noun}${n === 1 ? '' : 's'}`;
 }
 
-export function pullOutcome({ pulled, skipped, resolved }: PullCounts): PullOutcome {
+export function pullOutcome({ pulled, skipped, resolved, resolutionUnavailable }: PullCounts): PullOutcome {
   const parts: string[] = [];
   if (pulled > 0) parts.push(`Pulled ${count(pulled, 'comment')}`);
   if (resolved > 0) parts.push(`${count(resolved, 'finding')} resolved on the pull request`);
+
+  if (resolutionUnavailable) {
+    parts.push('could not read which are resolved');
+  }
 
   if (parts.length === 0) {
     return {
@@ -28,5 +34,9 @@ export function pullOutcome({ pulled, skipped, resolved }: PullCounts): PullOutc
     };
   }
 
-  return { kind: 'success', message: parts.join(', '), refresh: true };
+  return {
+    kind: resolutionUnavailable ? 'info' : 'success',
+    message: parts.join(', '),
+    refresh: pulled > 0 || resolved > 0,
+  };
 }

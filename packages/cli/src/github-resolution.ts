@@ -14,6 +14,7 @@ interface LocalThreadLike {
   endLine: number;
   status: string;
   submittedAt?: string | null;
+  submittedBody?: string | null;
   comments: { body: string }[];
 }
 
@@ -29,6 +30,10 @@ interface LocalThreadLike {
  * the key means the sync quietly does nothing on exactly the threads it exists for. Two findings
  * with identical wording in one file would both resolve together; a missed resolution leaves a
  * thread open, which is the cheaper way to be wrong.
+ *
+ * The wording compared is the one that was sent, not the one held now: amending rewrites the body
+ * here and leaves the forge showing the old text. Threads sent before that was recorded fall back
+ * to their current bodies, which is what they had at the time anyway.
  */
 export function threadsResolvedRemotely(
   local: LocalThreadLike[],
@@ -43,8 +48,12 @@ export function threadsResolvedRemotely(
         state =>
           state.filePath === thread.filePath
           && state.side === thread.side
-          && thread.comments.some(comment => comment.body === state.body),
+          && wordingSent(thread).includes(state.body),
       ),
     )
     .map(thread => thread.id);
+}
+
+function wordingSent(thread: LocalThreadLike): string[] {
+  return thread.submittedBody ? [thread.submittedBody] : thread.comments.map(comment => comment.body);
 }
