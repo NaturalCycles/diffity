@@ -293,13 +293,31 @@ export function DiffPage() {
     if (restoredPositionRef.current || !orderedDiff || !repoRoot || typeof window === 'undefined') {
       return;
     }
-    restoredPositionRef.current = true;
     const wasReading = readReadingPosition(window.localStorage, repoRoot, refParam ?? '');
     if (!wasReading || !orderedDiff.files.some(file => getFilePath(file) === wasReading)) {
+      restoredPositionRef.current = true;
       return;
     }
-    setActiveFile(wasReading);
-    requestAnimationFrame(() => diffViewRef.current?.scrollToFile(wasReading));
+
+    // The diff view mounts after this runs, and a single frame was not enough — the scroll went
+    // nowhere and the reader was left at the top of the diff, which is where the general comments
+    // are. Keep asking until the handle exists, then give up rather than spin.
+    let attempts = 0;
+    let frame = requestAnimationFrame(function restore() {
+      if (diffViewRef.current) {
+        restoredPositionRef.current = true;
+        setActiveFile(wasReading);
+        diffViewRef.current.scrollToFile(wasReading);
+        return;
+      }
+      if (attempts++ > 60) {
+        restoredPositionRef.current = true;
+        return;
+      }
+      frame = requestAnimationFrame(restore);
+    });
+
+    return () => cancelAnimationFrame(frame);
   }, [orderedDiff, repoRoot, refParam]);
 
   // Git reports a rename as `src/{old.ts => new.ts}`, which is never a path in the file list. Naming
