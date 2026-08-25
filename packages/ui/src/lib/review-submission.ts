@@ -2,21 +2,21 @@ import type { CommentKind, CommentThread } from '../components/comments/types';
 import { GENERAL_THREAD_FILE_PATH, isThreadResolved } from '../components/comments/types';
 import type { PrCommentPayload, ReviewEvent } from './api';
 
-/**
- * A thread's replies are part of the same finding, so they are folded into the one comment
- * GitHub will hold — a review comment has no thread of its own until it exists.
- */
 export function isReviewComment(comment: { kind?: CommentKind }): boolean {
   return (comment.kind ?? 'review') === 'review';
 }
 
+/**
+ * Only the finding travels. Everything said after it was said to work out what the finding should
+ * say, so the way to get an answer onto the pull request is to amend the finding, not to ship the
+ * conversation that produced it.
+ */
+export function findingOf(thread: CommentThread): string | undefined {
+  return thread.comments.find(isReviewComment)?.body;
+}
+
 export function threadToPayload(thread: CommentThread): PrCommentPayload {
-  // An aside is a conversation with the agent about the review, not part of it. Sending one would
-  // put the whole exchange on the pull request.
-  const [first, ...replies] = thread.comments.filter(isReviewComment);
-  const body = replies.length
-    ? [first.body, ...replies.map(reply => `**${reply.author.name}:** ${reply.body}`)].join('\n\n---\n\n')
-    : first.body;
+  const finding = findingOf(thread);
 
   return {
     threadId: thread.id,
@@ -24,7 +24,7 @@ export function threadToPayload(thread: CommentThread): PrCommentPayload {
     side: thread.side === 'old' ? 'LEFT' : 'RIGHT',
     startLine: thread.startLine !== thread.endLine ? thread.startLine : null,
     endLine: thread.endLine,
-    body,
+    body: finding ?? '',
   };
 }
 
@@ -47,7 +47,8 @@ export function isGeneral(thread: CommentThread): boolean {
 export function summaryFromGeneralThreads(threads: CommentThread[]): string {
   return threads
     .filter(isGeneral)
-    .flatMap(thread => thread.comments.map(comment => comment.body))
+    .map(findingOf)
+    .filter(body => !!body)
     .join('\n\n');
 }
 

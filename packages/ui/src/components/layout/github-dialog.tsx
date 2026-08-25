@@ -263,7 +263,7 @@ export function GitHubDialog(props: GitHubDialogProps) {
                         )}
                         {thread.comments.length > 1 && (
                           <span className="text-[10px] text-text-muted shrink-0">
-                            +{thread.comments.length - 1} repl{thread.comments.length === 2 ? 'y' : 'ies'}
+                            +{thread.comments.length - 1} repl{thread.comments.length === 2 ? 'y' : 'ies'} · not sent
                           </span>
                         )}
                       </div>
