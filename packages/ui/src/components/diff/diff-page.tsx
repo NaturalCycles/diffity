@@ -721,6 +721,7 @@ export function DiffPage() {
         <AnswerBubble
           alerts={answerAlerts}
           position={alertPosition}
+          viewMode={viewMode}
           onGo={handleGoToAnswer}
           onExpire={handleAlertsExpired}
           onDismiss={handleAlertsExpired}

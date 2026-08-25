@@ -11,6 +11,8 @@ interface AnswerBubbleProps {
   alerts: AnswerAlert[];
   /** Which edge to sit on: the thread is behind the reader, or ahead of them. */
   position: ThreadPosition;
+  /** Split has a middle gutter to sit left of; unified has one column and no midpoint. */
+  viewMode: 'unified' | 'split';
   onGo: (threadId: string) => void;
   /** Its time ran out. The count that replaces it is the caller's business. */
   onExpire: () => void;
@@ -22,7 +24,7 @@ interface AnswerBubbleProps {
  * on its own, with a bar running down so that is not a surprise.
  */
 export function AnswerBubble(props: AnswerBubbleProps) {
-  const { alerts, position, onGo, onExpire, onDismiss } = props;
+  const { alerts, position, viewMode, onGo, onExpire, onDismiss } = props;
   const [remaining, setRemaining] = useState(1);
   const newest = alerts[alerts.length - 1];
   const expiredRef = useRef(false);
@@ -58,7 +60,9 @@ export function AnswerBubble(props: AnswerBubbleProps) {
   return (
     <div
       role="status"
-      className={`absolute ${position === 'above' ? 'top-3' : 'bottom-3'} left-4 z-40 w-80 max-w-[40%] overflow-hidden rounded-lg border shadow-md bg-note-bg border-note-border text-note-ink animate-slide-down`}
+      className={`absolute ${position === 'above' ? 'top-3' : 'bottom-3'} ${
+        viewMode === 'split' ? 'left-1/2 -translate-x-full -ml-3' : 'left-4'
+      } z-40 w-80 max-w-[40%] overflow-hidden rounded-lg border shadow-md bg-note-bg border-note-border text-note-ink animate-slide-down`}
     >
       <div className="flex items-start gap-2 px-3 py-2">
         <button
