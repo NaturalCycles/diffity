@@ -44,11 +44,14 @@ async function finding(body = 'P2: a finding') {
 
 
 async function drainRequests() {
-  const { claimNextLiveRequest } = await import('../src/live.js');
+  const { claimNextLiveRequest, answerLiveRequest } = await import('../src/live.js');
   const s = await session();
-  while (claimNextLiveRequest(s.id)) {
-    // Sessions on one branch share their open threads by design, so earlier cases leave requests
-    // in this queue. A case about "the next one" has to start from empty.
+  // Answered, not merely claimed: sessions on one branch share their open threads, and a claim
+  // without an answer leaves the session looking like an agent is still working on it.
+  let taken = claimNextLiveRequest(s.id);
+  while (taken) {
+    answerLiveRequest(taken.commentId);
+    taken = claimNextLiveRequest(s.id);
   }
 }
 
@@ -343,5 +346,42 @@ describe('a listener whose connection goes away', () => {
 
     expect(await waitForLiveRequest(s.id, 60_000, controller.signal)).toBeNull();
     expect(liveListenerCount(s.id)).toBe(0);
+  });
+});
+
+describe('while an agent is busy with a request', () => {
+  // Between taking a request and answering it the listener is not parked, so "listening" is false
+  // — and the page said "No agent" at exactly the moment one was working on your question.
+  it('is reported as working, not as absent', async () => {
+    const { addReply } = await import('../src/threads.js');
+    const { requestLive, claimNextLiveRequest, liveWorkingCount } = await import('../src/live.js');
+    await drainRequests();
+    const s = await session();
+    const thread = await finding();
+    const asked = addReply(thread.id, 'busy with this', you, 'aside');
+    requestLive(asked.id);
+
+    // A delta, not an absolute: other cases in this file claim without answering, and every
+    // session on this branch shares its threads.
+    const before = liveWorkingCount(s.id);
+    claimNextLiveRequest(s.id);
+
+    expect(liveWorkingCount(s.id)).toBe(before + 1);
+  });
+
+  it('stops being busy once it has answered', async () => {
+    const { addReply } = await import('../src/threads.js');
+    const { requestLive, claimNextLiveRequest, answerLiveRequest, liveWorkingCount } = await import('../src/live.js');
+    await drainRequests();
+    const s = await session();
+    const thread = await finding();
+    const asked = addReply(thread.id, 'answer me', you, 'aside');
+    requestLive(asked.id);
+    claimNextLiveRequest(s.id);
+    const busy = liveWorkingCount(s.id);
+
+    answerLiveRequest(asked.id);
+
+    expect(liveWorkingCount(s.id)).toBe(busy - 1);
   });
 });

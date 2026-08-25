@@ -13,6 +13,7 @@ import {
   type CommentKind,
 } from './threads.js';
 import { requestLive, notifyLiveListeners } from './live.js';
+import { normaliseIntent } from './live-intent.js';
 import { getCurrentSession, resolveSessionId } from './session.js';
 import { sendJson, sendError, withJsonBody } from './http-utils.js';
 
@@ -50,7 +51,7 @@ export function handleReviewRoute(req: IncomingMessage, res: ServerResponse, pat
 
   if (pathname === '/api/threads' && req.method === 'POST') {
     withJsonBody(res, req, 'Failed to create thread', (body) => {
-      const { sessionId: sid, filePath, side, startLine, endLine, body: commentBody, author, anchorContent, kind, live } = body;
+      const { sessionId: sid, filePath, side, startLine, endLine, body: commentBody, author, anchorContent, kind, live, intent } = body;
       if (!sid || !filePath || !side || typeof startLine !== 'number' || typeof endLine !== 'number' || !commentBody || !author) {
         sendError(res, 400, 'Missing required fields');
         return;
@@ -63,7 +64,7 @@ export function handleReviewRoute(req: IncomingMessage, res: ServerResponse, pat
         threadKind,
       );
       if (live === true && threadKind === 'aside') {
-        const stamp = requestLive(thread.comments[0].id);
+        const stamp = requestLive(thread.comments[0].id, normaliseIntent(intent));
         thread.comments[0].liveRequestedAt = stamp.requestedAt;
         notifyLiveListeners(stamp.sessionId);
       }
@@ -75,7 +76,7 @@ export function handleReviewRoute(req: IncomingMessage, res: ServerResponse, pat
   const threadReplyMatch = pathname.match(/^\/api\/threads\/([^/]+)\/reply$/);
   if (threadReplyMatch && req.method === 'POST') {
     withJsonBody(res, req, 'Failed to add reply', (body) => {
-      const { body: commentBody, author, kind, live } = body;
+      const { body: commentBody, author, kind, live, intent } = body;
       if (!commentBody || !author) {
         sendError(res, 400, 'Missing body or author');
         return;
@@ -91,7 +92,7 @@ export function handleReviewRoute(req: IncomingMessage, res: ServerResponse, pat
       // request's author, and it is going to the forge rather than to a listener here.
       let requestedAt: string | null = null;
       if (live === true && commentKind === 'aside') {
-        const stamp = requestLive(comment.id);
+        const stamp = requestLive(comment.id, normaliseIntent(intent));
         requestedAt = stamp.requestedAt;
         notifyLiveListeners(stamp.sessionId);
       }

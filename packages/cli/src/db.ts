@@ -141,6 +141,7 @@ function migrateDb(db: DatabaseSync): void {
   // because "asked but not yet picked up" and "picked up but not answered" are both waiting, and
   // the page says different things about them.
   addColumn(db, 'comments', 'live_requested_at', 'TEXT');
+  addColumn(db, 'comments', 'live_intent', 'TEXT');
   addColumn(db, 'comments', 'live_claimed_at', 'TEXT');
   addColumn(db, 'comments', 'live_answered_at', 'TEXT');
   addColumn(db, 'comment_threads', 'submitted_at', 'TEXT');

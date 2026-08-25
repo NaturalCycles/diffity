@@ -16,6 +16,28 @@ export function requestStateOf(comment: Comment): RequestState | null {
   return comment.liveClaimedAt ? 'working' : 'waiting';
 }
 
+export function intentOf(comment: Comment): 'ask' | 'act' {
+  return comment.liveIntent === 'act' ? 'act' : 'ask';
+}
+
 export function isAside(comment: Comment): boolean {
   return comment.kind === 'aside';
+}
+
+interface LiveStatusLike {
+  enabled: boolean;
+  mayChangeCode: boolean;
+}
+
+export function canAskAgent(status: LiveStatusLike | undefined, reviewsEnabled: boolean): boolean {
+  return !!status?.enabled && reviewsEnabled;
+}
+
+/**
+ * Acting is not. Reviewing is not editing, so a pull request somebody else wrote gets Ask and no
+ * Act — offered and then refused would be worse than not offered, since a button that is there is
+ * a promise.
+ */
+export function canActOnCode(status: LiveStatusLike | undefined, reviewsEnabled: boolean): boolean {
+  return canAskAgent(status, reviewsEnabled) && !!status?.mayChangeCode;
 }

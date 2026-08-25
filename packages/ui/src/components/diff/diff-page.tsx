@@ -14,8 +14,9 @@ import { TOUR_NOT_STARTED, clampTourStep } from '../../lib/tour-navigation';
 import { liveStatusOptions } from '../../queries/live';
 import { readReadingPosition, writeReadingPosition } from '../../lib/reading-position';
 import { staleMessage } from '../../lib/stale-files';
+import { canAskAgent, canActOnCode } from '../../lib/live-mode';
 import { patchDiffFile } from '../../lib/patch-diff-file';
-import { newAnswers, dropSeenAlerts, type AnswerAlert } from '../../lib/answer-alerts';
+import { newAnswers, dropSeenAlerts, positionForAlert, type AnswerAlert } from '../../lib/answer-alerts';
 import { whereIsThread, type ThreadPosition } from '../../lib/thread-visibility';
 import { AnswerBubble } from '../layout/answer-bubble';
 import { fetchDiffFile } from '../../lib/api';
@@ -94,13 +95,25 @@ export function DiffPage() {
   // Asking is a button on the comment box, not a mode: a mode you have to remember is a mode you
   // forget, and the first version of this answered three comments with silence because of it.
   const { data: liveStatus } = useQuery(liveStatusOptions(refParam));
-  const canAsk = !!liveStatus?.enabled && reviewsEnabled;
+  const canAsk = canAskAgent(liveStatus, reviewsEnabled);
+  const canAct = canActOnCode(liveStatus, reviewsEnabled);
   const askIsHeard = !!liveStatus?.listening;
+
+  const askOrAct = useCallback(
+    (intent: 'ask' | 'act') => ({ aside: true as const, live: true as const, intent }),
+    [],
+  );
 
   const handleAskReply = useCallback(
     (threadId: string, body: string, author: Parameters<typeof commentActions.addReply>[2]) =>
-      commentActions.addReply(threadId, body, author, { aside: true, live: true }),
-    [commentActions],
+      commentActions.addReply(threadId, body, author, askOrAct('ask')),
+    [commentActions, askOrAct],
+  );
+
+  const handleActReply = useCallback(
+    (threadId: string, body: string, author: Parameters<typeof commentActions.addReply>[2]) =>
+      commentActions.addReply(threadId, body, author, askOrAct('act')),
+    [commentActions, askOrAct],
   );
 
   const handleAskThread = useCallback(
@@ -111,8 +124,20 @@ export function DiffPage() {
       endLine: number,
       body: string,
       author: Parameters<typeof commentActions.addThread>[5],
-    ) => commentActions.addThread(filePath, side, startLine, endLine, body, author, undefined, { aside: true, live: true }),
-    [commentActions],
+    ) => commentActions.addThread(filePath, side, startLine, endLine, body, author, undefined, askOrAct('ask')),
+    [commentActions, askOrAct],
+  );
+
+  const handleActThread = useCallback(
+    (
+      filePath: string,
+      side: Parameters<typeof commentActions.addThread>[1],
+      startLine: number,
+      endLine: number,
+      body: string,
+      author: Parameters<typeof commentActions.addThread>[5],
+    ) => commentActions.addThread(filePath, side, startLine, endLine, body, author, undefined, askOrAct('act')),
+    [commentActions, askOrAct],
   );
   const commentCountsByFile = useMemo(() => buildThreadCountsByFile(threads), [threads]);
 
@@ -267,18 +292,43 @@ export function DiffPage() {
     if (restoredPositionRef.current || !orderedDiff || !repoRoot || typeof window === 'undefined') {
       return;
     }
-    restoredPositionRef.current = true;
     const wasReading = readReadingPosition(window.localStorage, repoRoot, refParam ?? '');
     if (!wasReading || !orderedDiff.files.some(file => getFilePath(file) === wasReading)) {
+      restoredPositionRef.current = true;
       return;
     }
-    setActiveFile(wasReading);
-    requestAnimationFrame(() => diffViewRef.current?.scrollToFile(wasReading));
+
+    // The diff view mounts after this runs, and a single frame was not enough — the scroll went
+    // nowhere and the reader was left at the top of the diff, which is where the general comments
+    // are. Keep asking until the handle exists, then give up rather than spin.
+    let attempts = 0;
+    let frame = requestAnimationFrame(function restore() {
+      if (diffViewRef.current) {
+        restoredPositionRef.current = true;
+        setActiveFile(wasReading);
+        diffViewRef.current.scrollToFile(wasReading);
+        return;
+      }
+      if (attempts++ > 60) {
+        restoredPositionRef.current = true;
+        return;
+      }
+      frame = requestAnimationFrame(restore);
+    });
+
+    return () => cancelAnimationFrame(frame);
   }, [orderedDiff, repoRoot, refParam]);
 
   // Git reports a rename as `src/{old.ts => new.ts}`, which is never a path in the file list. Naming
   // it would point the reader at a file they cannot find, so anything unmatched falls back to the
   // count — the whole-diff refresh still covers it.
+  // The order the reader sees, which is the walkthrough's when there is one — comparing against the
+  // raw diff order put a note about a file above them in the bottom corner.
+  const readingOrderPaths = useMemo(
+    () => (orderedDiff ? orderedDiff.files.map(file => getFilePath(file)) : []),
+    [orderedDiff],
+  );
+
   const namedStaleFiles = useMemo(
     () => staleFiles.filter(path => diffPaths.includes(path)),
     [staleFiles, diffPaths],
@@ -478,6 +528,8 @@ export function DiffPage() {
   // until they follow it or send it away — and dropped the moment the thread comes into view, since
   // seeing the reply is an answer to the bubble.
   const [answerAlerts, setAnswerAlerts] = useState<AnswerAlert[]>([]);
+  // What a note leaves behind when its time runs out: still unread, no longer in the way.
+  const [unseenAlerts, setUnseenAlerts] = useState<AnswerAlert[]>([]);
   const seenThreadsRef = useRef<typeof threads | null>(null);
 
   useEffect(() => {
@@ -497,42 +549,61 @@ export function DiffPage() {
 
   const [alertPosition, setAlertPosition] = useState<ThreadPosition>('below');
 
+  const handleAlertsExpired = useCallback(() => {
+    setAnswerAlerts(expiring => {
+      setUnseenAlerts(prev => [
+        ...prev.filter(kept => !expiring.some(gone => gone.threadId === kept.threadId)),
+        ...expiring,
+      ]);
+      return [];
+    });
+  }, []);
+
   // Both of these have to follow the reader rather than being decided once: a note about a thread
   // they have since scrolled to is noise, and one pointing down at something now above them is
   // worse than none. The active file changes far too rarely to hang either off.
   useEffect(() => {
-    if (answerAlerts.length === 0) {
+    if (answerAlerts.length === 0 && unseenAlerts.length === 0) {
       return;
     }
 
     const container = document.querySelector('main.overflow-y-auto');
 
+    const onScreen = (threadId: string) => {
+      const seen = threadBounds(threadId);
+      return !!seen && whereIsThread(seen.thread, seen.viewport) === 'on-screen';
+    };
+
     const settle = () => {
       const newest = answerAlerts[answerAlerts.length - 1];
       const bounds = newest ? threadBounds(newest.threadId) : null;
-      setAlertPosition(
-        bounds && whereIsThread(bounds.thread, bounds.viewport) === 'above' ? 'above' : 'below',
-      );
-      setAnswerAlerts(prev =>
-        dropSeenAlerts(prev, threadId => {
-          const seen = threadBounds(threadId);
-          return !!seen && whereIsThread(seen.thread, seen.viewport) === 'on-screen';
-        }),
-      );
+      if (newest) {
+        setAlertPosition(
+          positionForAlert(
+            newest.filePath,
+            activeFile,
+            readingOrderPaths,
+            bounds ? whereIsThread(bounds.thread, bounds.viewport) : null,
+          ),
+        );
+      }
+      setAnswerAlerts(prev => dropSeenAlerts(prev, onScreen));
+      setUnseenAlerts(prev => dropSeenAlerts(prev, onScreen));
     };
 
     settle();
     container?.addEventListener('scroll', settle, { passive: true });
     return () => container?.removeEventListener('scroll', settle);
-  }, [answerAlerts]);
+  }, [answerAlerts, unseenAlerts, activeFile, readingOrderPaths]);
 
   const handleGoToAnswer = useCallback((threadId: string) => {
-    const alert = answerAlerts.find(a => a.threadId === threadId);
+    const alert = [...answerAlerts, ...unseenAlerts].find(a => a.threadId === threadId);
     setAnswerAlerts([]);
+    setUnseenAlerts(prev => prev.filter(a => a.threadId !== threadId));
     if (alert) {
       handleScrollToThread(threadId, alert.filePath);
     }
-  }, [answerAlerts, handleScrollToThread]);
+  }, [answerAlerts, unseenAlerts, handleScrollToThread]);
 
   const handleSidebarCommentedFileClick = useCallback((path: string) => {
     const threadId = firstOpenThreadByFile.get(path);
@@ -610,6 +681,8 @@ export function DiffPage() {
         githubDetails={githubDetails}
         reviewInProgress={!!info?.review?.inProgress}
         live={liveStatus}
+        unreadAnswers={unseenAlerts}
+        onGoToAnswer={handleGoToAnswer}
         sessionId={sessionId}
         onGitHubPulled={() => queryClient.invalidateQueries({ queryKey: ['threads'] })}
       />
@@ -626,12 +699,6 @@ export function DiffPage() {
         />
       )}
       <div className="relative flex flex-1 overflow-hidden">
-        <AnswerBubble
-          alerts={answerAlerts}
-          position={alertPosition}
-          onGo={handleGoToAnswer}
-          onDismiss={() => setAnswerAlerts([])}
-        />
         <Sidebar
           files={orderedDiff?.files || []}
           activeFile={activeFile}
@@ -648,6 +715,16 @@ export function DiffPage() {
                 }
               : undefined
           }
+        />
+        {/* Positioned against the diff rather than the row, which also holds the file list. */}
+        <div className="relative flex flex-1 min-w-0">
+        <AnswerBubble
+          alerts={answerAlerts}
+          position={alertPosition}
+          viewMode={viewMode}
+          onGo={handleGoToAnswer}
+          onExpire={handleAlertsExpired}
+          onDismiss={handleAlertsExpired}
         />
         {orderedDiff ? (
           <DiffView
@@ -677,12 +754,15 @@ export function DiffPage() {
             onRefreshFile={handleRefreshFile}
             onAskThread={canAsk ? handleAskThread : undefined}
             onAskReply={canAsk ? handleAskReply : undefined}
+            onActThread={canAct ? handleActThread : undefined}
+            onActReply={canAct ? handleActReply : undefined}
             askIsHeard={askIsHeard}
             tourMarksByFile={tourMarksByFile}
             activeStepIndex={activeStepIndex}
             onTourMarkClick={handleTourStepChange}
           />
         ) : null}
+        </div>
       </div>
       {showHelp && <ShortcutModal onClose={() => setShowHelp(false)} />}
     </div>

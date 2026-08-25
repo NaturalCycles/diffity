@@ -1,5 +1,6 @@
 import type { CommentThread } from '../components/comments/types';
 import { isAside } from './live-mode';
+import type { ThreadPosition } from './thread-visibility';
 
 export interface AnswerAlert {
   threadId: string;
@@ -22,7 +23,9 @@ export function newAnswers(
   previous: CommentThread[] | null,
   current: CommentThread[],
 ): AnswerAlert[] {
-  if (!previous) {
+  // An empty previous is a page that has not loaded its threads yet, not a review with no comments
+  // — announcing against it turns a reload into the whole conversation arriving at once.
+  if (!previous || previous.length === 0) {
     return [];
   }
 
@@ -73,4 +76,27 @@ export function dropSeenAlerts(
 ): AnswerAlert[] {
   const kept = alerts.filter(alert => !isOnScreen(alert.threadId));
   return kept.length === alerts.length ? alerts : kept;
+}
+
+/** A thread far from the reader is not rendered, so file order answers it when the DOM cannot. */
+export function positionForAlert(
+  alertFilePath: string,
+  activeFilePath: string | null,
+  orderedPaths: string[],
+  measured: ThreadPosition | null,
+): ThreadPosition {
+  if (measured) {
+    return measured;
+  }
+  if (!activeFilePath) {
+    return 'below';
+  }
+
+  const alertAt = orderedPaths.indexOf(alertFilePath);
+  const readerAt = orderedPaths.indexOf(activeFilePath);
+  if (alertAt === -1 || readerAt === -1) {
+    return 'below';
+  }
+
+  return alertAt < readerAt ? 'above' : 'below';
 }

@@ -180,6 +180,7 @@ export function createThread(data: {
   /** An aside starts a conversation rather than a finding, and is never posted. */
   kind?: CommentKind;
   live?: boolean;
+  intent?: 'ask' | 'act';
 }): Promise<CommentThread> {
   return apiFetch('/api/threads', {
     method: 'POST',
@@ -193,6 +194,8 @@ export interface ReplyOptions {
   aside?: boolean;
   /** Ask the agent to answer, amend or act on it. */
   live?: boolean;
+  /** A question, or a request for a change. Absent is a question. */
+  intent?: 'ask' | 'act';
 }
 
 export function replyToThread(
@@ -209,6 +212,7 @@ export function replyToThread(
       author,
       kind: options.aside ? 'aside' : 'review',
       live: options.live === true,
+      intent: options.intent ?? 'ask',
     }),
   });
 }

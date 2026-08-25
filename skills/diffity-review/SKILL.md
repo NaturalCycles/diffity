@@ -100,7 +100,10 @@ The review needs a running session whose ref matches the requested ref. A ref mi
    - If refs **don't match** → restart: run `diffity <ref> --no-open --new` (or `diffity --no-open --new` if no ref). The `--new` flag kills the old session and starts a fresh one. Use Bash tool with `run_in_background: true`. Wait 2 seconds, then verify with `diffity list --json` and note the port.
    - If **no ref was requested** and the running session's ref is not `"work"` → restart with `diffity --no-open --new` (the running session is for a named ref, but we need working-tree).
 3. If **no session is running** for this repo, start one in the background:
-   - Command: `diffity <ref> --no-open` (or `diffity --no-open` if no ref)
+   - Command: `diffity <ref> --no-open --review` (or `diffity --no-open --review` if no ref)
+   - `--review` says what you are here for. Reviewing is not editing, so it keeps Act off the
+     comment box and refuses a change request even on a pull request the reader wrote themselves.
+     Authorship alone cannot tell the difference; you can.
    - Use Bash tool with `run_in_background: true`
    - Wait 2 seconds, then verify with `diffity list --json` and note the port.
 

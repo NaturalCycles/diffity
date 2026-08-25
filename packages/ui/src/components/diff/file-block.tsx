@@ -72,6 +72,8 @@ interface FileBlockProps {
   onRefreshFile?: (path: string) => void;
   onAskThread?: (filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor) => void;
   onAskReply?: (threadId: string, body: string, author: CommentAuthor) => void;
+  onActThread?: (filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor) => void;
+  onActReply?: (threadId: string, body: string, author: CommentAuthor) => void;
   askIsHeard?: boolean;
 }
 
@@ -87,7 +89,7 @@ export function FileBlock(props: FileBlockProps) {
     file, viewMode, collapsed, onToggleCollapse, reviewed, onReviewedChange, highlightLine, baseRef, canRevert, onRevert, focusRanges,
     tourMarks, activeStepIndex, onTourMarkClick,
     isStale, onRefreshFile,
-    onAskThread, onAskReply, askIsHeard,
+    onAskThread, onAskReply, onActThread, onActReply, askIsHeard,
     threads: allThreads, commentsEnabled, commentActions, onAddThread: rawAddThread, pendingSelection, onPendingSelectionChange,
     highlighted, onHighlightEnd,
   } = props;
@@ -593,6 +595,8 @@ export function FileBlock(props: FileBlockProps) {
                     attentionTitle={attentionTitle}
                     onAskThread={onAskThread}
                     onAskReply={onAskReply}
+                    onActThread={onActThread}
+                    onActReply={onActReply}
                     askIsHeard={askIsHeard}
                     tourMarks={tourMarks}
                     activeStepIndex={activeStepIndex}

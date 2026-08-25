@@ -41,6 +41,8 @@ interface HunkBlockProps {
   getOriginalCode?: (side: CommentSide, startLine: number, endLine: number) => string;
   onAskThread?: (filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor) => void;
   onAskReply?: (threadId: string, body: string, author: CommentAuthor) => void;
+  onActThread?: (filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor) => void;
+  onActReply?: (threadId: string, body: string, author: CommentAuthor) => void;
   askIsHeard?: boolean;
   tourMarks?: TourMark[];
   activeStepIndex?: number;
@@ -88,6 +90,7 @@ export function renderLineWithComments(
           thread={thread}
           onReply={props.onReply!}
             onAskReply={props.onAskReply}
+            onActReply={props.onActReply}
             askIsHeard={props.askIsHeard}
           onResolve={props.onResolve!}
           onUnresolve={props.onUnresolve!}
@@ -128,7 +131,7 @@ export function HunkBlock(props: HunkBlockProps) {
     onLineMouseDown, onLineMouseEnter, onCommentClick,
     onAddThread, onReply, onResolve, onUnresolve, onDeleteComment, onDeleteThread,
     onCancelPending, filePath, onRevertChange, getOriginalCode,
-    onAskThread, onAskReply, askIsHeard,
+    onAskThread, onAskReply, onActThread, onActReply, askIsHeard,
     tourMarks, activeStepIndex, onTourMarkClick,
   } = props;
 
@@ -137,7 +140,7 @@ export function HunkBlock(props: HunkBlockProps) {
     threads, pendingSelection, currentAuthor,
     onAddThread, onReply, onResolve, onUnresolve, onDeleteComment, onDeleteThread,
     onCancelPending, filePath, getOriginalCode,
-    onAskThread, onAskReply, askIsHeard,
+    onAskThread, onAskReply, onActThread, onActReply, askIsHeard,
     tourMarks, activeStepIndex, onTourMarkClick,
   };
 

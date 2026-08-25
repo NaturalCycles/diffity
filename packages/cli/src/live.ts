@@ -1,4 +1,5 @@
 import { getDb, queryOne } from './db.js';
+import { normaliseIntent, type LiveIntent } from './live-intent.js';
 
 /**
  * A question or an instruction the reader left for the agent, taken from the comment it was written
@@ -25,6 +26,8 @@ export interface LiveRequest {
    * filled in by the route that hands the request over.
    */
   mayChangeCode?: boolean;
+  /** What the reader pressed. A question must not turn into an edit. */
+  intent: LiveIntent;
 }
 
 export interface LiveRequestStamp {
@@ -34,10 +37,10 @@ export interface LiveRequestStamp {
   requestedAt: string | null;
 }
 
-export function requestLive(commentId: string): LiveRequestStamp {
+export function requestLive(commentId: string, intent: LiveIntent = 'ask'): LiveRequestStamp {
   getDb()
-    .prepare("UPDATE comments SET live_requested_at = datetime('now') WHERE id = ?")
-    .run(commentId);
+    .prepare("UPDATE comments SET live_requested_at = datetime('now'), live_intent = ? WHERE id = ?")
+    .run(intent, commentId);
 
   const row = queryOne<{ session_id: string; live_requested_at: string | null }>(
     `SELECT t.session_id, c.live_requested_at FROM comments c JOIN comment_threads t ON t.id = c.thread_id
@@ -73,19 +76,20 @@ export function claimNextLiveRequest(sessionId: string): LiveRequest | null {
     return null;
   }
 
-  return (
-    queryOne<LiveRequest>(
-      `SELECT c.id AS commentId, c.thread_id AS threadId, c.body AS body,
-              c.author_name AS authorName, t.file_path AS filePath, t.side AS side,
+  const request = queryOne<LiveRequest>(
+    `SELECT c.id AS commentId, c.thread_id AS threadId, c.body AS body,
+              c.author_name AS authorName, c.live_intent AS intent,
+              t.file_path AS filePath, t.side AS side,
               t.start_line AS startLine, t.end_line AS endLine,
               (SELECT f.body FROM comments f WHERE f.thread_id = t.id
                  AND COALESCE(f.kind, 'review') = 'review'
                 ORDER BY f.created_at ASC, f.rowid ASC LIMIT 1) AS findingBody
          FROM comments c JOIN comment_threads t ON t.id = c.thread_id
         WHERE c.id = ?`,
-      claimed.id,
-    ) ?? null
+    claimed.id,
   );
+
+  return request ? { ...request, intent: normaliseIntent(request.intent) } : null;
 }
 
 /**
@@ -97,6 +101,21 @@ export function answerLiveRequest(commentIdOrPrefix: string): boolean {
     .prepare("UPDATE comments SET live_answered_at = datetime('now') WHERE id = ? OR id LIKE ?")
     .run(commentIdOrPrefix, `${commentIdOrPrefix}%`);
   return Number(result.changes ?? 0) > 0;
+}
+
+/**
+ * Requests an agent has taken and not yet answered. Between the two it is not parked on the claim
+ * route, so presence alone would report nobody there while somebody is working on your question.
+ */
+export function liveWorkingCount(sessionId: string): number {
+  const row = queryOne<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM comments c JOIN comment_threads t ON t.id = c.thread_id
+      WHERE t.session_id = ?
+        AND c.live_claimed_at IS NOT NULL
+        AND c.live_answered_at IS NULL`,
+    sessionId,
+  );
+  return row?.n ?? 0;
 }
 
 /** How many requests are waiting for somebody to pick them up. */

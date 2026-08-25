@@ -16,6 +16,7 @@ import {
 } from './threads.js';
 import { answerLiveRequest, type LiveRequest } from './live.js';
 import { clampClientWait } from './live-wait.js';
+import { directiveFor } from './live-intent.js';
 import { findInstanceForRepo, type RegistryEntry } from './registry.js';
 import { createHash } from 'node:crypto';
 import { createTour, addTourStep, updateTourStatus, deleteTour, deleteToursForSession } from './tours.js';
@@ -313,9 +314,15 @@ Examples:
       const startedAt = Date.now();
       let payload: { request: LiveRequest | null };
       try {
-        const res = await fetch(`http://127.0.0.1:${instance.port}/api/live/claim?wait=${wait}`, {
-          method: 'POST',
-        });
+        // Park on the session the server is serving, not on whatever the shared current-session
+        // file last named — those differ whenever another worktree has opened a review since.
+        const info = await fetch(`http://127.0.0.1:${instance.port}/api/info`);
+        const sessionId = info.ok
+          ? ((await info.json()) as { sessionId?: string }).sessionId
+          : undefined;
+        const claimUrl = `http://127.0.0.1:${instance.port}/api/live/claim?wait=${wait}`
+          + (sessionId ? `&session=${encodeURIComponent(sessionId)}` : '');
+        const res = await fetch(claimUrl, { method: 'POST' });
         if (!res.ok) {
           console.error(pc.red(`Could not wait for a request: ${res.status} ${await res.text()}`));
           process.exitCode = 1;
@@ -347,15 +354,10 @@ Examples:
 
       // stdout is the request, so a script can parse it. The directive goes to stderr, because the
       // turn this wakes up may be a long way from whatever armed the loop.
-      const mayChange = payload.request.mayChangeCode !== false;
       console.error(
         pc.cyan(
-          'A request came back from the review page. '
-            + (mayChange
-              ? 'Answer it in the thread, amend the finding it is about, or make the change'
-              : 'Answer it in the thread or amend the finding it is about — this pull request is '
-                + 'somebody else\'s, so do not edit its code')
-            + ' — then re-arm with `agent await`. The diffity-live skill has the detail.',
+          `${directiveFor(payload.request.intent, payload.request.mayChangeCode !== false)}\n`
+            + 'Then re-arm with `agent await`. The diffity-live skill has the detail.',
         ),
       );
       console.log(JSON.stringify(payload.request, null, 2));

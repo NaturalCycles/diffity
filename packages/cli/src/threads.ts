@@ -16,6 +16,7 @@ export interface ThreadComment {
   kind: CommentKind;
   createdAt: string;
   liveRequestedAt: string | null;
+  liveIntent: string | null;
   liveClaimedAt: string | null;
   liveAnsweredAt: string | null;
 }
@@ -65,6 +66,7 @@ interface CommentRow {
   kind?: string | null;
   created_at: string;
   live_requested_at?: string | null;
+  live_intent?: string | null;
   live_claimed_at?: string | null;
   live_answered_at?: string | null;
 }
@@ -96,6 +98,7 @@ function rowToComment(row: CommentRow): ThreadComment {
     kind: (row.kind as CommentKind | null) ?? 'review',
     createdAt: row.created_at,
     liveRequestedAt: row.live_requested_at ?? null,
+    liveIntent: row.live_intent ?? null,
     liveClaimedAt: row.live_claimed_at ?? null,
     liveAnsweredAt: row.live_answered_at ?? null,
   };
@@ -202,6 +205,7 @@ export function createThread(
       kind,
       createdAt: now,
       liveRequestedAt: null,
+    liveIntent: null,
       liveClaimedAt: null,
       liveAnsweredAt: null,
     }],
@@ -216,6 +220,7 @@ interface JoinedRow extends ThreadRow {
   c_kind: string | null;
   c_created_at: string | null;
   c_live_requested_at: string | null;
+  c_live_intent: string | null;
   c_live_claimed_at: string | null;
   c_live_answered_at: string | null;
 }
@@ -230,7 +235,8 @@ export function getThreadsForSession(sessionId: string, status?: ThreadStatus): 
     SELECT t.*,
            c.id AS c_id, c.author_name AS c_author_name, c.author_type AS c_author_type,
            c.body AS c_body, c.kind AS c_kind, c.created_at AS c_created_at,
-           c.live_requested_at AS c_live_requested_at, c.live_claimed_at AS c_live_claimed_at,
+           c.live_requested_at AS c_live_requested_at, c.live_intent AS c_live_intent,
+           c.live_claimed_at AS c_live_claimed_at,
            c.live_answered_at AS c_live_answered_at
     FROM comment_threads t
     LEFT JOIN comments c ON c.thread_id = t.id
@@ -253,6 +259,7 @@ export function getThreadsForSession(sessionId: string, status?: ThreadStatus): 
         kind: (row.c_kind as CommentKind | null) ?? 'review',
         createdAt: row.c_created_at!,
         liveRequestedAt: row.c_live_requested_at ?? null,
+        liveIntent: row.c_live_intent ?? null,
         liveClaimedAt: row.c_live_claimed_at ?? null,
         liveAnsweredAt: row.c_live_answered_at ?? null,
       });
@@ -307,6 +314,7 @@ export function addReply(
     kind,
     createdAt: now,
     liveRequestedAt: null,
+    liveIntent: null,
     liveClaimedAt: null,
     liveAnsweredAt: null,
   };

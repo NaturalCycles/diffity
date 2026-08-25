@@ -31,9 +31,35 @@ never did is guessing.
 
 `findingBody` is usually the thing being asked about. Read it before the question.
 
-## Choose one of three
+## Re-arm first
 
-Read `body` and decide. Do not do more than was asked.
+Before answering, put the loop back:
+
+```
+{{binary}} agent await --timeout 240
+```
+
+Background command, as always. The reader is looking at the page having just asked, and between
+taking their request and answering it there is nobody parked — so the page said "No agent" at exactly
+the moment they were watching. Re-arming first closes that window, and a second request arriving
+while you write is queued rather than lost.
+
+Nothing about answering changes; it just happens second.
+
+## The reader already chose
+
+The request carries an `intent`, because there are two buttons in the page and they mean different
+things. `await` prints what it means in plain words before the payload; that line is the instruction,
+not a summary of it.
+
+- **`ask`** — a question. Answer it, or amend the finding it is about. **Do not change code**, however
+  obvious the change looks. They pressed Ask.
+- **`act`** — a request for a change. Make it, and say what you did.
+
+An `intent` that is absent or unrecognised is a question. If `mayChangeCode` is false the answer is
+the same whatever they pressed: this pull request is somebody else's.
+
+Read `body` and decide *how* to do what was asked. Do not do more than was asked.
 
 **Answer it.** A question about the finding, the code, or your reasoning.
 
@@ -56,7 +82,8 @@ does.
 Amend the **finding**, not the aside. If the finding has already been sent, `amend` tells you so —
 pass that on rather than letting the reader think the pull request has changed.
 
-**Make the change.** Only on your own work. Read the rule below before you edit anything.
+**Make the change.** Only when the intent is `act` and `mayChangeCode` is not false. Read the rule
+below before you edit anything.
 
 ```
 # make the edit, then:
@@ -68,19 +95,21 @@ merge — those wait to be asked for, here as everywhere.
 
 ### When you must not change code
 
-Run `{{binary}} agent live-status` if you are unsure. Editing is off the table when the diff is
+Run `{{binary}} agent live-status` if you are unsure.
+
+Whether changes are allowed is decided when diffity is launched. `--review` says you are reviewing
+somebody's change, `--work` says you are working on the branch — which is the case authorship gets
+wrong, since taking over a colleague's branch leaves their name on the pull request. Said neither
+way, it falls back to who wrote it. It lasts as long as that server and no longer, so a reader who
+hands work over restarts rather than unticking something. Editing is off the table when the diff is
 somebody else's pull request, however the conversation goes: reviewing is not editing, and a reader
 asking a follow-up has not asked you to rewrite their branch. Answer and amend instead, and say that
 is what you did.
 
-## Then go back to waiting
+## When the wait ends on its own
 
-```
-{{binary}} agent await --timeout 240
-```
-
-Background command, same as before. Exit 3 means nothing was asked — re-arm without saying anything.
-Anything else means the server is gone; say so once and stop, rather than looping on a dead port.
+Exit 3 means nothing was asked — re-arm without saying anything. Anything else means the server is
+gone; say so once and stop, rather than looping on a dead port.
 
 ## Keep it short
 

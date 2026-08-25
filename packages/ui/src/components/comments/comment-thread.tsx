@@ -10,6 +10,8 @@ interface CommentThreadProps {
   thread: CommentThreadType;
   onReply: (threadId: string, body: string, author: CommentAuthor) => void;
   onAskReply?: (threadId: string, body: string, author: CommentAuthor) => void;
+  onActThread?: (filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor) => void;
+  onActReply?: (threadId: string, body: string, author: CommentAuthor) => void;
   askIsHeard?: boolean;
   onResolve: (threadId: string) => void;
   onUnresolve: (threadId: string) => void;
@@ -41,6 +43,7 @@ export function CommentThread(props: CommentThreadProps) {
     thread,
     onReply,
     onAskReply,
+    onActReply,
     askIsHeard,
     onResolve,
     onUnresolve,
@@ -119,6 +122,7 @@ export function CommentThread(props: CommentThreadProps) {
         thread={thread}
         onReply={(body) => onReply(thread.id, body, currentAuthor)}
         onAskReply={onAskReply && ((body) => onAskReply(thread.id, body, currentAuthor))}
+        onActReply={onActReply && ((body) => onActReply(thread.id, body, currentAuthor))}
         askIsHeard={askIsHeard}
         onResolve={() => {
           onResolve(thread.id);
