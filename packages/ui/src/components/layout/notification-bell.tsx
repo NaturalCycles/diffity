@@ -47,7 +47,7 @@ export function NotificationBell(props: NotificationBellProps) {
         )}
       </button>
       {open && (
-        <div className="absolute right-0 top-full mt-1 z-50 w-80 rounded-md border border-border bg-bg shadow-md overflow-hidden">
+        <div className="absolute right-0 top-full mt-1 z-50 w-80 max-h-80 overflow-y-auto rounded-md border border-border bg-bg shadow-md">
           {alerts.map(alert => (
             <button
               key={alert.threadId}

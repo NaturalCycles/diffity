@@ -59,3 +59,20 @@ describe('the notification bell', () => {
     expect(screen.queryByRole('menuitem')).toBeNull();
   });
 });
+
+describe('a long list', () => {
+  // A batch of asks is how this gets used — seven arrived in one go — and thirty would run off the
+  // bottom of the window with no way to reach the end.
+  it('scrolls inside itself rather than off the screen', () => {
+    const many = Array.from({ length: 30 }, (_, i) => ({
+      threadId: `t${i}`, filePath: 'a.ts', authorName: 'Agent', preview: `answer ${i}`,
+    }));
+    render(<NotificationBell alerts={many} onGo={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /30 unread/i }));
+
+    const list = screen.getAllByRole('menuitem')[0].parentElement!;
+    expect(list.className).toContain('max-h-');
+    expect(list.className).toContain('overflow-y-auto');
+  });
+})

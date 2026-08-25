@@ -563,7 +563,7 @@ export function DiffPage() {
   // they have since scrolled to is noise, and one pointing down at something now above them is
   // worse than none. The active file changes far too rarely to hang either off.
   useEffect(() => {
-    if (answerAlerts.length === 0) {
+    if (answerAlerts.length === 0 && unseenAlerts.length === 0) {
       return;
     }
 
@@ -594,7 +594,7 @@ export function DiffPage() {
     settle();
     container?.addEventListener('scroll', settle, { passive: true });
     return () => container?.removeEventListener('scroll', settle);
-  }, [answerAlerts, activeFile, readingOrderPaths]);
+  }, [answerAlerts, unseenAlerts, activeFile, readingOrderPaths]);
 
   const handleGoToAnswer = useCallback((threadId: string) => {
     const alert = [...answerAlerts, ...unseenAlerts].find(a => a.threadId === threadId);
