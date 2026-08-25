@@ -9,6 +9,7 @@ import { EyeOffIcon } from '../icons/eye-off-icon';
 import { KeyboardIcon } from '../icons/keyboard-icon';
 import { GitBranchIcon } from '../icons/git-branch-icon';
 import { GitHubIcon } from '../icons/github-icon';
+import type { GitHubDetails } from '../../lib/api';
 import { DiffStats } from '../diff/diff-stats';
 import { GitHubDialog } from './github-dialog';
 import { CommentToolbarActions } from '../comments/comment-toolbar-actions';
@@ -43,7 +44,7 @@ interface ToolbarProps {
   repoName: string | null;
   branch: string | null;
   description: string | null;
-  githubDetails?: { prNumber: number; prTitle: string; prAuthor?: string; prUrl: string; prCreatedAt: string; headSha: string; commentCount: number } | null;
+  githubDetails?: GitHubDetails | null;
   sessionId?: string | null;
   onGitHubPulled?: () => void;
 }

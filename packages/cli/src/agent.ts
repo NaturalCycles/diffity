@@ -577,8 +577,9 @@ Examples:
     .action((tourId: string | undefined, opts: { all?: boolean; includeBuilding?: boolean }) => {
       const session = requireSession();
       if (tourId) {
-        deleteTour(tourId);
-        console.log(pc.green(`Removed walkthrough ${tourId.slice(0, 8)}`));
+        const resolved = resolveTourId(tourId, session.id);
+        deleteTour(resolved);
+        console.log(pc.green(`Removed walkthrough ${resolved.slice(0, 8)}`));
         return;
       }
       // Deleting every walkthrough has to be asked for. Reaching it by leaving the id off meant
