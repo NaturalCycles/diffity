@@ -5,6 +5,8 @@ export interface LiveStatus {
   enabled: boolean;
   listening: boolean;
   waiting: number;
+  /** Whether the agent may edit code here, derived from who wrote the pull request. */
+  mayChangeCode: boolean;
 }
 
 /**

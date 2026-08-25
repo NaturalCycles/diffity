@@ -18,6 +18,7 @@ export function useCommentActions(sessionId: string | null, enabled: boolean) {
       sessionId, filePath, side, startLine, endLine, body, author, anchorContent,
       kind: options?.aside ? 'aside' : 'review',
       live: options?.live === true,
+      intent: options?.intent ?? 'ask',
     }).then(() => {
       invalidateThreads();
     });

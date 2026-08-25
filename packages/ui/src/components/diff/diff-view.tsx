@@ -63,6 +63,8 @@ interface DiffViewProps {
   onRefreshFile?: (path: string) => void;
   onAskThread?: (filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor) => void;
   onAskReply?: (threadId: string, body: string, author: CommentAuthor) => void;
+  onActThread?: (filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor) => void;
+  onActReply?: (threadId: string, body: string, author: CommentAuthor) => void;
   askIsHeard?: boolean;
 }
 
@@ -98,6 +100,8 @@ export function DiffView(props: DiffViewProps) {
     onRefreshFile,
     onAskThread,
     onAskReply,
+    onActThread,
+    onActReply,
     askIsHeard,
   } = props;
   const { highlight } = useHighlighter();
@@ -347,6 +351,8 @@ export function DiffView(props: DiffViewProps) {
                 onRefreshFile={onRefreshFile}
                 onAskThread={onAskThread}
                 onAskReply={onAskReply}
+                onActThread={onActThread}
+                onActReply={onActReply}
                 askIsHeard={askIsHeard}
                 tourMarks={tourMarksByFile?.get(filePath)}
                 activeStepIndex={activeStepIndex}

@@ -95,12 +95,26 @@ export function DiffPage() {
   // forget, and the first version of this answered three comments with silence because of it.
   const { data: liveStatus } = useQuery(liveStatusOptions(refParam));
   const canAsk = !!liveStatus?.enabled && reviewsEnabled;
+  // Act is not offered on a pull request somebody else wrote. Better than offering it and refusing:
+  // a button that is there is a promise.
+  const canAct = canAsk && !!liveStatus?.mayChangeCode;
   const askIsHeard = !!liveStatus?.listening;
+
+  const askOrAct = useCallback(
+    (intent: 'ask' | 'act') => ({ aside: true as const, live: true as const, intent }),
+    [],
+  );
 
   const handleAskReply = useCallback(
     (threadId: string, body: string, author: Parameters<typeof commentActions.addReply>[2]) =>
-      commentActions.addReply(threadId, body, author, { aside: true, live: true }),
-    [commentActions],
+      commentActions.addReply(threadId, body, author, askOrAct('ask')),
+    [commentActions, askOrAct],
+  );
+
+  const handleActReply = useCallback(
+    (threadId: string, body: string, author: Parameters<typeof commentActions.addReply>[2]) =>
+      commentActions.addReply(threadId, body, author, askOrAct('act')),
+    [commentActions, askOrAct],
   );
 
   const handleAskThread = useCallback(
@@ -111,8 +125,20 @@ export function DiffPage() {
       endLine: number,
       body: string,
       author: Parameters<typeof commentActions.addThread>[5],
-    ) => commentActions.addThread(filePath, side, startLine, endLine, body, author, undefined, { aside: true, live: true }),
-    [commentActions],
+    ) => commentActions.addThread(filePath, side, startLine, endLine, body, author, undefined, askOrAct('ask')),
+    [commentActions, askOrAct],
+  );
+
+  const handleActThread = useCallback(
+    (
+      filePath: string,
+      side: Parameters<typeof commentActions.addThread>[1],
+      startLine: number,
+      endLine: number,
+      body: string,
+      author: Parameters<typeof commentActions.addThread>[5],
+    ) => commentActions.addThread(filePath, side, startLine, endLine, body, author, undefined, askOrAct('act')),
+    [commentActions, askOrAct],
   );
   const commentCountsByFile = useMemo(() => buildThreadCountsByFile(threads), [threads]);
 
@@ -677,6 +703,8 @@ export function DiffPage() {
             onRefreshFile={handleRefreshFile}
             onAskThread={canAsk ? handleAskThread : undefined}
             onAskReply={canAsk ? handleAskReply : undefined}
+            onActThread={canAct ? handleActThread : undefined}
+            onActReply={canAct ? handleActReply : undefined}
             askIsHeard={askIsHeard}
             tourMarksByFile={tourMarksByFile}
             activeStepIndex={activeStepIndex}

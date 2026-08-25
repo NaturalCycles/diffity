@@ -81,6 +81,8 @@ export interface LineRenderProps {
   /** Hands a new comment or a reply to the agent, rather than leaving it for the code's author. */
   onAskThread?: (filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor) => void;
   onAskReply?: (threadId: string, body: string, author: CommentAuthor) => void;
+  onActThread?: (filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor) => void;
+  onActReply?: (threadId: string, body: string, author: CommentAuthor) => void;
   askIsHeard?: boolean;
   tourMarks?: TourMark[];
   activeStepIndex?: number;

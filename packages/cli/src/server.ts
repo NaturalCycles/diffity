@@ -373,6 +373,8 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             enabled: isLoopbackBind(getBindHost()),
             listening: sid ? liveListenerCount(sid) > 0 : false,
             waiting: sid ? pendingLiveCount(sid) : 0,
+            // So the page can decline to offer Act at all, rather than offering it and refusing.
+            mayChangeCode: mayChangeCode(authorship()),
           });
           return;
         }

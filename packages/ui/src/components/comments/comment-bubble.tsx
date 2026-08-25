@@ -4,6 +4,7 @@ import { PencilIcon } from '../icons/pencil-icon';
 import { TrashIcon } from '../icons/trash-icon';
 import { MarkdownContent } from '../layout/markdown-content';
 import { isAside, requestStateOf, type RequestState } from '../../lib/live-mode';
+import { rowsForBody } from '../../lib/edit-box-size';
 
 interface CommentBubbleProps {
   comment: Comment;
@@ -170,8 +171,8 @@ export function CommentBubble(props: CommentBubbleProps) {
               value={editBody}
               onChange={(e) => setEditBody(e.target.value)}
               onKeyDown={handleKeyDown}
-              rows={3}
-              className="w-full px-3 py-2 text-sm bg-bg-tertiary text-text resize-y outline-none rounded-md min-h-[60px]"
+              rows={rowsForBody(editBody)}
+              className="w-full px-3 py-2 text-sm bg-bg-tertiary text-text resize-y outline-none rounded-md"
             />
             <div className="flex items-center gap-2 mt-1.5">
               <div className="flex-1" />

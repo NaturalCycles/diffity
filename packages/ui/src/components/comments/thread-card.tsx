@@ -12,8 +12,10 @@ interface ThreadCardProps {
   onDeleteComment: (commentId: string) => void;
   onDeleteThread: () => void;
   onReply?: (body: string) => void;
-  /** Hands the reply to the agent instead. Absent when no agent can be reached. */
+  /** Hands the reply to the agent as a question. Absent when no agent can be reached. */
   onAskReply?: (body: string) => void;
+  /** Asks the agent to make the change. Absent when the code is not the reader's to change. */
+  onActReply?: (body: string) => void;
   askIsHeard?: boolean;
   onResolve?: () => void;
   onUnresolve?: () => void;
@@ -36,7 +38,7 @@ export function ThreadCard(props: ThreadCardProps) {
     headerRight,
     className,
     children,
-   onAskReply, askIsHeard,} = props;
+   onAskReply, onActReply, askIsHeard,} = props;
   const [showReply, setShowReply] = useState(false);
   const resolved = isThreadResolved(thread);
 
@@ -95,6 +97,10 @@ export function ThreadCard(props: ThreadCardProps) {
               }}
               onAsk={onAskReply && ((body) => {
                 onAskReply(body);
+                setShowReply(false);
+              })}
+              onAct={onActReply && ((body) => {
+                onActReply(body);
                 setShowReply(false);
               })}
               askIsHeard={askIsHeard}
