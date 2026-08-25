@@ -21,7 +21,7 @@ import { isThreadResolved } from '../comments/types';
 
 interface ToolbarProps {
   reviewInProgress?: boolean;
-  live?: { enabled: boolean; listening: boolean; waiting: number };
+  live?: { enabled: boolean; listening: boolean; working: boolean; waiting: number };
   viewMode: ViewMode;
   onViewModeChange: (mode: ViewMode) => void;
   hideWhitespace: boolean;
@@ -183,7 +183,12 @@ export function Toolbar(props: ToolbarProps) {
       </div>
       <div className="flex items-center gap-2 ml-auto shrink-0">
         {live && (
-          <LiveIndicator enabled={live.enabled} listening={live.listening} waiting={live.waiting} />
+          <LiveIndicator
+            enabled={live.enabled}
+            listening={live.listening}
+            working={live.working}
+            waiting={live.waiting}
+          />
         )}
         <SegmentedToggle options={viewModeOptions} value={viewMode} onChange={onViewModeChange} />
         <CommentToolbarActions

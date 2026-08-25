@@ -50,6 +50,7 @@ import { findOrCreateSession, resolveSessionId } from './session.js';
 import { resolveMayChangeCode, type SessionPurpose } from './live-permissions.js';
 import {
   liveListenerCount,
+  liveWorkingCount,
   pendingLiveCount,
   reclaimStaleLiveRequests,
   waitForLiveRequest,
@@ -387,6 +388,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           sendJson(res, {
             enabled: isLoopbackBind(getBindHost()),
             listening: sid ? liveListenerCount(sid) > 0 : false,
+            working: sid ? liveWorkingCount(sid) > 0 : false,
             waiting: sid ? pendingLiveCount(sid) : 0,
             mayChangeCode: resolveMayChangeCode(purpose, authorship()),
           });

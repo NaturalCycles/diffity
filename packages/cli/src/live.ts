@@ -103,6 +103,21 @@ export function answerLiveRequest(commentIdOrPrefix: string): boolean {
   return Number(result.changes ?? 0) > 0;
 }
 
+/**
+ * Requests an agent has taken and not yet answered. Between the two it is not parked on the claim
+ * route, so presence alone would report nobody there while somebody is working on your question.
+ */
+export function liveWorkingCount(sessionId: string): number {
+  const row = queryOne<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM comments c JOIN comment_threads t ON t.id = c.thread_id
+      WHERE t.session_id = ?
+        AND c.live_claimed_at IS NOT NULL
+        AND c.live_answered_at IS NULL`,
+    sessionId,
+  );
+  return row?.n ?? 0;
+}
+
 /** How many requests are waiting for somebody to pick them up. */
 export function pendingLiveCount(sessionId: string): number {
   const row = queryOne<{ n: number }>(
