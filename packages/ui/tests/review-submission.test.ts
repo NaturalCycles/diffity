@@ -49,14 +49,14 @@ describe('threadToPayload', () => {
     expect(threadToPayload(thread({ side: 'old' })).side).toBe('LEFT');
   });
 
-  it('folds replies into one body, attributed', () => {
+  it('sends the finding alone, however much was said after it', () => {
     const payload = threadToPayload(
       thread({
         comments: [comment('P2: name is unclear'), comment('agreed, renaming', 'Agent')],
       }),
     );
 
-    expect(payload.body).toBe('P2: name is unclear\n\n---\n\n**Agent:** agreed, renaming');
+    expect(payload.body).toBe('P2: name is unclear');
   });
 });
 
@@ -151,14 +151,26 @@ describe('what a thread sends to the forge', () => {
     } as unknown as CommentThread;
   }
 
-  it('sends the finding and the discussion of it', () => {
+  it('sends the finding and nothing else', () => {
     const payload = threadToPayload(withComments([
       { body: 'P2: the finding' },
-      { body: 'and a reply the author should see', name: 'You' },
+      { body: 'a reply that was never folded into the finding', name: 'You' },
     ]));
 
-    expect(payload.body).toContain('P2: the finding');
-    expect(payload.body).toContain('and a reply the author should see');
+    expect(payload.body).toBe('P2: the finding');
+  });
+
+  // What went out on NCBackend3#14380: the agent answered a question by amending the finding and
+  // by replying, so the answer arrived twice, and the question that prompted it never arrived at
+  // all — an aside being local. The amendment is the whole of it.
+  it('sends an amended finding once, not the answer that produced it as well', () => {
+    const payload = threadToPayload(withComments([
+      { body: 'P2: the finding, amended to carry the answer' },
+      { body: 'is our money handling affected?', kind: 'aside', name: 'You' },
+      { body: 'No, and I was wrong to point at refunds. I have amended the finding.' },
+    ]));
+
+    expect(payload.body).toBe('P2: the finding, amended to carry the answer');
   });
 
   // An aside is a conversation with the agent about the review. Posting it would put the whole
@@ -188,7 +200,8 @@ describe('what a thread sends to the forge', () => {
       delete (comment as { kind?: string }).kind;
     }
 
-    expect(threadToPayload(thread).body).toContain('old reply');
+    // Were the default an aside, the filter would drop it and there would be no finding to send.
+    expect(threadToPayload(thread).body).toBe('P1: old finding');
   });
 });
 
