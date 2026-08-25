@@ -11,8 +11,12 @@ export function isReviewComment(comment: { kind?: CommentKind }): boolean {
  * say, so the way to get an answer onto the pull request is to amend the finding, not to ship the
  * conversation that produced it.
  */
+export function findingOf(thread: CommentThread): string | undefined {
+  return thread.comments.find(isReviewComment)?.body;
+}
+
 export function threadToPayload(thread: CommentThread): PrCommentPayload {
-  const [finding] = thread.comments.filter(isReviewComment);
+  const finding = findingOf(thread);
 
   return {
     threadId: thread.id,
@@ -20,7 +24,7 @@ export function threadToPayload(thread: CommentThread): PrCommentPayload {
     side: thread.side === 'old' ? 'LEFT' : 'RIGHT',
     startLine: thread.startLine !== thread.endLine ? thread.startLine : null,
     endLine: thread.endLine,
-    body: finding.body,
+    body: finding ?? '',
   };
 }
 
@@ -43,7 +47,8 @@ export function isGeneral(thread: CommentThread): boolean {
 export function summaryFromGeneralThreads(threads: CommentThread[]): string {
   return threads
     .filter(isGeneral)
-    .flatMap(thread => thread.comments.map(comment => comment.body))
+    .map(findingOf)
+    .filter(body => !!body)
     .join('\n\n');
 }
 

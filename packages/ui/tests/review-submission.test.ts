@@ -102,6 +102,34 @@ describe('summaryFromGeneralThreads', () => {
     expect(summaryFromGeneralThreads([thread()])).toBe('');
   });
 
+  it('leaves the conversation about a summary out of it', () => {
+    const summary = summaryFromGeneralThreads([
+      thread({
+        filePath: GENERAL_THREAD_FILE_PATH,
+        comments: [
+          { ...comment('Verdict: two findings, both small'), kind: 'review' as const },
+          { ...comment('why only two?', 'You'), kind: 'aside' as const },
+          { ...comment('because the third turned out to be mine', 'Agent'), kind: 'aside' as const },
+          { ...comment('a reply nobody folded in', 'Agent'), kind: 'review' as const },
+        ],
+      }),
+    ]);
+
+    expect(summary).toBe('Verdict: two findings, both small');
+  });
+
+  it('contributes nothing from a thread that is only a question', () => {
+    const summary = summaryFromGeneralThreads([
+      thread({
+        filePath: GENERAL_THREAD_FILE_PATH,
+        comments: [{ ...comment('what did you not check?', 'You'), kind: 'aside' as const }],
+      }),
+      thread({ id: 'g2', filePath: GENERAL_THREAD_FILE_PATH, comments: [comment('Verdict: fine')] }),
+    ]);
+
+    expect(summary).toBe('Verdict: fine');
+  });
+
   it('recognises a general thread', () => {
     expect(isGeneral(thread({ filePath: GENERAL_THREAD_FILE_PATH }))).toBe(true);
     expect(isGeneral(thread())).toBe(false);
@@ -160,9 +188,6 @@ describe('what a thread sends to the forge', () => {
     expect(payload.body).toBe('P2: the finding');
   });
 
-  // What went out on NCBackend3#14380: the agent answered a question by amending the finding and
-  // by replying, so the answer arrived twice, and the question that prompted it never arrived at
-  // all — an aside being local. The amendment is the whole of it.
   it('sends an amended finding once, not the answer that produced it as well', () => {
     const payload = threadToPayload(withComments([
       { body: 'P2: the finding, amended to carry the answer' },
@@ -200,7 +225,7 @@ describe('what a thread sends to the forge', () => {
       delete (comment as { kind?: string }).kind;
     }
 
-    // Were the default an aside, the filter would drop it and there would be no finding to send.
+    // Were the default an aside, there would be no finding here to send.
     expect(threadToPayload(thread).body).toBe('P1: old finding');
   });
 });
