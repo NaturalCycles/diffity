@@ -16,9 +16,10 @@ import { readReadingPosition, writeReadingPosition } from '../../lib/reading-pos
 import { staleMessage } from '../../lib/stale-files';
 import { canAskAgent, canActOnCode } from '../../lib/live-mode';
 import { patchDiffFile } from '../../lib/patch-diff-file';
-import { newAnswers, dropSeenAlerts, type AnswerAlert } from '../../lib/answer-alerts';
+import { newAnswers, dropSeenAlerts, positionForAlert, type AnswerAlert } from '../../lib/answer-alerts';
 import { whereIsThread, type ThreadPosition } from '../../lib/thread-visibility';
 import { AnswerBubble } from '../layout/answer-bubble';
+import { UnseenAnswers } from '../layout/unseen-answers';
 import { fetchDiffFile } from '../../lib/api';
 import { diffOptions } from '../../queries/diff';
 import { tourMarks, marksByPath, focusRangesFromMarks, type TourFocusRange } from '../../lib/tour-marks';
@@ -503,6 +504,8 @@ export function DiffPage() {
   // until they follow it or send it away — and dropped the moment the thread comes into view, since
   // seeing the reply is an answer to the bubble.
   const [answerAlerts, setAnswerAlerts] = useState<AnswerAlert[]>([]);
+  // What a note leaves behind when its time runs out: still unread, no longer in the way.
+  const [unseenAlerts, setUnseenAlerts] = useState<AnswerAlert[]>([]);
   const seenThreadsRef = useRef<typeof threads | null>(null);
 
   useEffect(() => {
@@ -522,6 +525,16 @@ export function DiffPage() {
 
   const [alertPosition, setAlertPosition] = useState<ThreadPosition>('below');
 
+  const handleAlertsExpired = useCallback(() => {
+    setAnswerAlerts(expiring => {
+      setUnseenAlerts(prev => [
+        ...prev.filter(kept => !expiring.some(gone => gone.threadId === kept.threadId)),
+        ...expiring,
+      ]);
+      return [];
+    });
+  }, []);
+
   // Both of these have to follow the reader rather than being decided once: a note about a thread
   // they have since scrolled to is noise, and one pointing down at something now above them is
   // worse than none. The active file changes far too rarely to hang either off.
@@ -532,32 +545,41 @@ export function DiffPage() {
 
     const container = document.querySelector('main.overflow-y-auto');
 
+    const onScreen = (threadId: string) => {
+      const seen = threadBounds(threadId);
+      return !!seen && whereIsThread(seen.thread, seen.viewport) === 'on-screen';
+    };
+
     const settle = () => {
       const newest = answerAlerts[answerAlerts.length - 1];
       const bounds = newest ? threadBounds(newest.threadId) : null;
-      setAlertPosition(
-        bounds && whereIsThread(bounds.thread, bounds.viewport) === 'above' ? 'above' : 'below',
-      );
-      setAnswerAlerts(prev =>
-        dropSeenAlerts(prev, threadId => {
-          const seen = threadBounds(threadId);
-          return !!seen && whereIsThread(seen.thread, seen.viewport) === 'on-screen';
-        }),
-      );
+      if (newest) {
+        setAlertPosition(
+          positionForAlert(
+            newest.filePath,
+            activeFile,
+            diffPaths,
+            bounds ? whereIsThread(bounds.thread, bounds.viewport) : null,
+          ),
+        );
+      }
+      setAnswerAlerts(prev => dropSeenAlerts(prev, onScreen));
+      setUnseenAlerts(prev => dropSeenAlerts(prev, onScreen));
     };
 
     settle();
     container?.addEventListener('scroll', settle, { passive: true });
     return () => container?.removeEventListener('scroll', settle);
-  }, [answerAlerts]);
+  }, [answerAlerts, activeFile, diffPaths]);
 
   const handleGoToAnswer = useCallback((threadId: string) => {
-    const alert = answerAlerts.find(a => a.threadId === threadId);
+    const alert = [...answerAlerts, ...unseenAlerts].find(a => a.threadId === threadId);
     setAnswerAlerts([]);
+    setUnseenAlerts(prev => prev.filter(a => a.threadId !== threadId));
     if (alert) {
       handleScrollToThread(threadId, alert.filePath);
     }
-  }, [answerAlerts, handleScrollToThread]);
+  }, [answerAlerts, unseenAlerts, handleScrollToThread]);
 
   const handleSidebarCommentedFileClick = useCallback((path: string) => {
     const threadId = firstOpenThreadByFile.get(path);
@@ -655,8 +677,10 @@ export function DiffPage() {
           alerts={answerAlerts}
           position={alertPosition}
           onGo={handleGoToAnswer}
-          onDismiss={() => setAnswerAlerts([])}
+          onExpire={handleAlertsExpired}
+          onDismiss={handleAlertsExpired}
         />
+        <UnseenAnswers alerts={unseenAlerts} onGo={handleGoToAnswer} />
         <Sidebar
           files={orderedDiff?.files || []}
           activeFile={activeFile}

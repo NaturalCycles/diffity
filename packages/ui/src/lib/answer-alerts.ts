@@ -1,5 +1,6 @@
 import type { CommentThread } from '../components/comments/types';
 import { isAside } from './live-mode';
+import type { ThreadPosition } from './thread-visibility';
 
 export interface AnswerAlert {
   threadId: string;
@@ -73,4 +74,31 @@ export function dropSeenAlerts(
 ): AnswerAlert[] {
   const kept = alerts.filter(alert => !isOnScreen(alert.threadId));
   return kept.length === alerts.length ? alerts : kept;
+}
+
+/**
+ * Which edge the note belongs on. A measurement is best, but a thread far from the reader is not
+ * rendered at all — and treating that as "ahead of you" is how a note about a thread above ended up
+ * in the bottom corner. Where the file sits in the reading order answers it without the DOM.
+ */
+export function positionForAlert(
+  alertFilePath: string,
+  activeFilePath: string | null,
+  orderedPaths: string[],
+  measured: ThreadPosition | null,
+): ThreadPosition {
+  if (measured) {
+    return measured;
+  }
+  if (!activeFilePath) {
+    return 'below';
+  }
+
+  const alertAt = orderedPaths.indexOf(alertFilePath);
+  const readerAt = orderedPaths.indexOf(activeFilePath);
+  if (alertAt === -1 || readerAt === -1) {
+    return 'below';
+  }
+
+  return alertAt < readerAt ? 'above' : 'below';
 }
