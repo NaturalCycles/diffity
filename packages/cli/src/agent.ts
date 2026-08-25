@@ -15,11 +15,12 @@ import {
   type Thread,
 } from './threads.js';
 import { answerLiveRequest, type LiveRequest } from './live.js';
-import { clampClientWait } from './live-wait.js';
+import { clampClientWait, CLIENT_WAIT_CAP_SECONDS } from './live-wait.js';
 import { directiveFor } from './live-intent.js';
 import { findInstanceForRepo, type RegistryEntry } from './registry.js';
 import { createHash } from 'node:crypto';
-import { createTour, addTourStep, updateTourStatus, deleteTour, deleteToursForSession } from './tours.js';
+import { createTour, addTourStep, updateTourStatus, deleteTour, deleteToursForSession, getTour } from './tours.js';
+import { unansweredRequest } from './live-unanswered.js';
 import { readAnchor, clampToFile, countWorkingTreeLines } from './anchor.js';
 import { startReviewRun, finishReviewRun } from './review-run.js';
 import { readRepoConfig, DEFAULT_SEVERITIES, resolveInRepo, REPO_CONFIG_FILE } from '@diffity/git';
@@ -69,6 +70,19 @@ function resolveThreadId(shortId: string, sessionId: string): Thread {
     process.exit(1);
   }
   return thread;
+}
+
+function resolveTourId(shortId: string, sessionId: string): string {
+  const tour = getTour(shortId);
+  if (!tour) {
+    console.error(pc.red(`Error: Tour not found: ${shortId}`));
+    process.exit(1);
+  }
+  if (tour.sessionId !== sessionId) {
+    console.error(pc.red(`Error: Tour ${shortId} does not belong to current session`));
+    process.exit(1);
+  }
+  return tour.id;
 }
 
 function formatThreadLine(thread: Thread): string {
@@ -150,6 +164,7 @@ export function registerAgentCommands(program: Command): void {
   const agent = program
     .command('agent')
     .description('Agent commands for interacting with review comments')
+    .addHelpText('after', '\nPass --repo before `agent` when the current directory is not the repository:\n  diffity --repo <path> agent list')
     .addHelpText('after', `
 Examples:
   $ diffity agent list --status open --json
@@ -280,11 +295,20 @@ Examples:
     .action((id: string, opts: { body: string; aside?: boolean; answers?: string }) => {
       const session = requireSession();
       const thread = resolveThreadId(id, session.id);
+      const stillOpen = unansweredRequest(thread.comments);
       addReply(thread.id, opts.body, { name: 'Agent', type: 'agent' }, opts.aside ? 'aside' : 'review');
       if (opts.answers && !answerLiveRequest(opts.answers)) {
         console.error(
           pc.yellow(
             `No request matched ${opts.answers}, so the page still says an agent is working on it.`,
+          ),
+        );
+      }
+      if (!opts.answers && stillOpen) {
+        console.error(
+          pc.yellow(
+            `This thread has a request nobody has closed. Replying does not close it — it will be `
+            + `re-armed and handed back to you. Close it with --answers ${stillOpen.slice(0, 8)}`,
           ),
         );
       }
@@ -294,7 +318,7 @@ Examples:
   agent
     .command('await')
     .description('Wait for the reader to ask something, then exit so the agent can answer')
-    .option('--timeout <seconds>', 'How long to wait before giving up', '900')
+    .option('--timeout <seconds>', `How long to wait before giving up (each poll caps at ${CLIENT_WAIT_CAP_SECONDS}s and returns; call again to keep waiting)`, '900')
     .action(async (opts: { timeout: string }) => {
       requireSession();
       const instance = findRunningInstance();
@@ -532,10 +556,11 @@ Examples:
     .option('--annotation <text>', 'Short inline annotation on highlighted code', '')
     .option('--json', 'Output as JSON')
     .action((opts) => {
-      requireSession();
+      const session = requireSession();
       assertFileExists(opts.file);
+      const tourId = resolveTourId(opts.tour, session.id);
       const endLine = opts.endLine ?? opts.line;
-      const step = addTourStep(opts.tour, opts.file, opts.line, endLine, opts.body, opts.annotation);
+      const step = addTourStep(tourId, opts.file, opts.line, endLine, opts.body, opts.annotation);
       if (opts.json) {
         console.log(JSON.stringify(step, null, 2));
         return;
@@ -573,8 +598,8 @@ Examples:
     .requiredOption('--tour <id>', 'Tour ID')
     .option('--json', 'Output as JSON')
     .action((opts) => {
-      requireSession();
-      updateTourStatus(opts.tour, 'ready');
+      const session = requireSession();
+      updateTourStatus(resolveTourId(opts.tour, session.id), 'ready');
       if (opts.json) {
         console.log(JSON.stringify({ ok: true }));
         return;
