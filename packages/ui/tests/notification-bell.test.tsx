@@ -1,0 +1,61 @@
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { render, cleanup, screen, fireEvent } from '@testing-library/react';
+import { NotificationBell } from '../src/components/layout/notification-bell';
+
+afterEach(cleanup);
+
+const two = [
+  { threadId: 't1', filePath: 'packages/cli/src/live.ts', authorName: 'Agent', preview: 'first answer' },
+  { threadId: 't2', filePath: 'packages/ui/src/api.ts', authorName: 'Agent', preview: 'second answer' },
+];
+
+describe('the notification bell', () => {
+  it('is quiet with nothing unread', () => {
+    render(<NotificationBell alerts={[]} onGo={vi.fn()} />);
+
+    expect(screen.queryByText('2')).toBeNull();
+    expect(screen.getByRole('button', { name: /no unread/i })).toBeTruthy();
+  });
+
+  it('counts what is unread', () => {
+    render(<NotificationBell alerts={two} onGo={vi.fn()} />);
+
+    expect(screen.getByText('2')).toBeTruthy();
+  });
+
+  it('keeps the list closed until asked', () => {
+    render(<NotificationBell alerts={two} onGo={vi.fn()} />);
+
+    expect(screen.queryByText(/first answer/)).toBeNull();
+  });
+
+  it('lists them oldest first, with where each came from', () => {
+    render(<NotificationBell alerts={two} onGo={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /2 unread/i }));
+
+    const items = screen.getAllByRole('menuitem');
+    expect(items).toHaveLength(2);
+    expect(items[0].textContent).toContain('first answer');
+    expect(items[0].textContent).toContain('live.ts');
+  });
+
+  it('goes to the one that is clicked', () => {
+    const onGo = vi.fn();
+    render(<NotificationBell alerts={two} onGo={onGo} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /2 unread/i }));
+    fireEvent.click(screen.getAllByRole('menuitem')[1]);
+
+    expect(onGo).toHaveBeenCalledWith('t2');
+  });
+
+  it('closes once you have gone somewhere', () => {
+    render(<NotificationBell alerts={two} onGo={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /2 unread/i }));
+    fireEvent.click(screen.getAllByRole('menuitem')[0]);
+
+    expect(screen.queryByRole('menuitem')).toBeNull();
+  });
+});

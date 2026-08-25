@@ -13,6 +13,8 @@ import { DiffStats } from '../diff/diff-stats';
 import { GitHubDialog } from './github-dialog';
 import { CommentToolbarActions } from '../comments/comment-toolbar-actions';
 import { LiveIndicator } from './live-indicator';
+import { NotificationBell } from './notification-bell';
+import type { AnswerAlert } from '../../lib/answer-alerts';
 import { OptionsMenu, menuItemClass } from './options-menu';
 import { GENERAL_THREAD_FILE_PATH } from '../comments/types';
 import type { ViewMode } from '../../lib/diff-utils';
@@ -22,6 +24,8 @@ import { isThreadResolved } from '../comments/types';
 interface ToolbarProps {
   reviewInProgress?: boolean;
   live?: { enabled: boolean; listening: boolean; working: boolean; waiting: number };
+  unreadAnswers?: AnswerAlert[];
+  onGoToAnswer?: (threadId: string) => void;
   viewMode: ViewMode;
   onViewModeChange: (mode: ViewMode) => void;
   hideWhitespace: boolean;
@@ -138,6 +142,8 @@ export function Toolbar(props: ToolbarProps) {
     githubDetails,
     reviewInProgress,
     live,
+    unreadAnswers,
+    onGoToAnswer,
     sessionId,
     onGitHubPulled,
   } = props;
@@ -182,6 +188,9 @@ export function Toolbar(props: ToolbarProps) {
         )}
       </div>
       <div className="flex items-center gap-2 ml-auto shrink-0">
+        {onGoToAnswer && (
+          <NotificationBell alerts={unreadAnswers ?? []} onGo={onGoToAnswer} />
+        )}
         {live && (
           <LiveIndicator
             enabled={live.enabled}

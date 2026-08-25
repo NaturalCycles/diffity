@@ -19,7 +19,6 @@ import { patchDiffFile } from '../../lib/patch-diff-file';
 import { newAnswers, dropSeenAlerts, positionForAlert, type AnswerAlert } from '../../lib/answer-alerts';
 import { whereIsThread, type ThreadPosition } from '../../lib/thread-visibility';
 import { AnswerBubble } from '../layout/answer-bubble';
-import { UnseenAnswers } from '../layout/unseen-answers';
 import { fetchDiffFile } from '../../lib/api';
 import { diffOptions } from '../../queries/diff';
 import { tourMarks, marksByPath, focusRangesFromMarks, type TourFocusRange } from '../../lib/tour-marks';
@@ -323,6 +322,13 @@ export function DiffPage() {
   // Git reports a rename as `src/{old.ts => new.ts}`, which is never a path in the file list. Naming
   // it would point the reader at a file they cannot find, so anything unmatched falls back to the
   // count — the whole-diff refresh still covers it.
+  // The order the reader sees, which is the walkthrough's when there is one — comparing against the
+  // raw diff order put a note about a file above them in the bottom corner.
+  const readingOrderPaths = useMemo(
+    () => (orderedDiff ? orderedDiff.files.map(file => getFilePath(file)) : []),
+    [orderedDiff],
+  );
+
   const namedStaleFiles = useMemo(
     () => staleFiles.filter(path => diffPaths.includes(path)),
     [staleFiles, diffPaths],
@@ -576,7 +582,7 @@ export function DiffPage() {
           positionForAlert(
             newest.filePath,
             activeFile,
-            diffPaths,
+            readingOrderPaths,
             bounds ? whereIsThread(bounds.thread, bounds.viewport) : null,
           ),
         );
@@ -588,7 +594,7 @@ export function DiffPage() {
     settle();
     container?.addEventListener('scroll', settle, { passive: true });
     return () => container?.removeEventListener('scroll', settle);
-  }, [answerAlerts, activeFile, diffPaths]);
+  }, [answerAlerts, activeFile, readingOrderPaths]);
 
   const handleGoToAnswer = useCallback((threadId: string) => {
     const alert = [...answerAlerts, ...unseenAlerts].find(a => a.threadId === threadId);
@@ -675,6 +681,8 @@ export function DiffPage() {
         githubDetails={githubDetails}
         reviewInProgress={!!info?.review?.inProgress}
         live={liveStatus}
+        unreadAnswers={unseenAlerts}
+        onGoToAnswer={handleGoToAnswer}
         sessionId={sessionId}
         onGitHubPulled={() => queryClient.invalidateQueries({ queryKey: ['threads'] })}
       />
@@ -691,14 +699,6 @@ export function DiffPage() {
         />
       )}
       <div className="relative flex flex-1 overflow-hidden">
-        <AnswerBubble
-          alerts={answerAlerts}
-          position={alertPosition}
-          onGo={handleGoToAnswer}
-          onExpire={handleAlertsExpired}
-          onDismiss={handleAlertsExpired}
-        />
-        <UnseenAnswers alerts={unseenAlerts} onGo={handleGoToAnswer} />
         <Sidebar
           files={orderedDiff?.files || []}
           activeFile={activeFile}
@@ -715,6 +715,15 @@ export function DiffPage() {
                 }
               : undefined
           }
+        />
+        {/* Positioned against the diff rather than the row, which also holds the file list. */}
+        <div className="relative flex flex-1 min-w-0">
+        <AnswerBubble
+          alerts={answerAlerts}
+          position={alertPosition}
+          onGo={handleGoToAnswer}
+          onExpire={handleAlertsExpired}
+          onDismiss={handleAlertsExpired}
         />
         {orderedDiff ? (
           <DiffView
@@ -752,6 +761,7 @@ export function DiffPage() {
             onTourMarkClick={handleTourStepChange}
           />
         ) : null}
+        </div>
       </div>
       {showHelp && <ShortcutModal onClose={() => setShowHelp(false)} />}
     </div>
