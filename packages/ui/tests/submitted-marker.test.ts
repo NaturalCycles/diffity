@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { submittedLabel } from '../src/lib/submitted-marker';
+import { submittedLabel, localResolveNotice } from '../src/lib/submitted-marker';
 
 const now = new Date(2026, 7, 25, 18, 4);
 
@@ -34,5 +34,17 @@ describe('submittedLabel', () => {
 
   it('says nothing for a timestamp it cannot read', () => {
     expect(submittedLabel('not a date', now)).toBeNull();
+  });
+});
+
+describe('localResolveNotice', () => {
+  it('warns on a finding that was posted', () => {
+    expect(localResolveNotice('2026-08-24T15:37:00Z'))
+      .toBe('Resolved here only — the thread on the pull request stays open');
+  });
+
+  it('says nothing about one that was never posted, which has nowhere else to be resolved', () => {
+    expect(localResolveNotice(null)).toBeNull();
+    expect(localResolveNotice(undefined)).toBeNull();
   });
 });

@@ -27,3 +27,12 @@ export function submittedLabel(submittedAt: string | null | undefined, now = new
   const withYear = date.getFullYear() === now.getFullYear() ? day : `${day} ${date.getFullYear()}`;
   return `Posted to GitHub ${withYear} ${clockTime(date)}`;
 }
+
+/**
+ * Resolving here does not resolve there. Only worth saying about a finding that was posted — for
+ * anything else, local is the only place it could be resolved.
+ */
+export function localResolveNotice(submittedAt: string | null | undefined): string | null {
+  if (!submittedAt) return null;
+  return 'Resolved here only — the thread on the pull request stays open';
+}
