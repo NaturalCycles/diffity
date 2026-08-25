@@ -31,6 +31,21 @@ never did is guessing.
 
 `findingBody` is usually the thing being asked about. Read it before the question.
 
+## Re-arm first
+
+Before answering, put the loop back:
+
+```
+{{binary}} agent await --timeout 240
+```
+
+Background command, as always. The reader is looking at the page having just asked, and between
+taking their request and answering it there is nobody parked — so the page said "No agent" at exactly
+the moment they were watching. Re-arming first closes that window, and a second request arriving
+while you write is queued rather than lost.
+
+Nothing about answering changes; it just happens second.
+
 ## The reader already chose
 
 The request carries an `intent`, because there are two buttons in the page and they mean different
@@ -91,14 +106,10 @@ somebody else's pull request, however the conversation goes: reviewing is not ed
 asking a follow-up has not asked you to rewrite their branch. Answer and amend instead, and say that
 is what you did.
 
-## Then go back to waiting
+## When the wait ends on its own
 
-```
-{{binary}} agent await --timeout 240
-```
-
-Background command, same as before. Exit 3 means nothing was asked — re-arm without saying anything.
-Anything else means the server is gone; say so once and stop, rather than looping on a dead port.
+Exit 3 means nothing was asked — re-arm without saying anything. Anything else means the server is
+gone; say so once and stop, rather than looping on a dead port.
 
 ## Keep it short
 
