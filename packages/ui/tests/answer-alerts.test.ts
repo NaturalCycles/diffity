@@ -121,3 +121,21 @@ describe('dropping notes the reader has caught up with', () => {
     expect(dropSeenAlerts(alerts, () => true)).toEqual([]);
   });
 });
+
+describe('a page that has just been rebuilt', () => {
+  // Threads are an empty array while the query loads. Recording that as "what I have seen" makes
+  // every existing answer look new on the next poll — which is a page reload announcing the whole
+  // conversation back at you.
+  it('announces nothing when the first look was an empty load', () => {
+    const loaded = [thread('a', [{ id: 'c1', type: 'user' }, { id: 'c2', type: 'agent' }])];
+
+    expect(newAnswers([], loaded)).toEqual([]);
+  });
+
+  it('still announces an answer that arrives after a real look', () => {
+    const before = [thread('a', [{ id: 'c1', type: 'user' }])];
+    const after = [thread('a', [{ id: 'c1', type: 'user' }, { id: 'c2', type: 'agent' }])];
+
+    expect(newAnswers(before, after)).toHaveLength(1);
+  });
+});

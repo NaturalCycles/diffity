@@ -1,19 +1,12 @@
 /** What the reader pressed: a question, or a request for a change. */
 export type LiveIntent = 'ask' | 'act';
 
-/**
- * Anything that does not plainly say `act` is a question. Least privilege, and it covers both
- * requests written before intent existed and anything malformed arriving at the route.
- */
+/** Anything not plainly `act` is a question: least privilege, and it covers old and malformed alike. */
 export function normaliseIntent(value: unknown): LiveIntent {
   return value === 'act' ? 'act' : 'ask';
 }
 
-/**
- * What the agent is told on waking. The intent is a field rather than words mixed into the comment,
- * so the reader's text stays theirs — but the instruction still has to be said in plain language,
- * because that is what the agent acts on.
- */
+/** Said in plain language, because that is what the agent acts on. */
 export function directiveFor(intent: LiveIntent, mayChangeCode: boolean): string {
   if (intent === 'ask') {
     return 'The reader asked a question. Answer it in the thread, or amend the finding it is about. '

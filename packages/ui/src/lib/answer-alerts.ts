@@ -23,7 +23,9 @@ export function newAnswers(
   previous: CommentThread[] | null,
   current: CommentThread[],
 ): AnswerAlert[] {
-  if (!previous) {
+  // An empty previous is a page that has not loaded its threads yet, not a review with no comments
+  // — announcing against it turns a reload into the whole conversation arriving at once.
+  if (!previous || previous.length === 0) {
     return [];
   }
 
@@ -76,11 +78,7 @@ export function dropSeenAlerts(
   return kept.length === alerts.length ? alerts : kept;
 }
 
-/**
- * Which edge the note belongs on. A measurement is best, but a thread far from the reader is not
- * rendered at all — and treating that as "ahead of you" is how a note about a thread above ended up
- * in the bottom corner. Where the file sits in the reading order answers it without the DOM.
- */
+/** A thread far from the reader is not rendered, so file order answers it when the DOM cannot. */
 export function positionForAlert(
   alertFilePath: string,
   activeFilePath: string | null,

@@ -141,8 +141,6 @@ function migrateDb(db: DatabaseSync): void {
   // because "asked but not yet picked up" and "picked up but not answered" are both waiting, and
   // the page says different things about them.
   addColumn(db, 'comments', 'live_requested_at', 'TEXT');
-  // Ask or act. Absent means ask: a request that does not say what it wants gets an answer rather
-  // than an edit, which is also what every request written before this said by omission.
   addColumn(db, 'comments', 'live_intent', 'TEXT');
   addColumn(db, 'comments', 'live_claimed_at', 'TEXT');
   addColumn(db, 'comments', 'live_answered_at', 'TEXT');

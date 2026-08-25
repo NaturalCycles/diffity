@@ -13,7 +13,6 @@ export function mayChangeCode(pullRequest: { viewerDidAuthor?: boolean } | null)
   return pullRequest.viewerDidAuthor === true;
 }
 
-/** What the agent that launched diffity said it was here for. */
 export type SessionPurpose = 'work' | 'review';
 
 export function normalisePurpose(value: unknown): SessionPurpose | undefined {

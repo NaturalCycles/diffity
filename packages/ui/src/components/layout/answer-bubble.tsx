@@ -18,12 +18,8 @@ interface AnswerBubbleProps {
 }
 
 /**
- * An answer arrived and the thread it belongs to is off screen. Sits over the old side, near the
- * edge the thread is on, so following it moves the way the note already suggests — and never over
- * the new side, which is the code being reviewed.
- *
- * Leaves on its own, with a bar running down so that is not a surprise. Several answers collapse
- * into one: two notes competing for the same corner is worse than one that counts.
+ * Sits over the old side, on the edge the thread is on — never over the code being reviewed. Leaves
+ * on its own, with a bar running down so that is not a surprise.
  */
 export function AnswerBubble(props: AnswerBubbleProps) {
   const { alerts, position, onGo, onExpire, onDismiss } = props;
@@ -50,7 +46,6 @@ export function AnswerBubble(props: AnswerBubbleProps) {
     }, TICK_MS);
 
     return () => clearInterval(timer);
-    // Restarted by a newer answer arriving, not by every render.
   }, [newest?.threadId, newest?.preview, onExpire]);
 
   if (!newest) {

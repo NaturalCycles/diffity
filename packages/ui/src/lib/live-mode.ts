@@ -16,7 +16,6 @@ export function requestStateOf(comment: Comment): RequestState | null {
   return comment.liveClaimedAt ? 'working' : 'waiting';
 }
 
-/** What the reader asked for, for a chip that has to say more than "asked". */
 export function intentOf(comment: Comment): 'ask' | 'act' {
   return comment.liveIntent === 'act' ? 'act' : 'ask';
 }
@@ -30,7 +29,6 @@ interface LiveStatusLike {
   mayChangeCode: boolean;
 }
 
-/** Asking is available wherever live mode is, whether or not anyone is listening — it queues. */
 export function canAskAgent(status: LiveStatusLike | undefined, reviewsEnabled: boolean): boolean {
   return !!status?.enabled && reviewsEnabled;
 }

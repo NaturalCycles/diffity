@@ -6,13 +6,7 @@ interface UnseenAnswersProps {
   onGo: (threadId: string) => void;
 }
 
-/**
- * What a note leaves behind once its time is up: a count, and a way back to the answer. Sits at the
- * top of the diff over the gutter column, straddling the file header — close enough to the code to
- * be noticed while reading, far enough left not to sit on it.
- *
- * Goes to the oldest first, so following it repeatedly walks through them in the order they arrived.
- */
+/** What a note leaves behind once its time is up. Goes to the oldest first. */
 export function UnseenAnswers(props: UnseenAnswersProps) {
   const { alerts, onGo } = props;
 
