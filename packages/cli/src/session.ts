@@ -357,3 +357,19 @@ export function getCurrentSession(): Session | null {
     return null;
   }
 }
+
+/** When an agent last finished waiting on this session, or null if none ever has. */
+export function agentSeenAt(sessionId: string): string | null {
+  return queryOne<{ agent_seen_at: string | null }>(
+    'SELECT agent_seen_at FROM review_sessions WHERE id = ?',
+    sessionId,
+  )?.agent_seen_at ?? null;
+}
+
+export function markAgentSeen(sessionId: string): void {
+  getDb()
+    .prepare(
+      "UPDATE review_sessions SET agent_seen_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE id = ?",
+    )
+    .run(sessionId);
+}

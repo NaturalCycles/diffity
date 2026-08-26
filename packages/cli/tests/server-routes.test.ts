@@ -200,7 +200,7 @@ describe('the live loop', () => {
     const claim = await req('/api/live/claim?wait=0', { method: 'POST' });
 
     expect(claim.status).toBe(200);
-    expect(JSON.parse(claim.text)).toEqual({ request: null });
+    expect(JSON.parse(claim.text)).toMatchObject({ request: null });
   });
 
   it('hands over an aside that asked for the agent', async () => {
@@ -237,7 +237,7 @@ describe('the live loop', () => {
 
     const claim = await req('/api/live/claim?wait=0', { method: 'POST' });
 
-    expect(JSON.parse(claim.text)).toEqual({ request: null });
+    expect(JSON.parse(claim.text)).toMatchObject({ request: null });
   });
 
   // Claiming mutates, so it must be a write as far as the guard is concerned.
@@ -294,7 +294,7 @@ describe('a listener that waits', () => {
     const elapsed = Date.now() - before;
 
     expect(claim.status).toBe(200);
-    expect(JSON.parse(claim.text)).toEqual({ request: null });
+    expect(JSON.parse(claim.text)).toMatchObject({ request: null });
     expect(elapsed).toBeGreaterThanOrEqual(900);
   });
 });

@@ -21,6 +21,7 @@ import { findInstanceForRepo, type RegistryEntry } from './registry.js';
 import { createHash } from 'node:crypto';
 import { createTour, addTourStep, updateTourStatus, deleteTour, deleteToursForSession, getTour } from './tours.js';
 import { unansweredRequest } from './live-unanswered.js';
+import { describeSince, type SinceLastWait } from './live-events.js';
 import { readAnchor, clampToFile, countWorkingTreeLines } from './anchor.js';
 import { unescapeMarkdown as fromShell } from './unescape.js';
 import { startReviewRun, finishReviewRun } from './review-run.js';
@@ -109,6 +110,10 @@ function formatThreadLine(thread: Thread): string {
 
 /** A `diffity agent await` that found nothing to do, told apart from one that failed. */
 const NOTHING_ASKED_EXIT_CODE = 3;
+/** Nobody has the review page open, so re-arming would wait for a question nobody can ask. */
+const NOBODY_WATCHING_EXIT_CODE = 4;
+/** So the server does not count the agent's own polling as a window being open. */
+const AGENT_HEADER = { 'x-diffity-agent': '1' } as const;
 
 interface LiveStatus {
   available: boolean;
@@ -337,23 +342,28 @@ Examples:
         );
       }
       const startedAt = Date.now();
-      let payload: { request: LiveRequest | null };
+      let payload: {
+        request: LiveRequest | null;
+        since?: SinceLastWait;
+        viewerPresent?: boolean;
+        viewerGone?: boolean;
+      };
       try {
         // Park on the session the server is serving, not on whatever the shared current-session
         // file last named — those differ whenever another worktree has opened a review since.
-        const info = await fetch(`http://127.0.0.1:${instance.port}/api/info`);
+        const info = await fetch(`http://127.0.0.1:${instance.port}/api/info`, { headers: AGENT_HEADER });
         const sessionId = info.ok
           ? ((await info.json()) as { sessionId?: string }).sessionId
           : undefined;
         const claimUrl = `http://127.0.0.1:${instance.port}/api/live/claim?wait=${wait}`
           + (sessionId ? `&session=${encodeURIComponent(sessionId)}` : '');
-        const res = await fetch(claimUrl, { method: 'POST' });
+        const res = await fetch(claimUrl, { method: 'POST', headers: AGENT_HEADER });
         if (!res.ok) {
           console.error(pc.red(`Could not wait for a request: ${res.status} ${await res.text()}`));
           process.exitCode = 1;
           return;
         }
-        payload = (await res.json()) as { request: LiveRequest | null };
+        payload = (await res.json()) as typeof payload;
       } catch (err) {
         // `fetch failed` on its own says nothing about why a held connection went away, and a
         // listener dying early is the failure that matters most here. The cause and how long it
@@ -370,7 +380,21 @@ Examples:
         return;
       }
 
+      // Worth knowing, not worth waking for, so it is reported whatever else happened.
+      const missed = payload.since ? describeSince(payload.since) : null;
+      if (missed) {
+        console.error(pc.yellow(missed));
+      }
+
       if (!payload.request) {
+        // `viewerGone`, not `viewerPresent`: a page that has not been opened yet also has nobody
+        // watching, and stopping then would end the loop before the reader ever arrived.
+        if (payload.viewerGone) {
+          // Its own code so a loop can stop rather than re-arm into a closed window.
+          console.log(pc.dim('The review page was closed — stopping rather than waiting again'));
+          process.exitCode = NOBODY_WATCHING_EXIT_CODE;
+          return;
+        }
         // Its own code, so a loop can tell "nobody asked" from "something broke" and re-arm.
         console.log(pc.dim('Nothing was asked'));
         process.exitCode = NOTHING_ASKED_EXIT_CODE;

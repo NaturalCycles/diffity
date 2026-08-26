@@ -147,7 +147,7 @@ export function markThreadsSubmitted(
   const db = getDb();
   const statement = db.prepare(
     `UPDATE comment_threads
-        SET submitted_at = datetime('now'),
+        SET submitted_at = strftime('%Y-%m-%d %H:%M:%f', 'now'),
             submitted_review_url = ?,
             submitted_head_sha = ?,
             submitted_body = COALESCE(?, submitted_body)

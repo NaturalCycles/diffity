@@ -47,7 +47,7 @@ import {
   type PrComment,
   type ReviewEvent,
 } from '@diffity/github';
-import { findOrCreateSession, resolveSessionId } from './session.js';
+import { findOrCreateSession, resolveSessionId, agentSeenAt, markAgentSeen } from './session.js';
 import { resolveMayChangeCode, type SessionPurpose } from './live-permissions.js';
 import {
   liveListenerCount,
@@ -62,6 +62,8 @@ import { parseDiffStatSummary } from './diff-stat.js';
 import { getReviewRun } from './review-run.js';
 import { createThread, addReply, getThreadsForSession, markThreadsSubmitted, updateThreadStatus } from './threads.js';
 import { threadsResolvedRemotely } from './github-resolution.js';
+import { noteViewerSeen, lastViewerSeenAt, viewerIsPresent, viewerHasGone, VIEWER_IDLE_MS } from './viewers.js';
+import { sinceLastWait } from './live-events.js';
 import { handleReviewRoute } from './review-routes.js';
 import { handleTourRoute } from './tour-routes.js';
 import { sendJson, sendError, readBody } from './http-utils.js';
@@ -346,6 +348,13 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
         const url = new URL(req.url || '/', `http://${getHost()}:${port}`);
         const pathname = url.pathname;
 
+        // The page is the only thing that polls, so anything asking for anything is a window being
+        // open — except the agent, which says so on its own requests, and the claim route, which is
+        // only ever the agent whether it remembered to say so or not.
+        if (req.headers['x-diffity-agent'] !== '1' && pathname !== '/api/live/claim') {
+          noteViewerSeen();
+        }
+
         res.setHeader('X-Content-Type-Options', 'nosniff');
         res.setHeader('Content-Security-Policy', CONTENT_SECURITY_POLICY);
 
@@ -419,21 +428,61 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           const listenerGone = new AbortController();
           req.on('close', () => listenerGone.abort());
 
+          // What happened while the last agent was parked, before this wait resets the watermark.
+          const since = sinceLastWait(
+            getThreadsForSession(sid).map(thread => thread.submittedAt),
+            agentSeenAt(sid),
+          );
+          markAgentSeen(sid);
+
+          // Nobody is going to ask anything through a window that is not open. Waiting anyway costs
+          // a parked request here and a re-arm every few minutes at the other end, forever.
+          //
+          // A window that has never been open is a different matter: an agent is usually armed
+          // before the reader opens the page, so that case waits.
+          if (viewerHasGone(lastViewerSeenAt(), Date.now())) {
+            sendJson(res, { request: null, since, viewerPresent: false, viewerGone: true });
+            return;
+          }
+          const viewerWatch = setInterval(() => {
+            if (viewerHasGone(lastViewerSeenAt(), Date.now())) {
+              listenerGone.abort();
+            }
+          }, VIEWER_IDLE_MS / 2);
+          const stopWatching = (): void => clearInterval(viewerWatch);
+          req.on('close', stopWatching);
+
           waitForLiveRequest(sid, waitMs, listenerGone.signal).then(
             request => {
+              stopWatching();
               // The connection may already be gone; writing to it would throw rather than help.
-              if (res.writableEnded || listenerGone.signal.aborted) {
+              if (res.writableEnded) {
+                return;
+              }
+              const viewerPresent = viewerIsPresent(lastViewerSeenAt(), Date.now());
+              const gone = viewerHasGone(lastViewerSeenAt(), Date.now());
+              if (listenerGone.signal.aborted && gone) {
+                sendJson(res, { request: null, since, viewerPresent: false, viewerGone: true });
+                return;
+              }
+              if (listenerGone.signal.aborted) {
                 return;
               }
               if (!request) {
-                sendJson(res, { request: null });
+                sendJson(res, { request: null, since, viewerPresent, viewerGone: false });
                 return;
               }
               // Carried on the request rather than left for the agent to look up: a rule nobody
               // has to remember is a rule that holds.
-              sendJson(res, { request: { ...request, mayChangeCode: resolveMayChangeCode(purpose, authorship()) } });
+              sendJson(res, {
+                request: { ...request, mayChangeCode: resolveMayChangeCode(purpose, authorship()) },
+                since,
+                viewerPresent,
+                viewerGone: false,
+              });
             },
             err => {
+              stopWatching();
               if (!res.writableEnded && !listenerGone.signal.aborted) {
                 sendError(res, 500, `Failed to wait for a live request: ${err}`);
               }
