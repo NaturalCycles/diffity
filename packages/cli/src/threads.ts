@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import { getDb, queryAll, queryOne } from './db.js';
-import { unescapeMarkdown } from './unescape.js';
 
 export interface ThreadAuthor {
   name: string;
@@ -161,6 +160,12 @@ export function markThreadsSubmitted(
   }
 }
 
+export function updateThreadPath(threadId: string, filePath: string): void {
+  getDb()
+    .prepare('UPDATE comment_threads SET file_path = ? WHERE id = ?')
+    .run(filePath, threadId);
+}
+
 export function updateThreadLines(threadId: string, startLine: number, endLine: number): void {
   const db = getDb();
   db.prepare('UPDATE comment_threads SET start_line = ?, end_line = ? WHERE id = ?').run(
@@ -186,7 +191,7 @@ export function createThread(
   const commentId = randomUUID();
   const now = new Date().toISOString();
 
-  const cleanBody = unescapeMarkdown(body);
+  const cleanBody = body;
 
   db.prepare(
     'INSERT INTO comment_threads (id, session_id, file_path, side, start_line, end_line, anchor_content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
@@ -304,7 +309,7 @@ export function addReply(
   const db = getDb();
   const commentId = randomUUID();
   const now = new Date().toISOString();
-  const cleanBody = unescapeMarkdown(body);
+  const cleanBody = body;
 
   db.prepare(
     'INSERT INTO comments (id, thread_id, author_name, author_type, body, kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
@@ -343,7 +348,7 @@ export function updateThreadStatus(threadId: string, status: ThreadStatus, summa
 
   if (summaryBody && summaryAuthor) {
     const commentId = randomUUID();
-    const cleanSummary = unescapeMarkdown(summaryBody);
+    const cleanSummary = summaryBody;
     db.prepare(
       'INSERT INTO comments (id, thread_id, author_name, author_type, body, created_at) VALUES (?, ?, ?, ?, ?, ?)'
     ).run(commentId, threadId, summaryAuthor.name, summaryAuthor.type, cleanSummary, now);
@@ -362,7 +367,7 @@ export function deleteAllThreadsForSession(sessionId: string): void {
 
 export function editComment(commentId: string, body: string): void {
   const db = getDb();
-  db.prepare('UPDATE comments SET body = ? WHERE id = ?').run(unescapeMarkdown(body), commentId);
+  db.prepare('UPDATE comments SET body = ? WHERE id = ?').run(body, commentId);
 }
 
 export function deleteComment(commentId: string): void {

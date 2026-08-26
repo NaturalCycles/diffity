@@ -14,9 +14,11 @@ export function Dashboard(props: DashboardProps) {
   const { onNavigate } = props;
   const { data: overview, loading: overviewLoading, error } = useOverview();
   const { data: commitsPage, loading: commitsLoading } = useCommits();
-  const { data: info, loading: infoLoading } = useInfo();
+  // `useInfo` suspends, so its data is there by the time this renders and there is no
+  // loading to ask about. Asking anyway read as undefined and contributed nothing.
+  const { data: info } = useInfo();
 
-  const anyLoading = overviewLoading || commitsLoading || infoLoading;
+  const anyLoading = overviewLoading || commitsLoading;
 
   if (error) {
     return (

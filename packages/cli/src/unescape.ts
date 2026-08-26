@@ -1,13 +1,12 @@
 /**
- * Remove shell-introduced backslash escapes from markdown text.
+ * Undo the escaping a shell string picks up on its way in.
  *
- * AI agents calling the CLI via shell commands often produce body text
- * with escaped backticks (\`) and escaped quotes (\") because they
- * are constructing shell strings. These backslashes become markdown
- * escape sequences that suppress formatting (e.g. \` renders as a
- * literal backtick instead of inline code).
+ * An agent building a `--body "..."` argument escapes backticks and quotes, and those backslashes
+ * survive into the text, where markdown reads them as escapes and stops formatting.
  *
- * This function reverses those escapes so the markdown renders correctly.
+ * Only ever apply this to text that came through a shell. It is lossy in the other direction: a
+ * comment discussing `split('\n')` has that turned into a real line break, so text typed into the
+ * page must reach the database exactly as written.
  */
 export function unescapeMarkdown(text: string): string {
   return text

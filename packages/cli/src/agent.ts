@@ -22,6 +22,7 @@ import { createHash } from 'node:crypto';
 import { createTour, addTourStep, updateTourStatus, deleteTour, deleteToursForSession, getTour } from './tours.js';
 import { unansweredRequest } from './live-unanswered.js';
 import { readAnchor, clampToFile, countWorkingTreeLines } from './anchor.js';
+import { unescapeMarkdown as fromShell } from './unescape.js';
 import { startReviewRun, finishReviewRun } from './review-run.js';
 import { readRepoConfig, DEFAULT_SEVERITIES, resolveInRepo, REPO_CONFIG_FILE } from '@diffity/git';
 import { readFileSync } from 'node:fs';
@@ -251,7 +252,7 @@ Examples:
         opts.side,
         startLine,
         endLine,
-        opts.body,
+        fromShell(opts.body),
         { name: 'Agent', type: 'agent' },
         // Recorded so the finding can follow its code when a later commit moves it.
         opts.side === 'new' ? readAnchor(opts.file, startLine, endLine) : undefined,
@@ -268,7 +269,7 @@ Examples:
       const session = requireSession();
       const thread = resolveThreadId(id, session.id);
       const author = opts.summary ? { name: 'Agent', type: 'agent' as const } : undefined;
-      updateThreadStatus(thread.id, 'resolved', opts.summary, author);
+      updateThreadStatus(thread.id, 'resolved', fromShell(opts.summary ?? ''), author);
       console.log(pc.green(`Resolved thread ${thread.id.slice(0, 8)}`));
     });
 
@@ -281,7 +282,7 @@ Examples:
       const session = requireSession();
       const thread = resolveThreadId(id, session.id);
       const author = opts.reason ? { name: 'Agent', type: 'agent' as const } : undefined;
-      updateThreadStatus(thread.id, 'dismissed', opts.reason, author);
+      updateThreadStatus(thread.id, 'dismissed', fromShell(opts.reason ?? ''), author);
       console.log(pc.green(`Dismissed thread ${thread.id.slice(0, 8)}`));
     });
 
@@ -296,7 +297,7 @@ Examples:
       const session = requireSession();
       const thread = resolveThreadId(id, session.id);
       const stillOpen = unansweredRequest(thread.comments);
-      addReply(thread.id, opts.body, { name: 'Agent', type: 'agent' }, opts.aside ? 'aside' : 'review');
+      addReply(thread.id, fromShell(opts.body), { name: 'Agent', type: 'agent' }, opts.aside ? 'aside' : 'review');
       if (opts.answers && !answerLiveRequest(opts.answers)) {
         console.error(
           pc.yellow(
@@ -424,7 +425,7 @@ Examples:
     .action((commentId: string, opts: { body: string }) => {
       const session = requireSession();
       const sent = findSubmittedThreadForComment(commentId, session.id);
-      editComment(commentId, opts.body);
+      editComment(commentId, fromShell(opts.body));
       if (sent) {
         // The forge is showing the old wording and will keep showing it; saying so is the only
         // honest thing available, since a posted review comment cannot be edited from here.
@@ -450,7 +451,7 @@ Examples:
         'new',
         0,
         0,
-        opts.body,
+        fromShell(opts.body),
         { name: 'Agent', type: 'agent' },
       );
       console.log(pc.green(`Created general comment ${thread.id.slice(0, 8)}`));
@@ -476,7 +477,7 @@ Examples:
     .option('--note <text>', 'What is being reviewed', '')
     .action((opts) => {
       const session = requireSession();
-      startReviewRun(session.id, opts.note);
+      startReviewRun(session.id, fromShell(opts.note ?? ''));
       console.log(pc.green('Review marked as in progress'));
     });
 
@@ -537,7 +538,7 @@ Examples:
     .option('--json', 'Output as JSON')
     .action((opts) => {
       const session = requireSession();
-      const tour = createTour(session.id, opts.topic, opts.body);
+      const tour = createTour(session.id, fromShell(opts.topic), fromShell(opts.body));
       if (opts.json) {
         console.log(JSON.stringify(tour, null, 2));
         return;
@@ -560,7 +561,7 @@ Examples:
       assertFileExists(opts.file);
       const tourId = resolveTourId(opts.tour, session.id);
       const endLine = opts.endLine ?? opts.line;
-      const step = addTourStep(tourId, opts.file, opts.line, endLine, opts.body, opts.annotation);
+      const step = addTourStep(tourId, opts.file, opts.line, endLine, fromShell(opts.body), fromShell(opts.annotation));
       if (opts.json) {
         console.log(JSON.stringify(step, null, 2));
         return;
