@@ -235,7 +235,7 @@ export function createReview(
     // The whole review is one request, so a single unpostable line would reject all of it.
     if (!sides[comment.side].has(comment.endLine)) {
       errors.push(
-        `${comment.filePath}:${comment.endLine} — outside the lines this PR changed, so the forge will not take a comment there`,
+        `${comment.filePath}:${comment.endLine} — not in the diff diffity fetched for this pull request, so the forge will not take a comment there. If the line is really in the diff, the local branch and the pull request have drifted`,
       );
       continue;
     }
@@ -289,9 +289,17 @@ export function createReview(
   }
 }
 
+/**
+ * The pull request's diff as the review API sees it: one section per file, base to head.
+ *
+ * Not `--patch`, which is the commit series in mbox form — one section per commit, hunks measured
+ * against that commit's parent, and files under whatever path they had at the time. A file touched
+ * by several commits appears several times, and only the last one survives being collected, so
+ * whether a comment was allowed depended on which commit happened to touch that line last.
+ */
 function getPatch(owner: string, repo: string, prNumber: number): string {
   try {
-    return execFileSync('gh', ['pr', 'diff', String(prNumber), '--repo', `${owner}/${repo}`, '--patch'], {
+    return execFileSync('gh', ['pr', 'diff', String(prNumber), '--repo', `${owner}/${repo}`], {
       encoding: 'utf-8',
       stdio: 'pipe',
       maxBuffer: 50 * 1024 * 1024,

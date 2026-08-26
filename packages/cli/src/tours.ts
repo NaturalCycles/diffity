@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import { getDb, queryAll, queryOne } from './db.js';
-import { unescapeMarkdown } from './unescape.js';
 
 export type TourStatus = 'building' | 'ready';
 
@@ -78,7 +77,7 @@ export function createTour(sessionId: string, topic: string, body: string): Tour
   const id = randomUUID();
   const now = new Date().toISOString();
 
-  const cleanBody = unescapeMarkdown(body);
+  const cleanBody = body;
 
   db.prepare(
     'INSERT INTO tours (id, session_id, topic, body, created_at) VALUES (?, ?, ?, ?, ?)'
@@ -180,8 +179,8 @@ export function addTourStep(
   );
   const sortOrder = (maxRow?.max_order ?? 0) + 1;
 
-  const cleanBody = unescapeMarkdown(body);
-  const cleanAnnotation = unescapeMarkdown(annotation);
+  const cleanBody = body;
+  const cleanAnnotation = annotation;
 
   db.prepare(
     'INSERT INTO tour_steps (id, tour_id, sort_order, file_path, start_line, end_line, body, annotation, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'

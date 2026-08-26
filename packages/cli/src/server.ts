@@ -382,7 +382,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           if (asked) {
             return resolveSessionId(asked);
           }
-          return findOrCreateSession(url.searchParams.get('ref') || effectiveRef).id;
+          return findOrCreateSession(url.searchParams.get('ref') || effectiveRef || 'work').id;
         };
 
         if (pathname === '/api/live/status') {

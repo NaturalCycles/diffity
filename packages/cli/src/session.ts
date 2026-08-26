@@ -13,6 +13,15 @@ export interface Session {
   headHash: string;
 }
 
+/**
+ * `git rev-parse --abbrev-ref HEAD` says `HEAD` on a detached checkout, which is not a branch name.
+ * Recorded as one it matches nothing, so a session written before `gh pr checkout` put the worktree
+ * on a real branch is stranded along with its findings.
+ */
+function namedBranch(branch: string): string | null {
+  return branch === 'HEAD' ? null : branch;
+}
+
 function sessionFilePath(): string {
   return join(getDiffityDir(), 'current-session');
 }
@@ -61,10 +70,27 @@ function sessionsInScope(
   ).filter(row => branchMatches(row.branch, branch) && reviewScope(row.ref) === scope);
 }
 
+/**
+ * Whether work may move from that session into this one.
+ *
+ * Two base refs belong to one review only because a branch's base moves as the branch is updated.
+ * With no branch on this side, that reasoning is gone: nothing connects one base commit to another,
+ * so two unrelated pull requests reviewed in one detached checkout look like a single review and the
+ * newer takes the older's findings. Requiring the same ref strands a review instead of merging it
+ * into somebody else's, which is the right way round to be wrong.
+ *
+ * Only taking work is guarded. Pointing a stale tab at a newer session shows the reader something
+ * they can check, and a row with no branch of its own is a session from before branches were
+ * recorded, which is a migration rather than a collision.
+ */
+function mayCarryFrom(rowRef: string, ref: string, branch: string | null): boolean {
+  return branch !== null || rowRef === ref;
+}
+
 export function findOrCreateSession(ref: string): Session {
   const headHash = getHeadHash();
   const repoRoot = getRepoRoot();
-  const branch = getCurrentBranch();
+  const branch = namedBranch(getCurrentBranch());
 
   const { session, created } = openSession(ref, headHash, repoRoot, branch);
 
@@ -75,7 +101,9 @@ export function findOrCreateSession(ref: string): Session {
   // A superseded session is never deleted, so "a sibling exists" stays true forever and cannot be
   // what decides this. `/api/info` calls in here on a five-second poll, and the work below moves
   // rows and reads the working tree once per anchored finding.
-  const siblings = sessionsInScope(repoRoot, branch, ref).filter(row => row.id !== session.id);
+  const siblings = sessionsInScope(repoRoot, branch, ref)
+    .filter(row => row.id !== session.id)
+    .filter(row => mayCarryFrom(row.ref, ref, branch));
   const donors = sessionsHoldingWork(siblings.map(row => row.id));
 
   if (donors.length > 0) {
@@ -127,7 +155,7 @@ function openSession(
   ref: string,
   headHash: string,
   repoRoot: string | null,
-  branch: string,
+  branch: string | null,
 ): { session: Session; created: boolean } {
   const db = getDb();
 
