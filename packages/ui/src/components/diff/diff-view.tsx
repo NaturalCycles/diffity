@@ -2,6 +2,8 @@ import { useMemo, useRef, useState, useCallback, useImperativeHandle, useEffect 
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { ParsedDiff } from '@diffity/parser';
 import { FileBlock, LARGE_DIFF_LINE_THRESHOLD } from './file-block';
+import { OrphanedThreads } from '../comments/orphaned-threads';
+import { threadsWithoutFile } from '../../lib/threads-without-file';
 import { GeneralComments } from '../comments/general-comments';
 import { useHighlighter } from '../../hooks/use-highlighter';
 import { type ViewMode, getFilePath } from '../../lib/diff-utils';
@@ -318,6 +320,11 @@ export function DiffView(props: DiffViewProps) {
       ]
     : [0, 0];
 
+  const lostThreads = useMemo(
+    () => threadsWithoutFile(threads, diff.files.map(getFilePath)),
+    [threads, diff.files],
+  );
+
   return (
     <main
       ref={(node) => {
@@ -334,6 +341,16 @@ export function DiffView(props: DiffViewProps) {
           threads={threads}
           commentActions={commentActions}
         />
+      )}
+      {commentsEnabled && lostThreads.length > 0 && (
+        <div className="px-4 pt-2" data-testid="threads-without-file">
+          <OrphanedThreads
+            threads={lostThreads}
+            onEditComment={commentActions.editComment}
+            onDeleteComment={commentActions.deleteComment}
+            onDeleteThread={commentActions.deleteThread}
+          />
+        </div>
       )}
       <div className="py-2" style={{ paddingTop, paddingBottom }}>
         {items.map((virtualItem) => {

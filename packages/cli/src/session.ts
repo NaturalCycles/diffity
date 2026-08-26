@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { getHeadHash, getDiffityDir, getRepoRoot, getCurrentBranch, WORKING_TREE_REFS } from '@diffity/git';
+import { getHeadHash, getDiffityDir, getRepoRoot, getCurrentBranch, getDiff, WORKING_TREE_REFS } from '@diffity/git';
+import { parseDiff } from '@diffity/parser';
+import { renamedPaths, followRename } from './renames.js';
 import { getDb, queryAll, queryOne } from './db.js';
 import { reanchorInWorkingTree } from './anchor.js';
 import { carryReviewRun } from './review-run.js';
-import { updateThreadLines } from './threads.js';
+import { updateThreadLines, updateThreadPath } from './threads.js';
 
 export interface Session {
   id: string;
@@ -108,6 +110,10 @@ export function findOrCreateSession(ref: string): Session {
 
   if (donors.length > 0) {
     gatherOpenWork(donors, session.id);
+  }
+
+  if (donors.length > 0) {
+    followRenamesForSession(session.id, donors, headHash);
   }
 
   if (created || donors.length > 0) {
@@ -249,6 +255,57 @@ function gatherOpenWork(fromSessionIds: string[], toSessionId: string): void {
  * A finding that outlives the commit it was written against points at a line that has since
  * moved. Only the new side is re-anchored: a comment on a removed line has nothing to follow.
  */
+function donorHeads(donorIds: string[]): string[] {
+  if (donorIds.length === 0) {
+    return [];
+  }
+  const placeholders = donorIds.map(() => '?').join(', ');
+  return queryAll<{ head_hash: string }>(
+    `SELECT DISTINCT head_hash FROM review_sessions WHERE id IN (${placeholders})`,
+    ...donorIds,
+  ).map(row => row.head_hash);
+}
+
+/**
+ * A carried thread keeps the path it was written against, and a commit that renames a file leaves
+ * it pointing at one that is gone. Nothing renders a thread whose file is absent from the diff, so
+ * the finding does not look wrong — it disappears.
+ */
+function followRenamesForSession(sessionId: string, donorIds: string[], toHead: string): void {
+  const moves = new Map<string, string>();
+
+  // Between the commit a finding was written against and the one it is carried to. The review's own
+  // diff is no help: it shows the file only under the name it ends up with, so the rename is not
+  // in it to find.
+  for (const from of donorHeads(donorIds)) {
+    if (from === toHead) continue;
+    try {
+      // `-M` explicitly rather than relying on the default, which `diff.renames = false` turns off.
+      for (const [before, after] of renamedPaths(parseDiff(getDiff(['-M', from, toHead])).files)) {
+        moves.set(before, after);
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  if (moves.size === 0) {
+    return;
+  }
+
+  const threads = queryAll<{ id: string; file_path: string }>(
+    "SELECT id, file_path FROM comment_threads WHERE session_id = ? AND status = 'open'",
+    sessionId,
+  );
+
+  for (const thread of threads) {
+    const moved = followRename(thread.file_path, moves);
+    if (moved !== thread.file_path) {
+      updateThreadPath(thread.id, moved);
+    }
+  }
+}
+
 function reanchorThreads(sessionId: string): void {
   const threads = queryAll<{
     id: string;

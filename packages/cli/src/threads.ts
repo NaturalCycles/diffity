@@ -160,6 +160,12 @@ export function markThreadsSubmitted(
   }
 }
 
+export function updateThreadPath(threadId: string, filePath: string): void {
+  getDb()
+    .prepare('UPDATE comment_threads SET file_path = ? WHERE id = ?')
+    .run(filePath, threadId);
+}
+
 export function updateThreadLines(threadId: string, startLine: number, endLine: number): void {
   const db = getDb();
   db.prepare('UPDATE comment_threads SET start_line = ?, end_line = ? WHERE id = ?').run(
