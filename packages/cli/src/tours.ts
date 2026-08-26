@@ -95,8 +95,12 @@ export function createTour(sessionId: string, topic: string, body: string): Tour
   };
 }
 
-export function getTour(id: string): Tour | null {
-  const row = queryOne<TourRow>('SELECT * FROM tours WHERE id = ?', id);
+export function getTour(idOrPrefix: string): Tour | null {
+  let row = queryOne<TourRow>('SELECT * FROM tours WHERE id = ?', idOrPrefix);
+
+  if (!row && idOrPrefix.length >= 8) {
+    row = queryOne<TourRow>('SELECT * FROM tours WHERE id LIKE ?', idOrPrefix + '%');
+  }
 
   if (!row) {
     return null;
@@ -104,7 +108,7 @@ export function getTour(id: string): Tour | null {
 
   const stepRows = queryAll<TourStepRow>(
     'SELECT * FROM tour_steps WHERE tour_id = ? ORDER BY sort_order ASC',
-    id,
+    row.id,
   );
 
   return rowToTour(row, stepRows.map(rowToTourStep));

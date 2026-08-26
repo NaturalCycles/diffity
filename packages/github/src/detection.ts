@@ -46,6 +46,7 @@ export function fetchDetails(owner: string, repo: string, prNumber?: number): Gi
     prCreatedAt: pr.createdAt,
     headSha: pr.headSha,
     commentCount,
+    prAuthor: pr.authorLogin ?? '',
     viewerDidAuthor: !!pr.authorLogin && pr.authorLogin === getViewerLogin(),
     prBody: pr.body,
     reviews: getReviews(owner, repo, pr.number),

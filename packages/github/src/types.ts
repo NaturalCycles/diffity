@@ -10,6 +10,8 @@ export interface GitHubDetails {
   prCreatedAt: string;
   headSha: string;
   commentCount: number;
+  /** Who opened it, which is not visible anywhere else in the page. */
+  prAuthor: string;
   /** GitHub refuses to approve or request changes on your own pull request. */
   viewerDidAuthor: boolean;
   /** The description, which is where the author says what the change is for. */

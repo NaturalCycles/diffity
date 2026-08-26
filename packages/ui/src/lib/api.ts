@@ -53,6 +53,7 @@ export interface PrReview {
 export interface GitHubDetails {
   prNumber: number;
   prTitle: string;
+  prAuthor: string;
   prUrl: string;
   prCreatedAt: string;
   headSha: string;
