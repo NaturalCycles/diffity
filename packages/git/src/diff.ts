@@ -73,6 +73,14 @@ export function resolveRef(ref: string, extraArgs: string[] = []): string {
   return raw;
 }
 
+/**
+ * Which files a commit range renamed, as `R100\told\tnew` lines. `-M` explicitly rather than
+ * relying on the default, which `diff.renames = false` turns off.
+ */
+export function getRenameStatus(from: string, to: string): string {
+  return git(['diff', '-M', '--name-status', '--diff-filter=R', from, to]);
+}
+
 export function getDiffFiles(ref: string): string[] {
   const resolved = resolveDiffArgs(ref);
 

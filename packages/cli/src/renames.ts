@@ -1,26 +1,21 @@
-interface FileLike {
-  status: string;
-  oldPath: string;
-  newPath: string;
-}
-
 /**
- * Where a file went, for the files git says moved.
+ * Where a file went, from `git diff -M --name-status`.
  *
  * Threads carry forward across a commit but their file path does not, so a commit that renames a
  * file leaves every finding on it pointing at a path that no longer exists — and a thread whose
  * file is absent from the diff is rendered by nothing, so it goes quiet rather than wrong.
  *
- * Taken from git's own rename detection rather than by matching content, so a thread only ever
- * moves to a file git already said is the same file.
+ * `--name-status` rather than the diff body: this runs on a poll, and the answer is a few hundred
+ * bytes either way. Renames only, never copies — a copy leaves the original in place, so following
+ * one would take a finding off the file it was written about.
  */
-export function renamedPaths(files: FileLike[]): Map<string, string> {
+export function renamedPaths(nameStatus: string): Map<string, string> {
   const moves = new Map<string, string>();
 
-  for (const file of files) {
-    if (file.status !== 'renamed' && file.status !== 'copied') continue;
-    if (!file.oldPath || !file.newPath || file.oldPath === file.newPath) continue;
-    moves.set(file.oldPath, file.newPath);
+  for (const line of nameStatus.split('\n')) {
+    const [status, from, to] = line.split('\t');
+    if (!status?.startsWith('R') || !from || !to || from === to) continue;
+    moves.set(from, to);
   }
 
   return moves;

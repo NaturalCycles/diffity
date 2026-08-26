@@ -1,8 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { getHeadHash, getDiffityDir, getRepoRoot, getCurrentBranch, getDiff, WORKING_TREE_REFS } from '@diffity/git';
-import { parseDiff } from '@diffity/parser';
+import { getHeadHash, getDiffityDir, getRepoRoot, getCurrentBranch, getRenameStatus, WORKING_TREE_REFS } from '@diffity/git';
 import { renamedPaths, followRename } from './renames.js';
 import { getDb, queryAll, queryOne } from './db.js';
 import { reanchorInWorkingTree } from './anchor.js';
@@ -112,6 +111,8 @@ export function findOrCreateSession(ref: string): Session {
     gatherOpenWork(donors, session.id);
   }
 
+  // Before re-anchoring, which reads the working tree at each thread's path: a thread still
+  // holding a pre-rename path would find nothing there and quietly keep its old lines.
   if (donors.length > 0) {
     followRenamesForSession(session.id, donors, headHash);
   }
@@ -280,8 +281,7 @@ function followRenamesForSession(sessionId: string, donorIds: string[], toHead: 
   for (const from of donorHeads(donorIds)) {
     if (from === toHead) continue;
     try {
-      // `-M` explicitly rather than relying on the default, which `diff.renames = false` turns off.
-      for (const [before, after] of renamedPaths(parseDiff(getDiff(['-M', from, toHead])).files)) {
+      for (const [before, after] of renamedPaths(getRenameStatus(from, toHead))) {
         moves.set(before, after);
       }
     } catch {
