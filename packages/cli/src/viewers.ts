@@ -7,6 +7,19 @@
  */
 export const VIEWER_IDLE_MS = 180_000;
 
+/**
+ * Elapsed time that a suspended laptop does not add to.
+ *
+ * `Date.now()` is the wall clock, and a lid closed overnight moves it by hours — so on wake, a
+ * reader whose tab is still open and about to send its next heartbeat looks as though they left
+ * long ago. `CLOCK_MONOTONIC`, which is what `hrtime` reads, excludes suspended time on Linux and
+ * macOS, so a suspend simply does not count and waking up needs no special case. (This machine had
+ * 89 hours of suspend inside 9 days of uptime when that was measured.)
+ */
+export function monotonicMs(): number {
+  return Number(process.hrtime.bigint() / 1_000_000n);
+}
+
 /** How often a wait re-checks whether the page is still there. */
 export const VIEWER_POLL_MS = 5_000;
 
@@ -21,8 +34,10 @@ let state: ViewerState = { lastSeenAt: 0, everSeen: false };
 /**
  * A page said it is there. Its own heartbeat, rather than any request it happens to make: react
  * query stops polling a hidden tab, so ordinary traffic goes quiet while the window is still open.
+ *
+ * The stamp is monotonic, so it is only ever compared with `monotonicMs()`.
  */
-export function noteViewerSeen(now = Date.now()): void {
+export function noteViewerSeen(now = monotonicMs()): void {
   state = { lastSeenAt: now, everSeen: true };
 }
 

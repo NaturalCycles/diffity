@@ -43,10 +43,12 @@ afterAll(() => {
 // parking for a question nobody can now ask.
 describe('a window that was open and has gone', () => {
   it('is told apart from one that never opened, and stops the wait', async () => {
-    const { noteViewerSeen, VIEWER_IDLE_MS } = await import('../src/viewers.js');
+    const { noteViewerSeen, monotonicMs, VIEWER_IDLE_MS } = await import('../src/viewers.js');
 
     // A page was open, long enough ago that its heartbeat has clearly stopped.
-    noteViewerSeen(Date.now() - VIEWER_IDLE_MS - 1);
+    // Monotonic, like the clock the server compares it against — a wall-clock stamp here is
+    // exactly the mix-up that made a suspended laptop look like a closed tab.
+    noteViewerSeen(monotonicMs() - VIEWER_IDLE_MS - 1);
 
     const started = Date.now();
     const res = await fetch(`http://127.0.0.1:${port}/api/live/claim?wait=30`, {
