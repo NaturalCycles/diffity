@@ -2,6 +2,8 @@ import { useState } from 'react';
 import type { CommentThread as CommentThreadType } from './types';
 import { isThreadResolved } from './types';
 import { submittedLabel } from '../../lib/submitted-marker';
+import { unheardNote } from '../../lib/unheard-request';
+import { UnheardNotice } from './unheard-notice';
 import { CommentBubble } from './comment-bubble';
 import { CommentForm } from './comment-form';
 import { TrashIcon } from '../icons/trash-icon';
@@ -41,11 +43,19 @@ export function ThreadCard(props: ThreadCardProps) {
     children,
    onAskReply, onActReply, askIsHeard,} = props;
   const [showReply, setShowReply] = useState(false);
+  const [unheard, setUnheard] = useState<{ title: string; description: string } | null>(null);
   const resolved = isThreadResolved(thread);
   const sentLabel = submittedLabel(thread.submittedAt);
 
   return (
-    <div className={cn('rounded-lg overflow-hidden', className)} data-thread-id={thread.id}>
+    <div className={cn('relative rounded-lg overflow-hidden', className)} data-thread-id={thread.id}>
+      {unheard && (
+        <UnheardNotice
+          title={unheard.title}
+          description={unheard.description}
+          onDone={() => setUnheard(null)}
+        />
+      )}
       <div className="flex items-center justify-between px-3 pt-2.5 pb-1.5">
         <div className="flex items-center gap-2">
           {headerLeft}
@@ -104,10 +114,12 @@ export function ThreadCard(props: ThreadCardProps) {
               }}
               onAsk={onAskReply && ((body) => {
                 onAskReply(body);
+                setUnheard(unheardNote('ask', askIsHeard !== false));
                 setShowReply(false);
               })}
               onAct={onActReply && ((body) => {
                 onActReply(body);
+                setUnheard(unheardNote('act', askIsHeard !== false));
                 setShowReply(false);
               })}
               askIsHeard={askIsHeard}

@@ -17,7 +17,6 @@ import { liveStatusOptions } from '../../queries/live';
 import { readReadingPosition, writeReadingPosition } from '../../lib/reading-position';
 import { staleMessage } from '../../lib/stale-files';
 import { canAskAgent, canActOnCode } from '../../lib/live-mode';
-import { unheardNote } from '../../lib/unheard-request';
 import { patchDiffFile } from '../../lib/patch-diff-file';
 import { newAnswers, dropSeenAlerts, positionForAlert, unreadAlerts, type AnswerAlert } from '../../lib/answer-alerts';
 import { useFaviconBadge } from '../../hooks/use-favicon-badge';
@@ -107,17 +106,11 @@ export function DiffPage() {
   const canAct = canActOnCode(liveStatus, reviewsEnabled);
   const askIsHeard = !!liveStatus?.listening;
 
+  // A new comment closes its form and becomes a thread card, which is where the notice about
+  // nobody listening appears. A reply is the same, one card up.
   const beginRequest = useCallback(
-    (intent: 'ask' | 'act') => {
-      // Said at the moment of pressing, because that is when the reader forms the belief that it
-      // was sent. The button's tooltip said as much and went unread for several minutes.
-      const note = unheardNote(intent, askIsHeard);
-      if (note) {
-        toast.info(note.title, { description: note.description, duration: 8000 });
-      }
-      return { aside: true as const, live: true as const, intent };
-    },
-    [askIsHeard],
+    (intent: 'ask' | 'act') => ({ aside: true as const, live: true as const, intent }),
+    [],
   );
 
   const handleAskReply = useCallback(
