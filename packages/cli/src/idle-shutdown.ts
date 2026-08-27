@@ -1,11 +1,8 @@
-// Both are overridable so a test can watch a real server stop without waiting five minutes for
-// it. Nothing else reads these, and the defaults are what ships.
-
 /** How often the check runs. */
-export const IDLE_CHECK_MS = Number(process.env.DIFFITY_IDLE_CHECK_MS) || 30_000;
+export const IDLE_CHECK_MS = 30_000;
 
 /** How long after a reader closes the page we wait before giving up on them coming back. */
-export const AFTER_VIEWER_LEFT_MS = Number(process.env.DIFFITY_VIEWER_GRACE_MS) || 300_000;
+export const AFTER_VIEWER_LEFT_MS = 300_000;
 
 /** How long a server nobody has ever opened stays up. */
 export const NEVER_OPENED_MS = 7_200_000;
@@ -21,6 +18,8 @@ export interface IdleFacts {
   listeners: number;
   /** An agent part-way through a review, whose findings the reader has not seen yet. */
   reviewInProgress: boolean;
+  /** Overridden only by tests. */
+  graceMs?: number;
 }
 
 /**
@@ -43,7 +42,7 @@ export function shouldShutDown(facts: IdleFacts): boolean {
   }
 
   if (facts.viewerGone) {
-    return facts.idleForMs >= AFTER_VIEWER_LEFT_MS;
+    return facts.idleForMs >= (facts.graceMs ?? AFTER_VIEWER_LEFT_MS);
   }
 
   if (!facts.everSeen) {

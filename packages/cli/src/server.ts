@@ -47,7 +47,7 @@ import {
   type PrComment,
   type ReviewEvent,
 } from '@diffity/github';
-import { findOrCreateSession, resolveSessionId, agentSeenAt, markAgentSeen, getCurrentSession } from './session.js';
+import { findOrCreateSession, resolveSessionId, agentSeenAt, markAgentSeen } from './session.js';
 import { resolveMayChangeCode, type SessionPurpose } from './live-permissions.js';
 import {
   liveListenerCount,
@@ -215,6 +215,8 @@ interface ServerOptions {
   /** Set in pull-request mode, so details still resolve on a detached checkout. */
   prNumber?: number;
   version?: string;
+  /** Overridden only by tests, which cannot wait five minutes to watch a server stop. */
+  idleTimings?: { graceMs?: number; checkMs?: number };
   registryInfo?: {
     repoRoot: string;
     repoHash: string;
@@ -949,17 +951,22 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
     // A server outlives its reader otherwise. Nothing is lost by stopping: findings, walkthroughs
     // and review state live in the database, and running `diffity` again serves the same review.
     const startedAt = monotonicMs();
+    // This server's own session, resolved once. `getCurrentSession()` would be wrong: it reads the
+    // ambient file shared by every worktree using this data directory, so the answer could belong to
+    // another review — and both guards below would then be asking about somebody else's work.
+    // Resolving per tick is not an option either, since `findOrCreateSession` re-anchors and writes.
+    const ownSessionId = effectiveRef ? findOrCreateSession(effectiveRef).id : null;
     const idleWatch = setInterval(() => {
       const viewer = viewerSnapshot();
-      const sessionId = getCurrentSession()?.id;
 
       if (
         !shouldShutDown({
           viewerGone: viewerHasGone(viewer, monotonicMs()),
           everSeen: viewer.everSeen,
           idleForMs: monotonicMs() - (viewer.lastSeenAt || startedAt),
-          listeners: sessionId ? liveListenerCount(sessionId) : 0,
-          reviewInProgress: sessionId ? getReviewRun(sessionId).inProgress : false,
+          listeners: ownSessionId ? liveListenerCount(ownSessionId) : 0,
+          reviewInProgress: ownSessionId ? getReviewRun(ownSessionId).inProgress : false,
+          graceMs: options.idleTimings?.graceMs,
         })
       ) {
         return;
@@ -974,7 +981,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
       );
       closeFn();
       process.exit(0);
-    }, IDLE_CHECK_MS);
+    }, options.idleTimings?.checkMs ?? IDLE_CHECK_MS);
     idleWatch.unref();
 
 
