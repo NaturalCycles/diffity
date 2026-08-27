@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, cleanup, screen, fireEvent } from '@testing-library/react';
 import { NotificationBell } from '../src/components/layout/notification-bell';
+import { unreadAlerts } from '../src/lib/answer-alerts';
 
 afterEach(cleanup);
 
@@ -76,3 +77,24 @@ describe('a long list', () => {
     expect(list.className).toContain('overflow-y-auto');
   });
 })
+
+// The two lists the page keeps — a note still on screen, and what one leaves behind — reach the
+// bell as one, so what the reader sees is "how many answers are waiting" rather than "how many
+// notes have timed out".
+describe('the count against the two lists behind it', () => {
+  it('includes a note that is still on screen', () => {
+    render(<NotificationBell alerts={unreadAlerts([two[0]], [])} onGo={vi.fn()} />);
+
+    expect(screen.getByRole('button', { name: /1 unread/i })).toBeTruthy();
+  });
+
+  it('does not move when that note times out', () => {
+    const { unmount } = render(<NotificationBell alerts={unreadAlerts(two, [])} onGo={vi.fn()} />);
+    expect(screen.getByText('2')).toBeTruthy();
+    unmount();
+
+    render(<NotificationBell alerts={unreadAlerts([], two)} onGo={vi.fn()} />);
+
+    expect(screen.getByText('2')).toBeTruthy();
+  });
+});
