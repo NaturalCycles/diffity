@@ -108,8 +108,20 @@ is what you did.
 
 ## When the wait ends on its own
 
-Exit 3 means nothing was asked — re-arm without saying anything. Anything else means the server is
-gone; say so once and stop, rather than looping on a dead port.
+Exit 3 means nothing was asked — re-arm without saying anything.
+
+Exit 4 means the review page has been closed. Stop; do not re-arm. Nobody can ask anything through a
+window that is not open, and each re-arm costs a turn. Say in one line that the loop has ended, so
+the reader knows to say the word if they open it again.
+
+Anything else means the server is gone; say so once and stop, rather than looping on a dead port.
+
+## What you may have missed
+
+`await` reports, on the way back, anything that happened while you were parked — currently whether
+findings went to the pull request. Read it before answering: a question about a finding that has
+already been sent is a different question, because amending it now leaves the forge showing the old
+wording. Say so rather than quietly amending.
 
 ## Keep it short
 

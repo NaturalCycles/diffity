@@ -152,6 +152,9 @@ function migrateDb(db: DatabaseSync): void {
   // The wording that went out. Amending a finding rewrites its body in place, so without this there
   // is nothing left to recognise the forge's copy of it by.
   addColumn(db, 'comment_threads', 'submitted_body', 'TEXT');
+  // When an agent last finished waiting on this session, so it can be told what happened while it
+  // was parked. Nothing wakes an agent for a submit, and it needs to know one happened.
+  addColumn(db, 'review_sessions', 'agent_seen_at', 'TEXT');
 }
 
 function addColumn(db: DatabaseSync, table: string, column: string, type: string): void {
