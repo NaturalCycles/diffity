@@ -18,9 +18,6 @@ import {
   getUntrackedDiff,
   getRepoInfo,
   getFileContent,
-  getStagedFiles,
-  getUnstagedFiles,
-  getRecentCommits,
   getFileLineCount,
   resolveBaseRef,
   resolveDiffArgs,
@@ -564,46 +561,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           return;
         }
 
-        if (pathname === '/api/overview') {
-          try {
-            const staged = getStagedFiles();
-            const unstaged = getUnstagedFiles();
-            const untracked = getUntrackedFiles();
 
-            const fileMap = new Map<string, string>();
-            for (const f of staged) {
-              fileMap.set(f, 'staged');
-            }
-            for (const f of unstaged) {
-              fileMap.set(f, 'modified');
-            }
-            for (const f of untracked) {
-              fileMap.set(f, 'added');
-            }
-
-            const files = Array.from(fileMap.entries()).map(
-              ([path, status]) => ({ path, status }),
-            );
-
-            sendJson(res, { files });
-          } catch (err) {
-            sendError(res, 500, `Failed to get overview: ${err}`);
-          }
-          return;
-        }
-
-        if (pathname === '/api/commits') {
-          const count = parseInt(url.searchParams.get('count') || '10', 10);
-          const skip = parseInt(url.searchParams.get('skip') || '0', 10);
-          const search = url.searchParams.get('search') || undefined;
-          try {
-            const commits = getRecentCommits({ count, skip, search });
-            sendJson(res, { commits, hasMore: commits.length === count });
-          } catch (err) {
-            sendError(res, 500, `Failed to get commits: ${err}`);
-          }
-          return;
-        }
 
         if (pathname === '/api/diff-fingerprint') {
           const ref = url.searchParams.get('ref');
