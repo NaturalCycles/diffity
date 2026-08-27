@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useLoaderData } from 'react-router';
+import { toast } from 'sonner';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useDiff } from '../../hooks/use-diff';
 import { useInfo } from '../../hooks/use-info';
@@ -105,21 +106,23 @@ export function DiffPage() {
   const canAct = canActOnCode(liveStatus, reviewsEnabled);
   const askIsHeard = !!liveStatus?.listening;
 
-  const askOrAct = useCallback(
+  // A new comment closes its form and becomes a thread card, which is where the notice about
+  // nobody listening appears. A reply is the same, one card up.
+  const beginRequest = useCallback(
     (intent: 'ask' | 'act') => ({ aside: true as const, live: true as const, intent }),
     [],
   );
 
   const handleAskReply = useCallback(
     (threadId: string, body: string, author: Parameters<typeof commentActions.addReply>[2]) =>
-      commentActions.addReply(threadId, body, author, askOrAct('ask')),
-    [commentActions, askOrAct],
+      commentActions.addReply(threadId, body, author, beginRequest('ask')),
+    [commentActions, beginRequest],
   );
 
   const handleActReply = useCallback(
     (threadId: string, body: string, author: Parameters<typeof commentActions.addReply>[2]) =>
-      commentActions.addReply(threadId, body, author, askOrAct('act')),
-    [commentActions, askOrAct],
+      commentActions.addReply(threadId, body, author, beginRequest('act')),
+    [commentActions, beginRequest],
   );
 
   const handleAskThread = useCallback(
@@ -130,8 +133,8 @@ export function DiffPage() {
       endLine: number,
       body: string,
       author: Parameters<typeof commentActions.addThread>[5],
-    ) => commentActions.addThread(filePath, side, startLine, endLine, body, author, undefined, askOrAct('ask')),
-    [commentActions, askOrAct],
+    ) => commentActions.addThread(filePath, side, startLine, endLine, body, author, undefined, beginRequest('ask')),
+    [commentActions, beginRequest],
   );
 
   const handleActThread = useCallback(
@@ -142,8 +145,8 @@ export function DiffPage() {
       endLine: number,
       body: string,
       author: Parameters<typeof commentActions.addThread>[5],
-    ) => commentActions.addThread(filePath, side, startLine, endLine, body, author, undefined, askOrAct('act')),
-    [commentActions, askOrAct],
+    ) => commentActions.addThread(filePath, side, startLine, endLine, body, author, undefined, beginRequest('act')),
+    [commentActions, beginRequest],
   );
   const commentCountsByFile = useMemo(() => buildThreadCountsByFile(threads), [threads]);
 

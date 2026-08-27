@@ -62,8 +62,10 @@ import { parseDiffStatSummary } from './diff-stat.js';
 import { getReviewRun } from './review-run.js';
 import { createThread, addReply, getThreadsForSession, markThreadsSubmitted, updateThreadStatus } from './threads.js';
 import { threadsResolvedRemotely } from './github-resolution.js';
-import { noteViewerSeen, markViewerGone, viewerSnapshot, viewerIsPresent, viewerHasGone, VIEWER_POLL_MS } from './viewers.js';
+import { noteViewerSeen, markViewerGone, viewerSnapshot, viewerIsPresent, viewerHasGone, awakeMs, VIEWER_POLL_MS } from './viewers.js';
 import { sinceLastWait } from './live-events.js';
+import pc from 'picocolors';
+import { shouldShutDown, IDLE_CHECK_MS } from './idle-shutdown.js';
 import { handleReviewRoute } from './review-routes.js';
 import { handleTourRoute } from './tour-routes.js';
 import { sendJson, sendError, readBody } from './http-utils.js';
@@ -213,6 +215,8 @@ interface ServerOptions {
   /** Set in pull-request mode, so details still resolve on a detached checkout. */
   prNumber?: number;
   version?: string;
+  /** Overridden only by tests, which cannot wait five minutes to watch a server stop. */
+  idleTimings?: { graceMs?: number; checkMs?: number };
   registryInfo?: {
     repoRoot: string;
     repoHash: string;
@@ -411,7 +415,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             working: sid ? liveWorkingCount(sid) > 0 : false,
             waiting: sid ? pendingLiveCount(sid) : 0,
             mayChangeCode: resolveMayChangeCode(purpose, authorship()),
-            viewerPresent: viewerIsPresent(viewerSnapshot(), Date.now()),
+            viewerPresent: viewerIsPresent(viewerSnapshot(), awakeMs()),
           });
           return;
         }
@@ -450,7 +454,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           //
           // A window that has never been open is a different matter: an agent is usually armed
           // before the reader opens the page, so that case waits.
-          if (viewerHasGone(viewerSnapshot(), Date.now())) {
+          if (viewerHasGone(viewerSnapshot(), awakeMs())) {
             sendJson(res, { request: null, since, viewerPresent: false, viewerGone: true });
             return;
           }
@@ -459,7 +463,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           // one has no socket left to write to, the other is waiting for an answer.
           let endedBecauseViewerLeft = false;
           const viewerWatch = setInterval(() => {
-            if (viewerHasGone(viewerSnapshot(), Date.now())) {
+            if (viewerHasGone(viewerSnapshot(), awakeMs())) {
               endedBecauseViewerLeft = true;
               listenerGone.abort();
             }
@@ -481,7 +485,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
               if (listenerGone.signal.aborted) {
                 return;
               }
-              const viewerPresent = viewerIsPresent(viewerSnapshot(), Date.now());
+              const viewerPresent = viewerIsPresent(viewerSnapshot(), awakeMs());
               if (!request) {
                 sendJson(res, { request: null, since, viewerPresent, viewerGone: false });
                 return;
@@ -939,9 +943,47 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
   );
 
   const closeFn = () => {
+    clearInterval(idleWatch);
     deregisterInstance(process.pid);
     server.close();
   };
+
+    // A server outlives its reader otherwise. Nothing is lost by stopping: findings, walkthroughs
+    // and review state live in the database, and running `diffity` again serves the same review.
+    const startedAt = awakeMs();
+    // This server's own session, resolved once. `getCurrentSession()` would be wrong: it reads the
+    // ambient file shared by every worktree using this data directory, so the answer could belong to
+    // another review — and both guards below would then be asking about somebody else's work.
+    // Resolving per tick is not an option either, since `findOrCreateSession` re-anchors and writes.
+    const ownSessionId = effectiveRef ? findOrCreateSession(effectiveRef).id : null;
+    const idleWatch = setInterval(() => {
+      const viewer = viewerSnapshot();
+
+      if (
+        !shouldShutDown({
+          viewerGone: viewerHasGone(viewer, awakeMs()),
+          everSeen: viewer.everSeen,
+          idleForMs: awakeMs() - (viewer.lastSeenAwake || startedAt),
+          listeners: ownSessionId ? liveListenerCount(ownSessionId) : 0,
+          reviewInProgress: ownSessionId ? getReviewRun(ownSessionId).inProgress : false,
+          graceMs: options.idleTimings?.graceMs,
+        })
+      ) {
+        return;
+      }
+
+      console.log(
+        pc.dim(
+          viewer.everSeen
+            ? '  Review page closed — stopping. Run diffity again to pick it back up.'
+            : '  Nobody opened this review — stopping. Run diffity again to pick it back up.',
+        ),
+      );
+      closeFn();
+      process.exit(0);
+    }, options.idleTimings?.checkMs ?? IDLE_CHECK_MS);
+    idleWatch.unref();
+
 
   return new Promise((resolve, reject) => {
     let currentPort = port;
