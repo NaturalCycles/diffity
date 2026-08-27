@@ -100,3 +100,20 @@ export function positionForAlert(
 
   return alertAt < readerAt ? 'above' : 'below';
 }
+
+/**
+ * Everything the reader has not dealt with yet, whether or not a note is still on screen for it.
+ *
+ * The bubble and what it leaves behind are two lists, because a note that has had its time is no
+ * longer in the way but is still unread. The count has to span both, or it appears to go up when a
+ * note expires — the reader sees the number change at the moment nothing actually happened.
+ */
+export function unreadAlerts(shown: AnswerAlert[], expired: AnswerAlert[]): AnswerAlert[] {
+  const byThread = new Map<string, AnswerAlert>();
+
+  for (const alert of [...expired, ...shown]) {
+    byThread.set(alert.threadId, alert);
+  }
+
+  return [...byThread.values()];
+}

@@ -16,7 +16,8 @@ import { readReadingPosition, writeReadingPosition } from '../../lib/reading-pos
 import { staleMessage } from '../../lib/stale-files';
 import { canAskAgent, canActOnCode } from '../../lib/live-mode';
 import { patchDiffFile } from '../../lib/patch-diff-file';
-import { newAnswers, dropSeenAlerts, positionForAlert, type AnswerAlert } from '../../lib/answer-alerts';
+import { newAnswers, dropSeenAlerts, positionForAlert, unreadAlerts, type AnswerAlert } from '../../lib/answer-alerts';
+import { useFaviconBadge } from '../../hooks/use-favicon-badge';
 import { whereIsThread, type ThreadPosition } from '../../lib/thread-visibility';
 import { AnswerBubble } from '../layout/answer-bubble';
 import { fetchDiffFile } from '../../lib/api';
@@ -547,6 +548,10 @@ export function DiffPage() {
     ]);
   }, [threads]);
 
+  // Both lists, so the count does not appear to rise when a note merely stops being shown.
+  const unread = useMemo(() => unreadAlerts(answerAlerts, unseenAlerts), [answerAlerts, unseenAlerts]);
+  useFaviconBadge(unread.length > 0);
+
   const [alertPosition, setAlertPosition] = useState<ThreadPosition>('below');
 
   const handleAlertsExpired = useCallback(() => {
@@ -681,7 +686,7 @@ export function DiffPage() {
         githubDetails={githubDetails}
         reviewInProgress={!!info?.review?.inProgress}
         live={liveStatus}
-        unreadAnswers={unseenAlerts}
+        unreadAnswers={unread}
         onGoToAnswer={handleGoToAnswer}
         sessionId={sessionId}
         onGitHubPulled={() => queryClient.invalidateQueries({ queryKey: ['threads'] })}
