@@ -47,7 +47,7 @@ import {
   type PrComment,
   type ReviewEvent,
 } from '@diffity/github';
-import { findOrCreateSession, resolveSessionId } from './session.js';
+import { findOrCreateSession, resolveSessionId, agentSeenAt, markAgentSeen } from './session.js';
 import { resolveMayChangeCode, type SessionPurpose } from './live-permissions.js';
 import {
   liveListenerCount,
@@ -62,6 +62,8 @@ import { parseDiffStatSummary } from './diff-stat.js';
 import { getReviewRun } from './review-run.js';
 import { createThread, addReply, getThreadsForSession, markThreadsSubmitted, updateThreadStatus } from './threads.js';
 import { threadsResolvedRemotely } from './github-resolution.js';
+import { noteViewerSeen, markViewerGone, viewerSnapshot, viewerIsPresent, viewerHasGone, VIEWER_POLL_MS } from './viewers.js';
+import { sinceLastWait } from './live-events.js';
 import { handleReviewRoute } from './review-routes.js';
 import { handleTourRoute } from './tour-routes.js';
 import { sendJson, sendError, readBody } from './http-utils.js';
@@ -385,6 +387,22 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           return findOrCreateSession(url.searchParams.get('ref') || effectiveRef || 'work').id;
         };
 
+        // The page says whether it is there, rather than being inferred from traffic it stops
+        // making: react query pauses polling on a hidden tab, so a window can be open and silent.
+        if (pathname === '/api/viewer' && req.method === 'POST') {
+          noteViewerSeen();
+          sendJson(res, { ok: true });
+          return;
+        }
+
+        // Sent on `pagehide` as a beacon, so a closed tab is known at once instead of after the
+        // idle window has run out.
+        if (pathname === '/api/viewer/gone' && req.method === 'POST') {
+          markViewerGone();
+          sendJson(res, { ok: true });
+          return;
+        }
+
         if (pathname === '/api/live/status') {
           const sid = liveSessionId();
           sendJson(res, {
@@ -393,6 +411,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             working: sid ? liveWorkingCount(sid) > 0 : false,
             waiting: sid ? pendingLiveCount(sid) : 0,
             mayChangeCode: resolveMayChangeCode(purpose, authorship()),
+            viewerPresent: viewerIsPresent(viewerSnapshot(), Date.now()),
           });
           return;
         }
@@ -419,21 +438,65 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           const listenerGone = new AbortController();
           req.on('close', () => listenerGone.abort());
 
+          // What happened while the last agent was parked, before this wait resets the watermark.
+          const since = sinceLastWait(
+            getThreadsForSession(sid).map(thread => thread.submittedAt),
+            agentSeenAt(sid),
+          );
+          markAgentSeen(sid);
+
+          // Nobody is going to ask anything through a window that is not open. Waiting anyway costs
+          // a parked request here and a re-arm every few minutes at the other end, forever.
+          //
+          // A window that has never been open is a different matter: an agent is usually armed
+          // before the reader opens the page, so that case waits.
+          if (viewerHasGone(viewerSnapshot(), Date.now())) {
+            sendJson(res, { request: null, since, viewerPresent: false, viewerGone: true });
+            return;
+          }
+          // Set by the watcher below, read by the handler: `listenerGone` is aborted both when the
+          // agent hangs up and when the reader closes the page, and those need opposite responses —
+          // one has no socket left to write to, the other is waiting for an answer.
+          let endedBecauseViewerLeft = false;
+          const viewerWatch = setInterval(() => {
+            if (viewerHasGone(viewerSnapshot(), Date.now())) {
+              endedBecauseViewerLeft = true;
+              listenerGone.abort();
+            }
+          }, VIEWER_POLL_MS);
+          const stopWatching = (): void => clearInterval(viewerWatch);
+          req.on('close', stopWatching);
+
           waitForLiveRequest(sid, waitMs, listenerGone.signal).then(
             request => {
+              stopWatching();
               // The connection may already be gone; writing to it would throw rather than help.
-              if (res.writableEnded || listenerGone.signal.aborted) {
+              if (res.writableEnded) {
                 return;
               }
+              if (endedBecauseViewerLeft) {
+                sendJson(res, { request: null, since, viewerPresent: false, viewerGone: true });
+                return;
+              }
+              if (listenerGone.signal.aborted) {
+                return;
+              }
+              const viewerPresent = viewerIsPresent(viewerSnapshot(), Date.now());
               if (!request) {
-                sendJson(res, { request: null });
+                sendJson(res, { request: null, since, viewerPresent, viewerGone: false });
                 return;
               }
               // Carried on the request rather than left for the agent to look up: a rule nobody
               // has to remember is a rule that holds.
-              sendJson(res, { request: { ...request, mayChangeCode: resolveMayChangeCode(purpose, authorship()) } });
+              sendJson(res, {
+                request: { ...request, mayChangeCode: resolveMayChangeCode(purpose, authorship()) },
+                since,
+                viewerPresent,
+                viewerGone: false,
+              });
             },
             err => {
+              stopWatching();
               if (!res.writableEnded && !listenerGone.signal.aborted) {
                 sendError(res, 500, `Failed to wait for a live request: ${err}`);
               }
