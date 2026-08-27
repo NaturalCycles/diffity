@@ -62,7 +62,7 @@ import { parseDiffStatSummary } from './diff-stat.js';
 import { getReviewRun } from './review-run.js';
 import { createThread, addReply, getThreadsForSession, markThreadsSubmitted, updateThreadStatus } from './threads.js';
 import { threadsResolvedRemotely } from './github-resolution.js';
-import { noteViewerSeen, markViewerGone, viewerSnapshot, viewerIsPresent, viewerHasGone, monotonicMs, VIEWER_POLL_MS } from './viewers.js';
+import { noteViewerSeen, markViewerGone, viewerSnapshot, viewerIsPresent, viewerHasGone, awakeMs, VIEWER_POLL_MS } from './viewers.js';
 import { sinceLastWait } from './live-events.js';
 import pc from 'picocolors';
 import { shouldShutDown, IDLE_CHECK_MS } from './idle-shutdown.js';
@@ -415,7 +415,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             working: sid ? liveWorkingCount(sid) > 0 : false,
             waiting: sid ? pendingLiveCount(sid) : 0,
             mayChangeCode: resolveMayChangeCode(purpose, authorship()),
-            viewerPresent: viewerIsPresent(viewerSnapshot(), monotonicMs()),
+            viewerPresent: viewerIsPresent(viewerSnapshot(), awakeMs()),
           });
           return;
         }
@@ -454,7 +454,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           //
           // A window that has never been open is a different matter: an agent is usually armed
           // before the reader opens the page, so that case waits.
-          if (viewerHasGone(viewerSnapshot(), monotonicMs())) {
+          if (viewerHasGone(viewerSnapshot(), awakeMs())) {
             sendJson(res, { request: null, since, viewerPresent: false, viewerGone: true });
             return;
           }
@@ -463,7 +463,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           // one has no socket left to write to, the other is waiting for an answer.
           let endedBecauseViewerLeft = false;
           const viewerWatch = setInterval(() => {
-            if (viewerHasGone(viewerSnapshot(), monotonicMs())) {
+            if (viewerHasGone(viewerSnapshot(), awakeMs())) {
               endedBecauseViewerLeft = true;
               listenerGone.abort();
             }
@@ -485,7 +485,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
               if (listenerGone.signal.aborted) {
                 return;
               }
-              const viewerPresent = viewerIsPresent(viewerSnapshot(), monotonicMs());
+              const viewerPresent = viewerIsPresent(viewerSnapshot(), awakeMs());
               if (!request) {
                 sendJson(res, { request: null, since, viewerPresent, viewerGone: false });
                 return;
@@ -950,7 +950,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
 
     // A server outlives its reader otherwise. Nothing is lost by stopping: findings, walkthroughs
     // and review state live in the database, and running `diffity` again serves the same review.
-    const startedAt = monotonicMs();
+    const startedAt = awakeMs();
     // This server's own session, resolved once. `getCurrentSession()` would be wrong: it reads the
     // ambient file shared by every worktree using this data directory, so the answer could belong to
     // another review — and both guards below would then be asking about somebody else's work.
@@ -961,9 +961,9 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
 
       if (
         !shouldShutDown({
-          viewerGone: viewerHasGone(viewer, monotonicMs()),
+          viewerGone: viewerHasGone(viewer, awakeMs()),
           everSeen: viewer.everSeen,
-          idleForMs: monotonicMs() - (viewer.lastSeenAt || startedAt),
+          idleForMs: awakeMs() - (viewer.lastSeenAwake || startedAt),
           listeners: ownSessionId ? liveListenerCount(ownSessionId) : 0,
           reviewInProgress: ownSessionId ? getReviewRun(ownSessionId).inProgress : false,
           graceMs: options.idleTimings?.graceMs,

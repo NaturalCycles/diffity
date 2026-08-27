@@ -47,30 +47,30 @@ describe('the facts the server judges itself by', () => {
   });
 
   it('says a page is present, and not gone, while it beats', async () => {
-    const { viewerSnapshot, viewerHasGone, viewerIsPresent, monotonicMs } = await import('../src/viewers.js');
+    const { viewerSnapshot, viewerHasGone, viewerIsPresent, awakeMs } = await import('../src/viewers.js');
     await fetch(`http://127.0.0.1:${port}/api/viewer`, { method: 'POST' });
 
-    expect(viewerIsPresent(viewerSnapshot(), monotonicMs())).toBe(true);
-    expect(viewerHasGone(viewerSnapshot(), monotonicMs())).toBe(false);
+    expect(viewerIsPresent(viewerSnapshot(), awakeMs())).toBe(true);
+    expect(viewerHasGone(viewerSnapshot(), awakeMs())).toBe(false);
   });
 
   it('says it has gone the moment the page says so', async () => {
-    const { viewerSnapshot, viewerHasGone, monotonicMs } = await import('../src/viewers.js');
+    const { viewerSnapshot, viewerHasGone, awakeMs } = await import('../src/viewers.js');
     await fetch(`http://127.0.0.1:${port}/api/viewer`, { method: 'POST' });
     await fetch(`http://127.0.0.1:${port}/api/viewer/gone`, { method: 'POST' });
 
-    expect(viewerHasGone(viewerSnapshot(), monotonicMs())).toBe(true);
+    expect(viewerHasGone(viewerSnapshot(), awakeMs())).toBe(true);
   });
 
   // What a suspended laptop does to the wall clock, and must not do to this.
   it('does not age while the machine is asleep', async () => {
-    const { noteViewerSeen, viewerSnapshot, viewerHasGone, monotonicMs, VIEWER_IDLE_MS } = await import('../src/viewers.js');
+    const { noteViewerSeen, viewerSnapshot, viewerHasGone, awakeMs, VIEWER_IDLE_MS } = await import('../src/viewers.js');
     noteViewerSeen();
 
     // Eight hours of wall clock go by; the monotonic clock does not count suspended time, so the
     // reader whose tab is still open is still there.
-    const eightHoursOfWallClock = monotonicMs() + 8 * 3_600_000;
-    expect(viewerHasGone(viewerSnapshot(), monotonicMs())).toBe(false);
-    expect(eightHoursOfWallClock - monotonicMs()).toBeGreaterThan(VIEWER_IDLE_MS);
+    const eightHoursOfWallClock = awakeMs() + 8 * 3_600_000;
+    expect(viewerHasGone(viewerSnapshot(), awakeMs())).toBe(false);
+    expect(eightHoursOfWallClock - awakeMs()).toBeGreaterThan(VIEWER_IDLE_MS);
   });
 });

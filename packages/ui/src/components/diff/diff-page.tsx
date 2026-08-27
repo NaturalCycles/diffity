@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useLoaderData } from 'react-router';
+import { toast } from 'sonner';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useDiff } from '../../hooks/use-diff';
 import { useInfo } from '../../hooks/use-info';
@@ -16,6 +17,7 @@ import { liveStatusOptions } from '../../queries/live';
 import { readReadingPosition, writeReadingPosition } from '../../lib/reading-position';
 import { staleMessage } from '../../lib/stale-files';
 import { canAskAgent, canActOnCode } from '../../lib/live-mode';
+import { unheardNote } from '../../lib/unheard-request';
 import { patchDiffFile } from '../../lib/patch-diff-file';
 import { newAnswers, dropSeenAlerts, positionForAlert, unreadAlerts, type AnswerAlert } from '../../lib/answer-alerts';
 import { useFaviconBadge } from '../../hooks/use-favicon-badge';
@@ -105,21 +107,29 @@ export function DiffPage() {
   const canAct = canActOnCode(liveStatus, reviewsEnabled);
   const askIsHeard = !!liveStatus?.listening;
 
-  const askOrAct = useCallback(
-    (intent: 'ask' | 'act') => ({ aside: true as const, live: true as const, intent }),
-    [],
+  const beginRequest = useCallback(
+    (intent: 'ask' | 'act') => {
+      // Said at the moment of pressing, because that is when the reader forms the belief that it
+      // was sent. The button's tooltip said as much and went unread for several minutes.
+      const note = unheardNote(intent, askIsHeard);
+      if (note) {
+        toast.info(note.title, { description: note.description, duration: 8000 });
+      }
+      return { aside: true as const, live: true as const, intent };
+    },
+    [askIsHeard],
   );
 
   const handleAskReply = useCallback(
     (threadId: string, body: string, author: Parameters<typeof commentActions.addReply>[2]) =>
-      commentActions.addReply(threadId, body, author, askOrAct('ask')),
-    [commentActions, askOrAct],
+      commentActions.addReply(threadId, body, author, beginRequest('ask')),
+    [commentActions, beginRequest],
   );
 
   const handleActReply = useCallback(
     (threadId: string, body: string, author: Parameters<typeof commentActions.addReply>[2]) =>
-      commentActions.addReply(threadId, body, author, askOrAct('act')),
-    [commentActions, askOrAct],
+      commentActions.addReply(threadId, body, author, beginRequest('act')),
+    [commentActions, beginRequest],
   );
 
   const handleAskThread = useCallback(
@@ -130,8 +140,8 @@ export function DiffPage() {
       endLine: number,
       body: string,
       author: Parameters<typeof commentActions.addThread>[5],
-    ) => commentActions.addThread(filePath, side, startLine, endLine, body, author, undefined, askOrAct('ask')),
-    [commentActions, askOrAct],
+    ) => commentActions.addThread(filePath, side, startLine, endLine, body, author, undefined, beginRequest('ask')),
+    [commentActions, beginRequest],
   );
 
   const handleActThread = useCallback(
@@ -142,8 +152,8 @@ export function DiffPage() {
       endLine: number,
       body: string,
       author: Parameters<typeof commentActions.addThread>[5],
-    ) => commentActions.addThread(filePath, side, startLine, endLine, body, author, undefined, askOrAct('act')),
-    [commentActions, askOrAct],
+    ) => commentActions.addThread(filePath, side, startLine, endLine, body, author, undefined, beginRequest('act')),
+    [commentActions, beginRequest],
   );
   const commentCountsByFile = useMemo(() => buildThreadCountsByFile(threads), [threads]);
 

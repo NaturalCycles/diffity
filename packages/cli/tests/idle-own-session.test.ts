@@ -38,7 +38,7 @@ describe('a server judging whether it is still needed', () => {
     const { startServer } = await import('../src/server.js');
     const { findOrCreateSession, getCurrentSession } = await import('../src/session.js');
     const { startReviewRun } = await import('../src/review-run.js');
-    const { viewerSnapshot, noteViewerSeen, markViewerGone, viewerHasGone, monotonicMs } = await import('../src/viewers.js');
+    const { viewerSnapshot, noteViewerSeen, markViewerGone, viewerHasGone, awakeMs } = await import('../src/viewers.js');
     const { shouldShutDown } = await import('../src/idle-shutdown.js');
 
     // This server's review, with an unfinished run on it.
@@ -58,7 +58,7 @@ describe('a server judging whether it is still needed', () => {
       const { getReviewRun } = await import('../src/review-run.js');
       // What the server now feeds the policy, taken from its own ref rather than the shared file.
       const facts = {
-        viewerGone: viewerHasGone(viewerSnapshot(), monotonicMs()),
+        viewerGone: viewerHasGone(viewerSnapshot(), awakeMs()),
         everSeen: viewerSnapshot().everSeen,
         idleForMs: 10 * 60_000,
         listeners: 0,
