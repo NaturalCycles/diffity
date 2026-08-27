@@ -45,7 +45,7 @@ describe('a window that was open and has gone', () => {
   it('is told apart from one that never opened, and stops the wait', async () => {
     const { noteViewerSeen, VIEWER_IDLE_MS } = await import('../src/viewers.js');
 
-    // A page asked for something, long enough ago that its polling has clearly stopped.
+    // A page was open, long enough ago that its heartbeat has clearly stopped.
     noteViewerSeen(Date.now() - VIEWER_IDLE_MS - 1);
 
     const started = Date.now();

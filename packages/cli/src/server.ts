@@ -62,7 +62,7 @@ import { parseDiffStatSummary } from './diff-stat.js';
 import { getReviewRun } from './review-run.js';
 import { createThread, addReply, getThreadsForSession, markThreadsSubmitted, updateThreadStatus } from './threads.js';
 import { threadsResolvedRemotely } from './github-resolution.js';
-import { noteViewerSeen, lastViewerSeenAt, viewerIsPresent, viewerHasGone, VIEWER_IDLE_MS } from './viewers.js';
+import { noteViewerSeen, markViewerGone, viewerSnapshot, viewerIsPresent, viewerHasGone, VIEWER_POLL_MS } from './viewers.js';
 import { sinceLastWait } from './live-events.js';
 import { handleReviewRoute } from './review-routes.js';
 import { handleTourRoute } from './tour-routes.js';
@@ -348,13 +348,6 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
         const url = new URL(req.url || '/', `http://${getHost()}:${port}`);
         const pathname = url.pathname;
 
-        // The page is the only thing that polls, so anything asking for anything is a window being
-        // open — except the agent, which says so on its own requests, and the claim route, which is
-        // only ever the agent whether it remembered to say so or not.
-        if (req.headers['x-diffity-agent'] !== '1' && pathname !== '/api/live/claim') {
-          noteViewerSeen();
-        }
-
         res.setHeader('X-Content-Type-Options', 'nosniff');
         res.setHeader('Content-Security-Policy', CONTENT_SECURITY_POLICY);
 
@@ -394,6 +387,22 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           return findOrCreateSession(url.searchParams.get('ref') || effectiveRef || 'work').id;
         };
 
+        // The page says whether it is there, rather than being inferred from traffic it stops
+        // making: react query pauses polling on a hidden tab, so a window can be open and silent.
+        if (pathname === '/api/viewer' && req.method === 'POST') {
+          noteViewerSeen();
+          sendJson(res, { ok: true });
+          return;
+        }
+
+        // Sent on `pagehide` as a beacon, so a closed tab is known at once instead of after the
+        // idle window has run out.
+        if (pathname === '/api/viewer/gone' && req.method === 'POST') {
+          markViewerGone();
+          sendJson(res, { ok: true });
+          return;
+        }
+
         if (pathname === '/api/live/status') {
           const sid = liveSessionId();
           sendJson(res, {
@@ -402,6 +411,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             working: sid ? liveWorkingCount(sid) > 0 : false,
             waiting: sid ? pendingLiveCount(sid) : 0,
             mayChangeCode: resolveMayChangeCode(purpose, authorship()),
+            viewerPresent: viewerIsPresent(viewerSnapshot(), Date.now()),
           });
           return;
         }
@@ -440,15 +450,20 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           //
           // A window that has never been open is a different matter: an agent is usually armed
           // before the reader opens the page, so that case waits.
-          if (viewerHasGone(lastViewerSeenAt(), Date.now())) {
+          if (viewerHasGone(viewerSnapshot(), Date.now())) {
             sendJson(res, { request: null, since, viewerPresent: false, viewerGone: true });
             return;
           }
+          // Set by the watcher below, read by the handler: `listenerGone` is aborted both when the
+          // agent hangs up and when the reader closes the page, and those need opposite responses —
+          // one has no socket left to write to, the other is waiting for an answer.
+          let endedBecauseViewerLeft = false;
           const viewerWatch = setInterval(() => {
-            if (viewerHasGone(lastViewerSeenAt(), Date.now())) {
+            if (viewerHasGone(viewerSnapshot(), Date.now())) {
+              endedBecauseViewerLeft = true;
               listenerGone.abort();
             }
-          }, VIEWER_IDLE_MS / 2);
+          }, VIEWER_POLL_MS);
           const stopWatching = (): void => clearInterval(viewerWatch);
           req.on('close', stopWatching);
 
@@ -459,15 +474,14 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
               if (res.writableEnded) {
                 return;
               }
-              const viewerPresent = viewerIsPresent(lastViewerSeenAt(), Date.now());
-              const gone = viewerHasGone(lastViewerSeenAt(), Date.now());
-              if (listenerGone.signal.aborted && gone) {
+              if (endedBecauseViewerLeft) {
                 sendJson(res, { request: null, since, viewerPresent: false, viewerGone: true });
                 return;
               }
               if (listenerGone.signal.aborted) {
                 return;
               }
+              const viewerPresent = viewerIsPresent(viewerSnapshot(), Date.now());
               if (!request) {
                 sendJson(res, { request: null, since, viewerPresent, viewerGone: false });
                 return;

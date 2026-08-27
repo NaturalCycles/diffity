@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useDiff } from '../../hooks/use-diff';
 import { useInfo } from '../../hooks/use-info';
 import { useTheme } from '../../hooks/use-theme';
+import { useViewerPresence } from '../../hooks/use-viewer-presence';
 import { useWrapLines } from '../../hooks/use-wrap-lines';
 import { useKeyboard } from '../../hooks/use-keyboard';
 import { useReviewThreads } from '../../hooks/use-review-threads';
@@ -55,6 +56,10 @@ export function DiffPage() {
     theme: 'light' | 'dark' | null;
     view: 'split' | 'unified' | null;
   }>();
+
+  // An agent waiting for a question cannot see this window any other way: the page holds no
+  // connection, and its polling stops while the tab is hidden.
+  useViewerPresence(true);
 
   const [viewMode, setViewMode] = useState<ViewMode>(initialViewMode || 'split');
   const { hideWhitespace, setHideWhitespace } = useHideWhitespace();
