@@ -72,7 +72,7 @@ export function OptionsMenu(props: OptionsMenuProps) {
           </button>
           <div className="border-t border-border my-1" />
           <a
-            href="https://github.com/kamranahmedse/diffity"
+            href="https://github.com/NaturalCycles/diffity"
             target="_blank"
             rel="noopener noreferrer"
             className={menuItemClass}
