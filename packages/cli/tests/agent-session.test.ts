@@ -64,20 +64,16 @@ describe('getSessionById', () => {
 
     expect(getSessionById('no-such-session')).toBeNull();
   });
-});
 
-describe('getSessionById after a commit', () => {
   it('chases a superseded id to the session the work moved into', async () => {
     const { findOrCreateSession, getSessionById } = await import('../src/session.js');
     const { createThread } = await import('../src/threads.js');
     const before = findOrCreateSession('work');
     createThread(before.id, 'a.ts', 'new', 1, 1, 'P2: open work', { name: 'Agent', type: 'agent' });
 
-    const { execFileSync } = await import('node:child_process');
-    const { writeFileSync } = await import('node:fs');
-    writeFileSync('a.ts', 'const a = 2;\n');
-    execFileSync('git', ['add', '.'], { stdio: 'pipe' });
-    execFileSync('git', ['commit', '-m', 'move'], { stdio: 'pipe' });
+    writeFileSync(join(repoDir, 'a.ts'), 'const a = 2;\n');
+    execFileSync('git', ['add', '.'], { cwd: repoDir, stdio: 'pipe' });
+    execFileSync('git', ['commit', '-m', 'move'], { cwd: repoDir, stdio: 'pipe' });
     const after = findOrCreateSession('work');
 
     expect(after.id).not.toBe(before.id);
