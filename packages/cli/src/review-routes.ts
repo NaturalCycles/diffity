@@ -15,16 +15,10 @@ import {
 } from './threads.js';
 import { requestLive, notifyLiveListeners } from './live.js';
 import { normaliseIntent } from './live-intent.js';
-import { getCurrentSession, resolveSessionId } from './session.js';
+import { resolveSessionId } from './session.js';
 import { sendJson, sendError, withJsonBody } from './http-utils.js';
 
 export function handleReviewRoute(req: IncomingMessage, res: ServerResponse, pathname: string, url: URL): boolean {
-  if (pathname === '/api/sessions/current' && req.method === 'GET') {
-    const session = getCurrentSession();
-    sendJson(res, session);
-    return true;
-  }
-
   if (pathname === '/api/threads' && req.method === 'GET') {
     const sid = resolveSessionId(url.searchParams.get('session'));
     if (!sid) {

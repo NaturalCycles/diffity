@@ -3,7 +3,6 @@ import { join, isAbsolute } from 'node:path';
 import type { Command } from 'commander';
 import pc from 'picocolors';
 import { isGitRepo, getDiffFiles, resolveRef, getRepoRoot } from '@diffity/git';
-import { getCurrentSession } from './session.js';
 import {
   createThread,
   getThreadsForSession,
@@ -19,13 +18,12 @@ import {
   type ClaimResponse,
   type GitHubDetails,
   type LiveStatusResponse,
-  type RepoInfoResponse,
 } from '@diffity/api';
 import { answerLiveRequest } from './live.js';
 import { clampClientWait, CLIENT_WAIT_CAP_SECONDS } from './live-wait.js';
 import { directiveFor } from './live-intent.js';
-import { findInstanceForRepo, type RegistryEntry } from './registry.js';
-import { createHash } from 'node:crypto';
+import { AGENT_HEADER, SERVER_TIMEOUT_MS, findRunningInstance, resolveAgentSession } from './agent-session.js';
+import type { Session } from './session.js';
 import { createTour, addTourStep, updateTourStatus, deleteTour, deleteToursForSession, getTour } from './tours.js';
 import { unansweredRequest } from './live-unanswered.js';
 import { describeSince } from './live-events.js';
@@ -35,14 +33,18 @@ import { startReviewRun, finishReviewRun } from './review-run.js';
 import { readRepoConfig, DEFAULT_SEVERITIES, resolveInRepo, REPO_CONFIG_FILE } from '@diffity/git';
 import { readFileSync } from 'node:fs';
 
-function requireSession() {
+async function requireSession(explicitId?: string): Promise<Session> {
   if (!isGitRepo()) {
     console.error(pc.red('Error: Not a git repository'));
     process.exit(1);
   }
 
-  const session = getCurrentSession();
+  const session = await resolveAgentSession(explicitId);
   if (!session) {
+    if (explicitId) {
+      console.error(pc.red(`Error: No session matches ${explicitId}`));
+      process.exit(1);
+    }
     console.error(pc.red('Error: No active review session.'));
     console.error(pc.dim('Start diffity first to create a session.'));
     process.exit(1);
@@ -119,9 +121,6 @@ function formatThreadLine(thread: Thread): string {
 const NOTHING_ASKED_EXIT_CODE = 3;
 /** Nobody has the review page open, so re-arming would wait for a question nobody can ask. */
 const NOBODY_WATCHING_EXIT_CODE = 4;
-/** So the server does not count the agent's own polling as a window being open. */
-const AGENT_HEADER = { 'x-diffity-agent': '1' } as const;
-
 interface LiveStatus {
   available: boolean;
   reason: string;
@@ -134,7 +133,10 @@ interface LiveStatus {
 
 async function fetchLiveStatus(port: number): Promise<LiveStatus | null> {
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/api/live/status`);
+    const res = await fetch(`http://127.0.0.1:${port}/api/live/status`, {
+      headers: AGENT_HEADER,
+      signal: AbortSignal.timeout(SERVER_TIMEOUT_MS),
+    });
     if (!res.ok) {
       return null;
     }
@@ -143,21 +145,16 @@ async function fetchLiveStatus(port: number): Promise<LiveStatus | null> {
       return { available: false, reason: 'the server is not bound to loopback', mayChangeCode: false };
     }
 
-    const details = await fetch(`http://127.0.0.1:${port}/api/github/details`);
+    const details = await fetch(`http://127.0.0.1:${port}/api/github/details`, {
+      headers: AGENT_HEADER,
+      signal: AbortSignal.timeout(SERVER_TIMEOUT_MS),
+    });
     const pr = details.ok ? ((await details.json()) as GitHubDetails | null) : null;
     // No pull request means this is your own working tree, which is the case changes exist for.
     return { available: true, reason: '', mayChangeCode: pr ? pr.viewerDidAuthor === true : true };
   } catch {
     return null;
   }
-}
-
-function findRunningInstance(): RegistryEntry | null {
-  const repoRoot = getRepoRoot();
-  if (!repoRoot) {
-    return null;
-  }
-  return findInstanceForRepo(createHash('sha256').update(repoRoot).digest('hex').slice(0, 12));
 }
 
 /**
@@ -177,7 +174,8 @@ export function registerAgentCommands(program: Command): void {
   const agent = program
     .command('agent')
     .description('Agent commands for interacting with review comments')
-    .addHelpText('after', '\nPass --repo before `agent` when the current directory is not the repository:\n  diffity --repo <path> agent list')
+    .option('--session <id>', 'Operate on this session (id or 8-char prefix) instead of the running server\'s own')
+    .addHelpText('after', '\nPass --repo before `agent` when the current directory is not the repository:\n  diffity --repo <path> agent list\nPass --session between `agent` and the command to address another session:\n  diffity agent --session <id> list')
     .addHelpText('after', `
 Examples:
   $ diffity agent list --status open --json
@@ -194,13 +192,13 @@ Examples:
     .description('List comment threads in the current session (use --json for full details)')
     .option('--status <status>', 'Filter by status (open, resolved, dismissed)')
     .option('--json', 'Output as JSON')
-    .action((opts) => {
+    .action(async (opts) => {
       const validStatuses = ['open', 'resolved', 'dismissed'];
       if (opts.status && !validStatuses.includes(opts.status)) {
         console.error(pc.red(`Error: Invalid status "${opts.status}". Must be one of: ${validStatuses.join(', ')}`));
         process.exit(1);
       }
-      const session = requireSession();
+      const session = await requireSession(agent.opts().session);
       const threads = getThreadsForSession(session.id, opts.status as ThreadStatus | undefined);
 
       if (opts.json) {
@@ -226,12 +224,12 @@ Examples:
     .option('--end-line <n>', 'End line for multi-line comments (1-indexed)', parseInt)
     .option('--side <side>', 'Which side of the diff (new or old)', 'new')
     .requiredOption('--body <text>', 'Comment body')
-    .action((opts) => {
+    .action(async (opts) => {
       if (opts.side !== 'new' && opts.side !== 'old') {
         console.error(pc.red(`Error: Invalid side "${opts.side}". Must be "new" or "old"`));
         process.exit(1);
       }
-      const session = requireSession();
+      const session = await requireSession(agent.opts().session);
       assertFileExists(opts.file);
       if (session.ref !== '__tree__') {
         const diffFiles = getDiffFiles(session.ref);
@@ -277,8 +275,8 @@ Examples:
     .description('Resolve a thread (marks as fixed)')
     .argument('<thread-id>', 'Thread ID (or 8-char prefix)')
     .option('--summary <text>', 'What was done to resolve it')
-    .action((id: string, opts) => {
-      const session = requireSession();
+    .action(async (id: string, opts) => {
+      const session = await requireSession(agent.opts().session);
       const thread = resolveThreadId(id, session.id);
       const author = opts.summary ? { name: 'Agent', type: 'agent' as const } : undefined;
       updateThreadStatus(thread.id, 'resolved', fromShell(opts.summary ?? ''), author);
@@ -290,8 +288,8 @@ Examples:
     .description('Dismiss a thread (marks as won\'t fix)')
     .argument('<thread-id>', 'Thread ID (or 8-char prefix)')
     .option('--reason <text>', 'Why the thread is being dismissed')
-    .action((id: string, opts) => {
-      const session = requireSession();
+    .action(async (id: string, opts) => {
+      const session = await requireSession(agent.opts().session);
       const thread = resolveThreadId(id, session.id);
       const author = opts.reason ? { name: 'Agent', type: 'agent' as const } : undefined;
       updateThreadStatus(thread.id, 'dismissed', fromShell(opts.reason ?? ''), author);
@@ -305,8 +303,8 @@ Examples:
     .requiredOption('--body <text>', 'Reply body')
     .option('--aside', 'A note for the reader that never goes to the forge')
     .option('--answers <comment-id>', 'The request this answers, so the page stops waiting on it')
-    .action((id: string, opts: { body: string; aside?: boolean; answers?: string }) => {
-      const session = requireSession();
+    .action(async (id: string, opts: { body: string; aside?: boolean; answers?: string }) => {
+      const session = await requireSession(agent.opts().session);
       const thread = resolveThreadId(id, session.id);
       const stillOpen = unansweredRequest(thread.comments);
       addReply(thread.id, fromShell(opts.body), { name: 'Agent', type: 'agent' }, opts.aside ? 'aside' : 'review');
@@ -333,7 +331,7 @@ Examples:
     .description('Wait for the reader to ask something, then exit so the agent can answer')
     .option('--timeout <seconds>', `How long to wait before giving up (each poll caps at ${CLIENT_WAIT_CAP_SECONDS}s and returns; call again to keep waiting)`, '900')
     .action(async (opts: { timeout: string }) => {
-      requireSession();
+      const session = await requireSession(agent.opts().session);
       const instance = findRunningInstance();
       if (!instance) {
         console.error(pc.red('No diffity is running for this repository — start one first'));
@@ -351,14 +349,10 @@ Examples:
       const startedAt = Date.now();
       let payload: ClaimResponse;
       try {
-        // Park on the session the server is serving, not on whatever the shared current-session
-        // file last named — those differ whenever another worktree has opened a review since.
-        const info = await fetch(`http://127.0.0.1:${instance.port}/api/info`, { headers: AGENT_HEADER });
-        const sessionId = info.ok
-          ? ((await info.json()) as RepoInfoResponse).sessionId
-          : undefined;
+        // Park on the session requireSession resolved — the server's own unless --session says
+        // otherwise — never on whatever the shared current-session file last named.
         const claimUrl = `http://127.0.0.1:${instance.port}/api/live/claim?wait=${wait}`
-          + (sessionId ? `&session=${encodeURIComponent(sessionId)}` : '');
+          + `&session=${encodeURIComponent(session.id)}`;
         const res = await fetch(claimUrl, { method: 'POST', headers: AGENT_HEADER });
         if (!res.ok) {
           console.error(pc.red(`Could not wait for a request: ${res.status} ${await res.text()}`));
@@ -419,7 +413,7 @@ Examples:
     .description('Whether the review page can reach an agent, and what it is allowed to ask for')
     .option('--json', 'Output as JSON')
     .action(async (opts: { json?: boolean }) => {
-      requireSession();
+      await requireSession(agent.opts().session);
       const instance = findRunningInstance();
       const status = instance ? await fetchLiveStatus(instance.port) : null;
 
@@ -448,8 +442,8 @@ Examples:
     .description("Rewrite a comment's body — the way an aside improves the finding it is about")
     .argument('<comment-id>', 'Comment to rewrite')
     .requiredOption('--body <text>', 'The new body')
-    .action((commentId: string, opts: { body: string }) => {
-      const session = requireSession();
+    .action(async (commentId: string, opts: { body: string }) => {
+      const session = await requireSession(agent.opts().session);
       const sent = findSubmittedThreadForComment(commentId, session.id);
       editComment(commentId, fromShell(opts.body));
       if (sent) {
@@ -469,8 +463,8 @@ Examples:
     .command('general-comment')
     .description('Create a general comment on the entire diff (not tied to a specific file or line)')
     .requiredOption('--body <text>', 'Comment body')
-    .action((opts) => {
-      const session = requireSession();
+    .action(async (opts) => {
+      const session = await requireSession(agent.opts().session);
       const thread = createThread(
         session.id,
         GENERAL_THREAD_FILE_PATH,
@@ -486,8 +480,8 @@ Examples:
   agent
     .command('diff')
     .description('Output the unified diff for the current session (includes untracked files)')
-    .action(() => {
-      const session = requireSession();
+    .action(async () => {
+      const session = await requireSession(agent.opts().session);
       const ref = session.ref === '__tree__' ? 'work' : session.ref;
       const raw = resolveRef(ref);
       if (!raw.trim()) {
@@ -501,8 +495,8 @@ Examples:
     .command('review-start')
     .description('Announce that a review is under way, so the page can say so')
     .option('--note <text>', 'What is being reviewed', '')
-    .action((opts) => {
-      const session = requireSession();
+    .action(async (opts) => {
+      const session = await requireSession(agent.opts().session);
       startReviewRun(session.id, fromShell(opts.note ?? ''));
       console.log(pc.green('Review marked as in progress'));
     });
@@ -510,8 +504,8 @@ Examples:
   agent
     .command('review-done')
     .description('Announce that the review is finished')
-    .action(() => {
-      const session = requireSession();
+    .action(async () => {
+      const session = await requireSession(agent.opts().session);
       finishReviewRun(session.id);
       console.log(pc.green('Review marked as finished'));
     });
@@ -520,7 +514,7 @@ Examples:
     .command('standards')
     .description("Print the project's review standards and severity labels")
     .option('--json', 'Output as JSON')
-    .action((opts) => {
+    .action(async (opts) => {
       if (!isGitRepo()) {
         console.error(pc.red('Error: Not a git repository'));
         process.exit(1);
@@ -562,8 +556,8 @@ Examples:
     .requiredOption('--topic <text>', 'The question or topic for the tour')
     .option('--body <text>', 'Introductory text for the tour', '')
     .option('--json', 'Output as JSON')
-    .action((opts) => {
-      const session = requireSession();
+    .action(async (opts) => {
+      const session = await requireSession(agent.opts().session);
       const tour = createTour(session.id, fromShell(opts.topic), fromShell(opts.body));
       if (opts.json) {
         console.log(JSON.stringify(tour, null, 2));
@@ -582,8 +576,8 @@ Examples:
     .option('--body <text>', 'Narrative text shown in sidebar', '')
     .option('--annotation <text>', 'Short inline annotation on highlighted code', '')
     .option('--json', 'Output as JSON')
-    .action((opts) => {
-      const session = requireSession();
+    .action(async (opts) => {
+      const session = await requireSession(agent.opts().session);
       assertFileExists(opts.file);
       const tourId = resolveTourId(opts.tour, session.id);
       const endLine = opts.endLine ?? opts.line;
@@ -601,8 +595,8 @@ Examples:
     .argument('[tour-id]', 'Walkthrough to remove')
     .option('--all', 'Remove every finished walkthrough in this session instead')
     .option('--include-building', 'With --all, also remove one another agent may still be writing')
-    .action((tourId: string | undefined, opts: { all?: boolean; includeBuilding?: boolean }) => {
-      const session = requireSession();
+    .action(async (tourId: string | undefined, opts: { all?: boolean; includeBuilding?: boolean }) => {
+      const session = await requireSession(agent.opts().session);
       if (tourId) {
         const resolved = resolveTourId(tourId, session.id);
         deleteTour(resolved);
@@ -625,8 +619,8 @@ Examples:
     .description('Mark a tour as ready for viewing')
     .requiredOption('--tour <id>', 'Tour ID')
     .option('--json', 'Output as JSON')
-    .action((opts) => {
-      const session = requireSession();
+    .action(async (opts) => {
+      const session = await requireSession(agent.opts().session);
       updateTourStatus(resolveTourId(opts.tour, session.id), 'ready');
       if (opts.json) {
         console.log(JSON.stringify({ ok: true }));

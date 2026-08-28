@@ -10,8 +10,10 @@ import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import { parseDiff, type ParsedDiff } from '@diffity/parser';
+import { AGENT_TRAFFIC_HEADER } from '@diffity/api';
 import type {
   ClaimResponse,
+  ReviewSession,
   DiffFileResponse,
   DiffFingerprint,
   DiffResponse,
@@ -61,6 +63,7 @@ import { findOrCreateSession, resolveSessionId, agentSeenAt, markAgentSeen } fro
 import { resolveMayChangeCode, type SessionPurpose } from './live-permissions.js';
 import {
   liveListenerCount,
+  liveListenerTotal,
   liveWorkingCount,
   pendingLiveCount,
   reclaimStaleLiveRequests,
@@ -69,7 +72,7 @@ import {
 import { computeDiffFingerprint } from './fingerprint.js';
 import { parseDiffStatFiles } from './diff-stat.js';
 import { parseDiffStatSummary } from './diff-stat.js';
-import { getReviewRun } from './review-run.js';
+import { anyReviewInProgress, getReviewRun } from './review-run.js';
 import { createThread, addReply, getThreadsForSession, markThreadsSubmitted, setThreadForgeComment, updateThreadStatus } from './threads.js';
 import { existingThreadFor } from './github-pull.js';
 import { threadsResolvedRemotely } from './github-resolution.js';
@@ -345,6 +348,11 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
     // VS Code CLI not found
   }
 
+  // The ref whose page somebody last looked at on this instance. One server gets reused for other
+  // refs and for the tree, so the startup ref is not what an agent should follow — and the page's
+  // own polls, never the agent's traffic, are what say where the reader actually is.
+  let lastViewedRef: string | null = null;
+
   // Who wrote the pull request does not change between two questions asked a minute apart, and the
   // lookup is a subprocess on a path that is meant to feel immediate.
   let authorshipCache: { viewerDidAuthor?: boolean } | null | undefined;
@@ -415,6 +423,19 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
         if (pathname === '/api/viewer/gone' && req.method === 'POST') {
           markViewerGone();
           sendJson(res, { ok: true });
+          return;
+        }
+
+        // The agent asks here instead of reading the shared current-session file, which any
+        // tab's info poll rewrites. Ensuring is deliberate: an agent arriving after a commit
+        // needs the carry-forward that findOrCreateSession performs.
+        if (pathname === '/api/sessions/ensure' && req.method === 'POST') {
+          const ref = lastViewedRef ?? effectiveRef;
+          if (!ref) {
+            sendError(res, 400, 'This server has no review ref');
+            return;
+          }
+          sendJson(res, findOrCreateSession(ref) satisfies ReviewSession);
           return;
         }
 
@@ -684,6 +705,9 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             const session = findOrCreateSession(ref);
             sessionId = session.id;
           }
+          if (ref && req.headers[AGENT_TRAFFIC_HEADER] !== '1') {
+            lastViewedRef = ref;
+          }
           sendJson(res, {
             ...info,
             description: refDescription,
@@ -889,6 +913,9 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
         if (pathname === '/api/tree/info') {
           const info = getRepoInfo();
           const session = findOrCreateSession('__tree__');
+          if (req.headers[AGENT_TRAFFIC_HEADER] !== '1') {
+            lastViewedRef = '__tree__';
+          }
           sendJson(res, {
             ...info,
             description: 'Repository file browser',
@@ -904,7 +931,11 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           return;
         }
 
-        if (handleTourRoute(req, res, pathname, url)) {
+        if (handleTourRoute(req, res, pathname, url, ref => {
+          if (req.headers[AGENT_TRAFFIC_HEADER] !== '1') {
+            lastViewedRef = ref;
+          }
+        })) {
           return;
         }
 
@@ -930,11 +961,10 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
     // A server outlives its reader otherwise. Nothing is lost by stopping: findings, walkthroughs
     // and review state live in the database, and running `diffity` again serves the same review.
     const startedAt = awakeMs();
-    // This server's own session, resolved once. `getCurrentSession()` would be wrong: it reads the
-    // ambient file shared by every worktree using this data directory, so the answer could belong to
-    // another review — and both guards below would then be asking about somebody else's work.
-    // Resolving per tick is not an option either, since `findOrCreateSession` re-anchors and writes.
-    const ownSessionId = effectiveRef ? findOrCreateSession(effectiveRef).id : null;
+    // Whole-instance questions, not startup-session ones: an agent parks on the session the
+    // reader is viewing — the tree, or a review carried forward by a commit — so a guard keyed
+    // to the startup ref would stop the server under a listener it never counted.
+    const ownRepoRoot = registryInfo?.repoRoot ?? getRepoInfo().root;
     const idleWatch = setInterval(() => {
       const viewer = viewerSnapshot();
 
@@ -943,8 +973,8 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           viewerGone: viewerHasGone(viewer, awakeMs()),
           everSeen: viewer.everSeen,
           idleForMs: awakeMs() - (viewer.lastSeenAwake || startedAt),
-          listeners: ownSessionId ? liveListenerCount(ownSessionId) : 0,
-          reviewInProgress: ownSessionId ? getReviewRun(ownSessionId).inProgress : false,
+          listeners: liveListenerTotal(),
+          reviewInProgress: anyReviewInProgress(ownRepoRoot),
           graceMs: options.idleTimings?.graceMs,
         })
       ) {

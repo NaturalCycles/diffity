@@ -45,6 +45,27 @@ export function finishReviewRun(sessionId: string): void {
     .run(sessionId);
 }
 
+/** No real review writes findings this long without finishing or being superseded. */
+const RUN_COUNTS_FOR_HOURS = 2;
+
+/**
+ * Whether any review of this checkout is still being written. The session an agent works on is
+ * not the server's startup session — a tree review, or one carried forward by a commit — so the
+ * question has to be asked repo-wide. Bounded by age, because a run abandoned by a crashed agent
+ * has nobody left to finish it, and unbounded it would hold every future server open.
+ */
+export function anyReviewInProgress(repoRoot: string | null): boolean {
+  const row = queryOne<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM review_runs r
+       JOIN review_sessions s ON s.id = r.session_id
+      WHERE s.repo_root IS ? AND r.finished_at IS NULL
+        AND r.started_at > datetime('now', ?)`,
+    repoRoot,
+    `-${RUN_COUNTS_FOR_HOURS} hours`,
+  );
+  return (row?.n ?? 0) > 0;
+}
+
 /** An unfinished run follows the session, so committing mid-review does not clear the warning. */
 export function carryReviewRun(fromSessionId: string, toSessionId: string): void {
   const run = queryOne<{ started_at: string; note: string }>(
@@ -63,4 +84,8 @@ export function carryReviewRun(fromSessionId: string, toSessionId: string): void
        ON CONFLICT(session_id) DO UPDATE SET started_at = excluded.started_at, finished_at = NULL, note = excluded.note`,
     )
     .run(toSessionId, run.started_at, run.note);
+
+  // The run has moved. Left behind, the donor's half-open row would say a review of this
+  // checkout is in progress for as long as the database exists.
+  getDb().prepare('DELETE FROM review_runs WHERE session_id = ?').run(fromSessionId);
 }

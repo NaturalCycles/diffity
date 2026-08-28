@@ -137,6 +137,15 @@ export function liveListenerCount(sessionId: string): number {
   return listeners.get(sessionId)?.size ?? 0;
 }
 
+/** Every parked listener on this instance, whichever session each one waits on. */
+export function liveListenerTotal(): number {
+  let total = 0;
+  for (const forSession of listeners.values()) {
+    total += forSession.size;
+  }
+  return total;
+}
+
 export function notifyLiveListeners(sessionId: string | null): void {
   if (!sessionId) {
     return;

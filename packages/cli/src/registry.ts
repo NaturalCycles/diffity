@@ -1,4 +1,5 @@
 import { readFileSync, writeFileSync, unlinkSync, existsSync, statSync, mkdirSync } from 'node:fs';
+import { AGENT_TRAFFIC_HEADER } from '@diffity/api';
 import { get } from 'node:http';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -144,7 +145,8 @@ export function findInstanceForRepo(repoHash: string): RegistryEntry | null {
 
 export function checkInstanceHealth(port: number): Promise<boolean> {
   return new Promise((resolve) => {
-    const req = get(`http://localhost:${port}/api/info`, (res) => {
+    // Says who it is: a reader's info polls steer which session the agent follows, and this is not one.
+    const req = get(`http://localhost:${port}/api/info`, { headers: { [AGENT_TRAFFIC_HEADER]: '1' } }, (res) => {
       res.resume();
       resolve(res.statusCode === 200);
     });

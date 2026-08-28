@@ -346,6 +346,43 @@ export function resolveSessionId(sessionId: string | null | undefined): string {
   return newest?.id ?? sessionId;
 }
 
+/**
+ * A session by its id, or the 8-char prefix every other id in the CLI accepts. A superseded id is
+ * chased to the newest session of the same review: the id somebody passes came from a page URL or
+ * an earlier command, and a commit since then has carried the work forward — honouring the old id
+ * literally would answer an empty review.
+ */
+export function getSessionById(idOrPrefix: string): Session | null {
+  let row = queryOne<{ id: string; ref: string; head_hash: string }>(
+    'SELECT id, ref, head_hash FROM review_sessions WHERE id = ?',
+    idOrPrefix,
+  );
+
+  if (!row && idOrPrefix.length >= 8) {
+    row = queryOne<{ id: string; ref: string; head_hash: string }>(
+      "SELECT id, ref, head_hash FROM review_sessions WHERE id LIKE ? ESCAPE '\\' ORDER BY created_at DESC, rowid DESC",
+      idOrPrefix.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_') + '%',
+    );
+  }
+
+  if (!row) {
+    return null;
+  }
+
+  const newestId = resolveSessionId(row.id);
+  if (newestId !== row.id) {
+    const newest = queryOne<{ id: string; ref: string; head_hash: string }>(
+      'SELECT id, ref, head_hash FROM review_sessions WHERE id = ?',
+      newestId,
+    );
+    if (newest) {
+      row = newest;
+    }
+  }
+
+  return { id: row.id, ref: row.ref, headHash: row.head_hash };
+}
+
 export function getCurrentSession(): Session | null {
   try {
     const raw = readFileSync(sessionFilePath(), 'utf-8');
@@ -353,6 +390,14 @@ export function getCurrentSession(): Session | null {
   } catch {
     return null;
   }
+}
+
+/** The ref a session row holds, read plainly — for callers whose row is already the newest. */
+export function sessionRef(sessionId: string): string | null {
+  return queryOne<{ ref: string }>(
+    'SELECT ref FROM review_sessions WHERE id = ?',
+    sessionId,
+  )?.ref ?? null;
 }
 
 /** When an agent last finished waiting on this session, or null if none ever has. */

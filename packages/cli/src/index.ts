@@ -387,4 +387,4 @@ registerTreeCommand(program, pkg.version);
 registerKillCommand(program);
 registerAgentCommands(program);
 
-program.parse();
+await program.parseAsync();
