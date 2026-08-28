@@ -12,7 +12,6 @@ import type {
   PullCommentsResult,
   RepoInfoResponse,
   ReviewResult,
-  ReviewSession,
   ReviewSubmission,
   Tour,
   TreeEntriesResponse,
@@ -107,14 +106,6 @@ export function openInEditor(filePath: string, line?: number): Promise<{ ok: boo
 }
 
 
-
-export async function fetchSession(): Promise<ReviewSession | null> {
-  const res = await fetch('/api/sessions/current');
-  if (!res.ok) {
-    return null;
-  }
-  return res.json();
-}
 
 export async function fetchThreads(sessionId: string, status?: string): Promise<CommentThread[]> {
   const res = await fetch(buildUrl('/api/threads', { session: sessionId, status }));
