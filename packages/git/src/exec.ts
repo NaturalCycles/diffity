@@ -75,10 +75,3 @@ export function gitLines(args: string[]): string[] {
   return output.split('\n');
 }
 
-export function execLines(cmd: string): string[] {
-  const output = exec(cmd);
-  if (!output) {
-    return [];
-  }
-  return output.split('\n');
-}

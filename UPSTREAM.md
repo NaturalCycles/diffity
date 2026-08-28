@@ -1,7 +1,15 @@
 # Fork ledger
 
-What this fork changes relative to [nilbuild/diffity](https://github.com/nilbuild/diffity), so any
-of it can be extracted as a pointed upstream pull request later.
+What this fork changes relative to [nilbuild/diffity](https://github.com/nilbuild/diffity).
+
+**This is no longer aimed at upstream.** Decided 2026-08-28: upstream has pull requests sitting
+uncommented since May, and this fork has diverged past the point where a pointed patch would still
+apply — the review loop, the live agent protocol, session carry-forward and the idle lifecycle are
+all ours. The record below stays because it explains where the code came from and why the
+arrangement is what it is, not because anything is queued to be offered.
+
+What that changes in practice: keeping a thing because it might be upstreamable is no longer a
+reason. Judge it on whether this fork uses it.
 
 ## How this fork is arranged
 
@@ -21,8 +29,8 @@ of it can be extracted as a pointed upstream pull request later.
 Everything up to and including PR #24 was merged with merge commits, before this arrangement — that
 part of the history is mixed, and those branches still exist.
 
-Nothing here is NaturalCycles-specific — all of it is upstreamable as-is. When that changes,
-fork-local work goes in its own section below so it never lands in an upstream patch by accident.
+The `Fork-local` section below predates the decision above; with upstream retired the distinction
+it drew no longer does any work.
 
 ## Upstream pull requests merged in
 
@@ -42,7 +50,7 @@ Merged unmodified, so they can simply be dropped once upstream lands them.
 same `--no-ext-diff` more broadly, and the two call sites #21 additionally covered are handled in
 our own change on #3.
 
-## Ours, offerable upstream
+## Ours (was: offerable upstream)
 
 | Fork PR | Branch | Base | What | Notes for upstreaming |
 | --- | --- | --- | --- | --- |
