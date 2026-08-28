@@ -12,6 +12,7 @@ import { dirname } from 'node:path';
 import { parseDiff, type ParsedDiff } from '@diffity/parser';
 import type {
   ClaimResponse,
+  ReviewSession,
   DiffFileResponse,
   DiffFingerprint,
   DiffResponse,
@@ -415,6 +416,18 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
         if (pathname === '/api/viewer/gone' && req.method === 'POST') {
           markViewerGone();
           sendJson(res, { ok: true });
+          return;
+        }
+
+        // The agent asks here instead of reading the shared current-session file, which any
+        // tab's info poll rewrites. Ensuring is deliberate: an agent arriving after a commit
+        // needs the carry-forward that findOrCreateSession performs.
+        if (pathname === '/api/sessions/ensure' && req.method === 'POST') {
+          if (!effectiveRef) {
+            sendError(res, 400, 'This server has no review ref');
+            return;
+          }
+          sendJson(res, findOrCreateSession(effectiveRef) satisfies ReviewSession);
           return;
         }
 

@@ -346,6 +346,23 @@ export function resolveSessionId(sessionId: string | null | undefined): string {
   return newest?.id ?? sessionId;
 }
 
+/** A session by its id, or the 8-char prefix every other id in the CLI accepts. */
+export function getSessionById(idOrPrefix: string): Session | null {
+  let row = queryOne<{ id: string; ref: string; head_hash: string }>(
+    'SELECT id, ref, head_hash FROM review_sessions WHERE id = ?',
+    idOrPrefix,
+  );
+
+  if (!row && idOrPrefix.length >= 8) {
+    row = queryOne<{ id: string; ref: string; head_hash: string }>(
+      'SELECT id, ref, head_hash FROM review_sessions WHERE id LIKE ?',
+      idOrPrefix + '%',
+    );
+  }
+
+  return row ? { id: row.id, ref: row.ref, headHash: row.head_hash } : null;
+}
+
 export function getCurrentSession(): Session | null {
   try {
     const raw = readFileSync(sessionFilePath(), 'utf-8');
