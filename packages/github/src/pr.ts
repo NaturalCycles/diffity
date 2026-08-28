@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { gh } from './exec.js';
+import { matchCreatedComments, type CreatedComment, type SentComment } from './comment-ids.js';
 import type { PrComment, PulledThread, ReviewResult, ReviewSubmission } from './types.js';
 import { commentableLines, isAlreadyCommented } from './comment-targets.js';
 
@@ -58,6 +59,8 @@ export interface RemoteThreadState {
   endLine: number | null;
   body: string;
   isResolved: boolean;
+  /** The forge's id for the thread's first comment, the exact identity when we recorded one. */
+  firstCommentId: number | null;
 }
 
 const REVIEW_THREADS_QUERY = `query($owner:String!,$repo:String!,$number:Int!){
@@ -70,7 +73,7 @@ const REVIEW_THREADS_QUERY = `query($owner:String!,$repo:String!,$number:Int!){
           originalLine
           diffSide
           path
-          comments(first:1){ nodes{ body } }
+          comments(first:1){ nodes{ body databaseId } }
         }
       }
     }
@@ -106,15 +109,16 @@ export function pullThreadState(owner: string, repo: string, prNumber: number): 
     const nodes = data.data?.repository?.pullRequest?.reviewThreads?.nodes ?? [];
 
     return nodes.flatMap(node => {
-      const body = node.comments?.nodes?.[0]?.body;
-      if (!body || !node.path) return [];
+      const first = node.comments?.nodes?.[0];
+      if (!first?.body || !node.path) return [];
       return [{
         filePath: node.path,
         side: node.diffSide === 'LEFT' ? 'old' as const : 'new' as const,
         // Null once the thread goes outdated, which is why it is not part of the identity.
         endLine: node.line ?? node.originalLine ?? null,
-        body,
+        body: first.body,
         isResolved: !!node.isResolved,
+        firstCommentId: first.databaseId ?? null,
       }];
     });
   } catch {
@@ -128,7 +132,7 @@ interface RawReviewThread {
   originalLine: number | null;
   diffSide: string;
   path: string;
-  comments?: { nodes?: { body: string }[] };
+  comments?: { nodes?: { body: string; databaseId?: number | null }[] };
 }
 
 export function pullComments(owner: string, repo: string, prNumber: number): PulledThread[] {
@@ -164,6 +168,7 @@ export function pullComments(owner: string, repo: string, prNumber: number): Pul
         side: root.side === 'LEFT' ? 'old' as const : 'new' as const,
         startLine: root.start_line ?? root.line,
         endLine: root.line,
+        firstCommentId: root.id,
         comments: allComments.map(c => ({
           body: c.body,
           authorName: c.user.login,
@@ -223,6 +228,7 @@ export function createReview(
   const errors: string[] = [];
   const comments: ReviewCommentPayload[] = [];
   const sentThreadIds: string[] = [];
+  const sentForIds: SentComment[] = [];
   let skipped = 0;
 
   for (const comment of submission.comments) {
@@ -246,6 +252,7 @@ export function createReview(
     comments.push(toReviewComment(comment));
     if (comment.threadId) {
       sentThreadIds.push(comment.threadId);
+      sentForIds.push({ threadId: comment.threadId, path: comment.filePath, body: comment.body });
     }
   }
 
@@ -253,7 +260,7 @@ export function createReview(
   const body = submission.body.trim();
 
   if (comments.length === 0 && !body && submission.event === 'COMMENT') {
-    return { submitted: 0, submittedThreadIds: [], skipped, failed: dropped, errors, reviewUrl: null };
+    return { submitted: 0, submittedThreadIds: [], commentIds: [], skipped, failed: dropped, errors, reviewUrl: null };
   }
 
   try {
@@ -266,10 +273,12 @@ export function createReview(
         stdio: 'pipe',
       },
     );
-    const review = JSON.parse(raw) as { html_url?: string };
+    const review = JSON.parse(raw) as { html_url?: string; id?: number };
+    const created = review.id ? getReviewCommentIds(owner, repo, prNumber, review.id) : [];
     return {
       submitted: comments.length,
       submittedThreadIds: sentThreadIds,
+      commentIds: matchCreatedComments(sentForIds, created),
       skipped,
       failed: dropped,
       errors,
@@ -281,6 +290,7 @@ export function createReview(
     return {
       submitted: 0,
       submittedThreadIds: [],
+      commentIds: [],
       skipped,
       failed: dropped + comments.length,
       errors: [...errors, ghLine ? ghLine.trim() : 'GitHub rejected the review'],
@@ -297,6 +307,27 @@ export function createReview(
  * by several commits appears several times, and only the last one survives being collected, so
  * whether a comment was allowed depended on which commit happened to touch that line last.
  */
+/**
+ * The ids the forge gave the comments of one just-posted review. Failing to learn them is not
+ * failing the submit: a thread without an id is still recognised by its sent wording.
+ */
+function getReviewCommentIds(owner: string, repo: string, prNumber: number, reviewId: number): CreatedComment[] {
+  try {
+    const json = gh([
+      'api',
+      `repos/${owner}/${repo}/pulls/${prNumber}/reviews/${reviewId}/comments`,
+      '--paginate',
+    ]);
+    const data = json ? JSON.parse(json) : [];
+    if (!Array.isArray(data)) {
+      return [];
+    }
+    return data.map((c: { id: number; path: string; body: string }) => ({ id: c.id, path: c.path, body: c.body }));
+  } catch {
+    return [];
+  }
+}
+
 function getPatch(owner: string, repo: string, prNumber: number): string {
   try {
     return execFileSync('gh', ['pr', 'diff', String(prNumber), '--repo', `${owner}/${repo}`], {

@@ -36,6 +36,25 @@ async function newThread(body: string) {
 }
 
 describe('a thread that has been sent to the forge', () => {
+  it('records the forge comment id it went out as', async () => {
+    const { markThreadsSubmitted, getThread } = await import('../src/threads.js');
+    const thread = await newThread('P2: sent with an id');
+
+    markThreadsSubmitted([{ threadId: thread.id, githubCommentId: 900 }]);
+
+    expect(getThread(thread.id)?.githubCommentId).toBe(900);
+  });
+
+  it('keeps the recorded id when a later submit learns none', async () => {
+    const { markThreadsSubmitted, getThread } = await import('../src/threads.js');
+    const thread = await newThread('P2: sent twice');
+
+    markThreadsSubmitted([{ threadId: thread.id, githubCommentId: 900 }]);
+    markThreadsSubmitted([thread.id]);
+
+    expect(getThread(thread.id)?.githubCommentId).toBe(900);
+  });
+
   it('starts out unsent', async () => {
     const thread = await newThread('P2: not sent yet');
 

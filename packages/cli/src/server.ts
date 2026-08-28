@@ -70,7 +70,8 @@ import { computeDiffFingerprint } from './fingerprint.js';
 import { parseDiffStatFiles } from './diff-stat.js';
 import { parseDiffStatSummary } from './diff-stat.js';
 import { getReviewRun } from './review-run.js';
-import { createThread, addReply, getThreadsForSession, markThreadsSubmitted, updateThreadStatus } from './threads.js';
+import { createThread, addReply, getThreadsForSession, markThreadsSubmitted, setThreadForgeComment, updateThreadStatus } from './threads.js';
+import { existingThreadFor } from './github-pull.js';
 import { threadsResolvedRemotely } from './github-resolution.js';
 import { noteViewerSeen, markViewerGone, viewerSnapshot, viewerIsPresent, viewerHasGone, awakeMs, VIEWER_POLL_MS } from './viewers.js';
 import { sinceLastWait } from './live-events.js';
@@ -741,8 +742,13 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             { event, body: summary, comments },
           );
           const sentBodies = new Map(comments.map(comment => [comment.threadId, comment.body]));
+          const forgeIds = new Map(result.commentIds.map(entry => [entry.threadId, entry.githubCommentId]));
           markThreadsSubmitted(
-            result.submittedThreadIds.map(threadId => ({ threadId, body: sentBodies.get(threadId) })),
+            result.submittedThreadIds.map(threadId => ({
+              threadId,
+              body: sentBodies.get(threadId),
+              githubCommentId: forgeIds.get(threadId),
+            })),
             {
               reviewUrl: result.reviewUrl,
               headSha: details.headSha,
@@ -792,21 +798,21 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           let skipped = 0;
           for (const rt of remoteThreads) {
             const firstComment = rt.comments[0];
-            const alreadyExists = localThreads.some(t =>
-              t.filePath === rt.filePath &&
-              t.side === rt.side &&
-              t.startLine === rt.startLine &&
-              t.endLine === rt.endLine &&
-              t.comments.some(c => c.body === firstComment.body),
-            );
-            if (alreadyExists) {
+            const existing = existingThreadFor(localThreads, rt);
+            if (existing) {
               skipped++;
+              // A thread sent before ids were recorded is recognised by wording once more, and
+              // from then on by id.
+              if (existing.githubCommentId == null) {
+                setThreadForgeComment(existing.id, rt.firstCommentId);
+              }
               continue;
             }
             const thread = createThread(sid, rt.filePath, rt.side, rt.startLine, rt.endLine, firstComment.body, {
               name: firstComment.authorName,
               type: firstComment.authorType,
             });
+            setThreadForgeComment(thread.id, rt.firstCommentId);
             for (let i = 1; i < rt.comments.length; i++) {
               const reply = rt.comments[i];
               addReply(thread.id, reply.body, {

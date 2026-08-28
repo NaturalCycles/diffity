@@ -152,6 +152,9 @@ function migrateDb(db: DatabaseSync): void {
   // The wording that went out. Amending a finding rewrites its body in place, so without this there
   // is nothing left to recognise the forge's copy of it by.
   addColumn(db, 'comment_threads', 'submitted_body', 'TEXT');
+  // The forge's own id for the comment a finding went out as. Wording is a heuristic; this is the
+  // identity, so resolution sync and pull dedupe stop depending on text nobody may amend.
+  addColumn(db, 'comment_threads', 'github_comment_id', 'INTEGER');
   // When an agent last finished waiting on this session, so it can be told what happened while it
   // was parked. Nothing wakes an agent for a submit, and it needs to know one happened.
   addColumn(db, 'review_sessions', 'agent_seen_at', 'TEXT');

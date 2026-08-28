@@ -50,6 +50,8 @@ export interface ReviewResult {
   submitted: number;
   /** The findings that actually left the machine, which is not every one that was offered. */
   submittedThreadIds: string[];
+  /** The forge's id for each comment it created, so a finding can be recognised by id later. */
+  commentIds: { threadId: string; githubCommentId: number }[];
   skipped: number;
   failed: number;
   errors: string[];

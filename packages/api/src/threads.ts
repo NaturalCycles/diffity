@@ -50,5 +50,7 @@ export interface CommentThread {
   submittedHeadSha: string | null;
   /** The body as it was sent, which an amendment here does not change. */
   submittedBody: string | null;
+  /** The forge's id for the comment this finding went out as, or null while it has none. */
+  githubCommentId: number | null;
   comments: Comment[];
 }
