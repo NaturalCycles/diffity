@@ -35,7 +35,7 @@ diffity list --json
 
 ## Prerequisites
 
-1. Check that `diffity` is available: run `which diffity`. If not found, install it with `npm install -g diffity`.
+1. Check that `diffity` is available: run `which diffity`. If not found, install it with `npm install -g @naturalcycles/diffity` and run `diffity skills install`.
 2. **If the argument is a GitHub PR URL**:
    - Check `gh` is installed and authenticated: run `gh auth status`. If not authenticated, stop and ask the user to run `gh auth login`.
    - Verify the current repo matches the PR's repo: run `gh repo view --json nameWithOwner -q .nameWithOwner` and confirm it matches the `owner/repo` in the URL. If it doesn't, stop and tell the user they need to be inside the PR's repository clone — diffity can't tour a PR for a repo you don't have checked out.

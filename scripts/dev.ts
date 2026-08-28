@@ -39,7 +39,7 @@ concurrently(
     { command: 'npm run dev -w @diffity/api', name: 'api' },
     { command: 'npm run dev -w @diffity/git', name: 'git' },
     { command: 'npm run dev -w @diffity/github', name: 'github' },
-    { command: 'npm run dev:watch -w diffity', name: 'cli' },
+    { command: 'npm run dev:watch -w @naturalcycles/diffity', name: 'cli' },
     // `vite build --watch` instead of `vite dev` so the output lands in dist/ui
     // where the CLI server can serve it. `vite dev` only serves from memory.
     { command: 'npx -w @diffity/ui vite build --watch', name: 'ui' },

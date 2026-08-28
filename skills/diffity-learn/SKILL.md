@@ -68,7 +68,7 @@ Diffity provides the visual layer for learning:
 
 ## Prerequisites
 
-1. Check that `diffity` is available: run `which diffity`. If not found, install it with `npm install -g diffity`.
+1. Check that `diffity` is available: run `which diffity`. If not found, install it with `npm install -g @naturalcycles/diffity` and run `diffity skills install`.
 2. Ensure a tree instance is running for the learning directory: run `diffity list --json`.
    - If no instance is running, start one: run `diffity tree --no-open` from the learning directory using the Bash tool with `run_in_background: true`, wait 2 seconds, then run `diffity list --json` to get the port.
 

@@ -8,7 +8,7 @@ const distDir = join(__dirname, 'dist');
 const isWatch = process.argv.includes('--watch');
 
 for (const entry of readdirSync(distDir)) {
-  if (entry === 'ui') {
+  if (entry === 'ui' || entry === 'skills') {
     continue;
   }
   const fullPath = join(distDir, entry);

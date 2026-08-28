@@ -8,14 +8,14 @@ export function registerUpdateCommand(program: Command, version: string, skillsH
     .description('Update diffity to the latest version')
     .action(() => {
       try {
-        const registry = execSync('npm view diffity version', { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+        const registry = execSync('npm view @naturalcycles/diffity version', { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
         if (registry === version) {
           console.log(pc.green(`Already on the latest version (${version}).`));
           return;
         }
         console.log(`${pc.dim(`Current: ${version}`)} → ${pc.bold(registry)}`);
         console.log(pc.dim('Updating...'));
-        execSync('npm install -g --ignore-scripts diffity@latest', { stdio: 'inherit' });
+        execSync('npm install -g --ignore-scripts @naturalcycles/diffity@latest', { stdio: 'inherit' });
         console.log(pc.green(`Updated to ${registry}.`));
 
         try {
@@ -23,11 +23,11 @@ export function registerUpdateCommand(program: Command, version: string, skillsH
           if (newHash !== skillsHash) {
             console.log('');
             console.log(pc.yellow('Skills have changed in this release. Update them with:'));
-            console.log(`  ${pc.cyan('npx skills add kamranahmedse/diffity')}`);
+            console.log(`  ${pc.cyan('diffity skills install')}`);
           }
         } catch {}
       } catch {
-        console.error(pc.red('Failed to update. Try running: npm install -g --ignore-scripts diffity@latest'));
+        console.error(pc.red('Failed to update. Try running: npm install -g --ignore-scripts @naturalcycles/diffity@latest'));
         process.exit(1);
       }
     });

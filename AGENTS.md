@@ -18,8 +18,8 @@ npx tsx scripts/release.ts patch --no-git   # or: minor
 `develop` takes squash merges the commit is rewritten on the way in and the tag is left pointing at
 a commit that never lands.
 
-Do not use the `release:patch` / `release:minor` npm scripts for this. They publish to npm, which
-is a separate decision and, in this fork, one that is not ours to make.
+There are no npm publish scripts: publishing `@naturalcycles/diffity` is a deliberate, separate
+step (issue #60 gives it to CI on merges to develop).
 
 A pull request that changes nothing a user could observe — a test, a comment, a rename — does not
 need a bump. Everything else does.

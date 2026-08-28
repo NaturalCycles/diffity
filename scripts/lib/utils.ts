@@ -45,7 +45,7 @@ export function readSkills(sourceDir: string): Skill[] {
 
 export function renderSkill(skill: Skill, { binary, namePrefix, slashPrefix, installHint }: TransformOptions): string {
   const slash = slashPrefix ?? '/diffity-';
-  const hint = installHint ?? 'install it with `npm install -g diffity`';
+  const hint = installHint ?? 'install it with `npm install -g @naturalcycles/diffity` and run `diffity skills install`';
   const body = skill.content
     .replaceAll('{{binary}}', binary)
     .replaceAll('{{slash}}', slash)

@@ -108,7 +108,7 @@ npm run build
 npm run build -w @diffity/parser
 npm run build -w @diffity/git
 npm run build -w @diffity/ui
-npm run build -w diffity
+npm run build -w @naturalcycles/diffity
 ```
 
 ## Testing
