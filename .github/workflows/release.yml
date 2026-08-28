@@ -1,0 +1,71 @@
+name: release
+
+on:
+  push:
+    branches: [develop]
+
+# One release at a time, in merge order — two develop pushes must not race a publish.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # HEAD^ is what this merge is judged against.
+          fetch-depth: 2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - name: Decide whether this version needs publishing
+        id: decide
+        run: |
+          VERSION=$(node -p "require('./packages/cli/package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          PUBLISHED=$(npm view "@naturalcycles/diffity@$VERSION" version 2>/dev/null || true)
+          if [ "$PUBLISHED" != "$VERSION" ]; then
+            echo "publish=yes" >> "$GITHUB_OUTPUT"
+            echo "Version $VERSION is not on npm — publishing."
+            exit 0
+          fi
+          echo "publish=no" >> "$GITHUB_OUTPUT"
+          # Already published. A merge that changed what a user gets must have re-bumped —
+          # this is the parallel-branch gap: two branches bump to the same number, the second
+          # to land would otherwise ship nothing, silently.
+          CHANGED=$(git diff --name-only HEAD^ HEAD -- 'packages/*/src' 'packages/skills' 'skills')
+          if [ -n "$CHANGED" ]; then
+            echo "::error::$VERSION is already on npm, but this merge changed shipped code. Re-bump the version (npx tsx scripts/release.ts patch --no-git) and merge again."
+            echo "$CHANGED"
+            exit 1
+          fi
+          echo "Version $VERSION already published and nothing shipped changed — nothing to do."
+
+      - if: steps.decide.outputs.publish == 'yes'
+        run: npm ci
+      - if: steps.decide.outputs.publish == 'yes'
+        run: npm run build
+      - if: steps.decide.outputs.publish == 'yes'
+        run: npm test
+      - if: steps.decide.outputs.publish == 'yes'
+        run: npm publish -w @naturalcycles/diffity --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - if: steps.decide.outputs.publish == 'yes'
+        name: Tag and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=${{ steps.decide.outputs.version }}
+          git tag "v$VERSION"
+          git push origin "v$VERSION"
+          gh release create "v$VERSION" --generate-notes --title "v$VERSION"

@@ -18,8 +18,12 @@ npx tsx scripts/release.ts patch --no-git   # or: minor
 `develop` takes squash merges the commit is rewritten on the way in and the tag is left pointing at
 a commit that never lands.
 
-There are no npm publish scripts: publishing `@naturalcycles/diffity` is a deliberate, separate
-step (issue #60 gives it to CI on merges to develop).
+There are no npm publish scripts: every merge to develop whose version is not yet on npm is
+published by `.github/workflows/release.yml`, with a `v<version>` tag and a GitHub release. The
+workflow needs the `NPM_TOKEN` secret (publish rights on the `@naturalcycles` scope).
 
-A pull request that changes nothing a user could observe — a test, a comment, a rename — does not
-need a bump. Everything else does.
+Bump in every pull request that touches `packages/*/src`, `packages/skills` or `skills`. The
+release workflow enforces it: a merge to develop whose version is already on npm and whose diff
+touched those paths fails, which is what catches two parallel branches bumping to the same number —
+the second to land would otherwise ship nothing, silently. A comment-only source change trips the
+same wire; bump anyway, a patch number costs nothing.
