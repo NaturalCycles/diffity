@@ -1,34 +1,8 @@
+import type { LiveRequest } from '@diffity/api';
 import { getDb, queryOne } from './db.js';
 import { normaliseIntent, type LiveIntent } from './live-intent.js';
 
-/**
- * A question or an instruction the reader left for the agent, taken from the comment it was written
- * as. The request is the comment: a separate queue would be a second thing to keep in step with the
- * thread it belongs to, and would not survive a commit the way a comment does.
- */
-export interface LiveRequest {
-  commentId: string;
-  threadId: string;
-  body: string;
-  authorName: string;
-  filePath: string;
-  side: string;
-  startLine: number;
-  endLine: number;
-  /**
-   * The finding the aside is about, so the agent can answer without another lookup. Null when the
-   * thread has no finding — asking about a line nobody had commented on starts one of those, and
-   * handing the question back as its own subject would be nonsense.
-   */
-  findingBody: string | null;
-  /**
-   * Whether the agent may edit code for this request. Derived from who wrote the pull request, and
-   * filled in by the route that hands the request over.
-   */
-  mayChangeCode?: boolean;
-  /** What the reader pressed. A question must not turn into an edit. */
-  intent: LiveIntent;
-}
+export type { LiveRequest } from '@diffity/api';
 
 export interface LiveRequestStamp {
   /** Who should be woken for it. */

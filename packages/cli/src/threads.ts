@@ -1,45 +1,24 @@
 import { randomUUID } from 'node:crypto';
+import type {
+  Comment,
+  CommentAuthor,
+  CommentKind,
+  CommentSide,
+  CommentThread,
+  LiveIntent,
+  ThreadStatus,
+} from '@diffity/api';
 import { getDb, queryAll, queryOne } from './db.js';
+import { normaliseIntent } from './live-intent.js';
 
-export interface ThreadAuthor {
-  name: string;
-  type: 'user' | 'agent';
-}
+export type { CommentKind, ThreadStatus } from '@diffity/api';
+export type ThreadAuthor = CommentAuthor;
+export type ThreadComment = Comment;
+export type Thread = CommentThread;
 
-export type CommentKind = 'review' | 'aside';
-
-export interface ThreadComment {
-  id: string;
-  author: ThreadAuthor;
-  body: string;
-  kind: CommentKind;
-  createdAt: string;
-  liveRequestedAt: string | null;
-  liveIntent: string | null;
-  liveClaimedAt: string | null;
-  liveAnsweredAt: string | null;
-}
-
-export type ThreadStatus = 'open' | 'resolved' | 'dismissed';
-
-export interface Thread {
-  id: string;
-  sessionId: string;
-  filePath: string;
-  side: string;
-  startLine: number;
-  endLine: number;
-  status: ThreadStatus;
-  anchorContent: string | null;
-  createdAt: string;
-  updatedAt: string;
-  /** When this finding was last sent to the forge, or null while it has never left the machine. */
-  submittedAt: string | null;
-  submittedReviewUrl: string | null;
-  submittedHeadSha: string | null;
-  /** The body as it was sent, which an amendment here does not change. */
-  submittedBody: string | null;
-  comments: ThreadComment[];
+/** The wire carries only real intents; anything an old row holds is read as a question. */
+function intentOrNull(value: string | null | undefined): LiveIntent | null {
+  return value == null ? null : normaliseIntent(value);
 }
 
 interface ThreadRow {
@@ -78,7 +57,7 @@ function rowToThread(row: ThreadRow, comments: ThreadComment[]): Thread {
     id: row.id,
     sessionId: row.session_id,
     filePath: row.file_path,
-    side: row.side,
+    side: row.side as CommentSide,
     startLine: row.start_line,
     endLine: row.end_line,
     status: row.status as ThreadStatus,
@@ -101,7 +80,7 @@ function rowToComment(row: CommentRow): ThreadComment {
     kind: (row.kind as CommentKind | null) ?? 'review',
     createdAt: row.created_at,
     liveRequestedAt: row.live_requested_at ?? null,
-    liveIntent: row.live_intent ?? null,
+    liveIntent: intentOrNull(row.live_intent),
     liveClaimedAt: row.live_claimed_at ?? null,
     liveAnsweredAt: row.live_answered_at ?? null,
   };
@@ -178,7 +157,7 @@ export function updateThreadLines(threadId: string, startLine: number, endLine: 
 export function createThread(
   sessionId: string,
   filePath: string,
-  side: string,
+  side: CommentSide,
   startLine: number,
   endLine: number,
   body: string,
@@ -277,7 +256,7 @@ export function getThreadsForSession(sessionId: string, status?: ThreadStatus): 
         kind: (row.c_kind as CommentKind | null) ?? 'review',
         createdAt: row.c_created_at!,
         liveRequestedAt: row.c_live_requested_at ?? null,
-        liveIntent: row.c_live_intent ?? null,
+        liveIntent: intentOrNull(row.c_live_intent),
         liveClaimedAt: row.c_live_claimed_at ?? null,
         liveAnsweredAt: row.c_live_answered_at ?? null,
       });

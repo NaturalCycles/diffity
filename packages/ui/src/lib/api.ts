@@ -1,11 +1,46 @@
-import type { DiffFile, ParsedDiff } from '@diffity/parser';
-import type { CommentThread, CommentAuthor, CommentSide, Comment, CommentKind } from '../components/comments/types';
+import type {
+  Comment,
+  CommentAuthor,
+  CommentKind,
+  CommentSide,
+  CommentThread,
+  DiffFileResponse,
+  DiffFingerprint,
+  DiffResponse,
+  FileContentResponse,
+  GitHubDetails,
+  PullCommentsResult,
+  RepoInfoResponse,
+  ReviewResult,
+  ReviewSession,
+  ReviewSubmission,
+  Tour,
+  TreeEntriesResponse,
+  TreeFingerprintResponse,
+  TreePathsResponse,
+} from '@diffity/api';
+import type { DiffFile } from '@diffity/parser';
+
+export type {
+  DiffResponse,
+  GitHubDetails,
+  GitHubRemote,
+  PrComment,
+  PrReview,
+  RepoInfoResponse,
+  ReviewEvent,
+  ReviewResult,
+  ReviewRun,
+  Suppressed,
+  Tour,
+  TourStep,
+  TreeEntry,
+} from '@diffity/api';
 
 export async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
   if (!res.ok) {
-    const json = await res.json().catch(() => null);
-    throw new Error(json?.error || `HTTP ${res.status}`);
+    throw new Error(await errorMessage(res));
   }
   return res.json();
 }
@@ -13,9 +48,13 @@ export async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
 async function apiVoid(url: string, init?: RequestInit): Promise<void> {
   const res = await fetch(url, init);
   if (!res.ok) {
-    const json = await res.json().catch(() => null);
-    throw new Error(json?.error || `HTTP ${res.status}`);
+    throw new Error(await errorMessage(res));
   }
+}
+
+async function errorMessage(res: Response): Promise<string> {
+  const json = (await res.json().catch(() => null)) as { error?: string } | null;
+  return json?.error || `HTTP ${res.status}`;
 }
 
 function buildUrl(path: string, params?: Record<string, string | undefined>): string {
@@ -32,56 +71,7 @@ function buildUrl(path: string, params?: Record<string, string | undefined>): st
   return query ? `${path}?${query}` : path;
 }
 
-export interface GitHubRemote {
-  owner: string;
-  repo: string;
-}
-
-export interface Suppressed {
-  files: number;
-  lines: number;
-}
-
-export interface PrReview {
-  author: string;
-  isBot: boolean;
-  state: string;
-  body: string;
-  submittedAt: string;
-}
-
-export interface GitHubDetails {
-  prNumber: number;
-  prTitle: string;
-  prAuthor: string;
-  prUrl: string;
-  prCreatedAt: string;
-  headSha: string;
-  commentCount: number;
-  viewerDidAuthor: boolean;
-  prBody: string;
-  reviews: PrReview[];
-}
-
-export interface ReviewRun {
-  inProgress: boolean;
-  startedAt: string | null;
-  note: string;
-}
-
-export interface RepoInfo {
-  name: string;
-  branch: string;
-  root: string;
-  description: string;
-  capabilities?: { reviews: boolean; revert: boolean; staleness: boolean };
-  sessionId?: string | null;
-  github?: GitHubRemote | null;
-  editor?: 'vscode' | null;
-  review?: ReviewRun | null;
-}
-
-export function fetchDiff(hideWhitespace: boolean, ref?: string): Promise<ParsedDiff> {
+export function fetchDiff(hideWhitespace: boolean, ref?: string): Promise<DiffResponse> {
   return apiFetch(buildUrl('/api/diff', {
     whitespace: hideWhitespace ? 'hide' : undefined,
     ref,
@@ -93,16 +83,10 @@ export async function fetchDiffFile(
   hideWhitespace: boolean,
   ref?: string,
 ): Promise<DiffFile | null> {
-  const json = await apiFetch<{ file: DiffFile | null }>(
+  const json = await apiFetch<DiffFileResponse>(
     buildUrl('/api/diff/file', { path, ref, whitespace: hideWhitespace ? 'hide' : undefined }),
   );
   return json.file;
-}
-
-export interface DiffFingerprint {
-  fingerprint: string;
-  /** Each file against its own churn, so the page can say which ones moved. */
-  files: Record<string, string>;
 }
 
 export async function fetchDiffFingerprint(ref?: string): Promise<DiffFingerprint> {
@@ -110,7 +94,7 @@ export async function fetchDiffFingerprint(ref?: string): Promise<DiffFingerprin
   return { fingerprint: json.fingerprint, files: json.files ?? {} };
 }
 
-export function fetchRepoInfo(ref?: string): Promise<RepoInfo> {
+export function fetchRepoInfo(ref?: string): Promise<RepoInfoResponse> {
   return apiFetch(buildUrl('/api/info', { ref }));
 }
 
@@ -124,7 +108,7 @@ export function openInEditor(filePath: string, line?: number): Promise<{ ok: boo
 
 
 
-export async function fetchSession(): Promise<{ id: string; ref: string; headHash: string } | null> {
+export async function fetchSession(): Promise<ReviewSession | null> {
   const res = await fetch('/api/sessions/current');
   if (!res.ok) {
     return null;
@@ -240,19 +224,10 @@ export function revertHunk(patch: string): Promise<void> {
 }
 
 export async function fetchFileContent(filePath: string, ref?: string): Promise<string[]> {
-  const json = await apiFetch<{ content: string[] }>(
+  const json = await apiFetch<FileContentResponse>(
     buildUrl(`/api/file/${encodeURIComponent(filePath)}`, { ref }),
   );
   return json.content;
-}
-
-export interface PrCommentPayload {
-  threadId?: string;
-  filePath: string;
-  side: 'LEFT' | 'RIGHT';
-  startLine: number | null;
-  endLine: number;
-  body: string;
 }
 
 export async function fetchGitHubDetails(): Promise<GitHubDetails | null> {
@@ -263,34 +238,12 @@ export async function fetchGitHubDetails(): Promise<GitHubDetails | null> {
   return res.json();
 }
 
-export type ReviewEvent = 'COMMENT' | 'APPROVE' | 'REQUEST_CHANGES';
-
-export interface CreateReviewResult {
-  submitted: number;
-  submittedThreadIds: string[];
-  skipped: number;
-  failed: number;
-  errors: string[];
-  reviewUrl: string | null;
-}
-
-export function createReviewOnGitHub(review: {
-  event: ReviewEvent;
-  body: string;
-  comments: PrCommentPayload[];
-}): Promise<CreateReviewResult> {
+export function createReviewOnGitHub(review: ReviewSubmission): Promise<ReviewResult> {
   return apiFetch('/api/github/create-review', {
     method: 'POST',
     headers: JSON_HEADERS,
     body: JSON.stringify(review),
   });
-}
-
-export interface PullCommentsResult {
-  pulled: number;
-  resolved: number;
-  resolutionUnavailable?: boolean;
-  skipped: number;
 }
 
 export function pullCommentsFromGitHub(sessionId: string): Promise<PullCommentsResult> {
@@ -301,28 +254,6 @@ export function pullCommentsFromGitHub(sessionId: string): Promise<PullCommentsR
   });
 }
 
-export interface TourStep {
-  id: string;
-  tourId: string;
-  sortOrder: number;
-  filePath: string;
-  startLine: number;
-  endLine: number;
-  body: string;
-  annotation: string;
-  createdAt: string;
-}
-
-export interface Tour {
-  id: string;
-  sessionId: string;
-  topic: string;
-  body: string;
-  status: string;
-  createdAt: string;
-  steps: TourStep[];
-}
-
 export function fetchTour(tourId: string): Promise<Tour> {
   return apiFetch(`/api/tours/${tourId}`);
 }
@@ -331,31 +262,25 @@ export function fetchTours(sessionId: string): Promise<Tour[]> {
   return apiFetch(`/api/tours?session=${encodeURIComponent(sessionId)}`);
 }
 
-export interface TreeEntryResponse {
-  type: 'blob' | 'tree';
-  path: string;
-  name: string;
-}
-
-export function fetchTreePaths(): Promise<{ paths: string[] }> {
+export function fetchTreePaths(): Promise<TreePathsResponse> {
   return apiFetch('/api/tree');
 }
 
-export function fetchTreeEntries(dirPath?: string): Promise<{ entries: TreeEntryResponse[] }> {
+export function fetchTreeEntries(dirPath?: string): Promise<TreeEntriesResponse> {
   return apiFetch(buildUrl('/api/tree/entries', { path: dirPath }));
 }
 
-export function fetchTreeInfo(): Promise<RepoInfo> {
+export function fetchTreeInfo(): Promise<RepoInfoResponse> {
   return apiFetch('/api/tree/info');
 }
 
 export async function fetchTreeFingerprint(): Promise<string> {
-  const json = await apiFetch<{ fingerprint: string }>('/api/tree/fingerprint');
+  const json = await apiFetch<TreeFingerprintResponse>('/api/tree/fingerprint');
   return json.fingerprint;
 }
 
 export async function fetchTreeFileContent(filePath: string): Promise<string[]> {
-  const json = await apiFetch<{ content: string[] }>(
+  const json = await apiFetch<FileContentResponse>(
     `/api/tree/file/${encodeURIComponent(filePath)}`,
   );
   return json.content;

@@ -8,6 +8,7 @@ const root = resolve(__dirname, '..');
 const lockPath = resolve(root, 'package-lock.json');
 
 const packagePaths = [
+  'packages/api',
   'packages/cli',
   'packages/git',
   'packages/github',

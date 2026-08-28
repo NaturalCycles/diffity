@@ -7,23 +7,15 @@ import {
   threadToPayload,
 } from '../src/lib/review-submission';
 import { GENERAL_THREAD_FILE_PATH } from '../src/components/comments/types';
-import type { CommentThread, ThreadStatus } from '../src/components/comments/types';
+import type { CommentThread } from '../src/components/comments/types';
+import { makeComment, makeThread } from './helpers/wire';
 
 function comment(body: string, name = 'You') {
-  return { id: body, author: { name, type: 'user' as const }, body, createdAt: '2026-08-21T10:00:00.000Z' };
+  return makeComment({ id: body, author: { name, type: 'user' }, body, createdAt: '2026-08-21T10:00:00.000Z' });
 }
 
 function thread(overrides: Partial<CommentThread> = {}): CommentThread {
-  return {
-    id: 't1',
-    filePath: 'src/a.ts',
-    side: 'new',
-    startLine: 10,
-    endLine: 10,
-    comments: [comment('P1: missing null check')],
-    status: 'open' as ThreadStatus,
-    ...overrides,
-  };
+  return makeThread({ comments: [comment('P1: missing null check')], ...overrides });
 }
 
 describe('threadToPayload', () => {
@@ -158,25 +150,17 @@ describe('canSubmitReview', () => {
 
 describe('what a thread sends to the forge', () => {
   function withComments(comments: { body: string; kind?: 'review' | 'aside'; name?: string }[]): CommentThread {
-    return {
-      id: 't1',
-      sessionId: 's',
-      filePath: 'src/a.ts',
-      side: 'new',
-      startLine: 10,
-      endLine: 10,
-      status: 'open',
+    return makeThread({
       createdAt: '2026-08-24T10:00:00.000Z',
       updatedAt: '2026-08-24T10:00:00.000Z',
-      comments: comments.map((c, i) => ({
+      comments: comments.map((c, i) => makeComment({
         id: `c${i}`,
-        threadId: 't1',
         body: c.body,
         kind: c.kind ?? 'review',
         author: { name: c.name ?? 'Agent', type: 'agent' },
         createdAt: '2026-08-24T10:00:00.000Z',
       })),
-    } as unknown as CommentThread;
+    });
   }
 
   it('sends the finding and nothing else', () => {
@@ -232,25 +216,20 @@ describe('what a thread sends to the forge', () => {
 
 describe('a thread that is only a conversation', () => {
   function askOnly(): CommentThread {
-    return {
+    return makeThread({
       id: 't2',
-      sessionId: 's',
-      filePath: 'src/a.ts',
-      side: 'new',
       startLine: 4,
       endLine: 4,
-      status: 'open',
       createdAt: '2026-08-24T10:00:00.000Z',
       updatedAt: '2026-08-24T10:00:00.000Z',
-      comments: [{
+      comments: [makeComment({
         id: 'c0',
-        threadId: 't2',
         body: 'what does this function do?',
         kind: 'aside',
         author: { name: 'You', type: 'user' },
         createdAt: '2026-08-24T10:00:00.000Z',
-      }],
-    } as unknown as CommentThread;
+      })],
+    });
   }
 
   // Asking about a line nobody has commented on starts a thread with no finding in it. Offering
@@ -262,13 +241,12 @@ describe('a thread that is only a conversation', () => {
 
   it('is offered once a finding is added to it', () => {
     const thread = askOnly();
-    thread.comments.push({
+    thread.comments.push(makeComment({
       id: 'c1',
       body: 'P2: and here is the finding',
-      kind: 'review',
       author: { name: 'Agent', type: 'agent' },
       createdAt: '2026-08-24T10:00:02.000Z',
-    } as unknown as CommentThread['comments'][number]);
+    }));
 
     expect(isSubmittable(thread)).toBe(true);
   });

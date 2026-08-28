@@ -67,12 +67,14 @@ node --watch-path=<dist-dir> <cli-entry> --no-open "$@"
 ```
 diffity/
 ├── packages/
+│   ├── api/          # Wire types shared by server and UI
 │   ├── cli/          # CLI server and entry point
 │   │   ├── src/
 │   │   └── dist/
 │   │       ├── index.js    # CLI binary
 │   │       └── ui/         # Built UI (served as static files)
 │   ├── git/          # Git operations (execSync wrappers)
+│   ├── github/       # GitHub PR integration (gh wrappers)
 │   ├── parser/       # Diff parsing library
 │   └── ui/           # React frontend (Vite + Tailwind)
 ├── scripts/
@@ -87,11 +89,11 @@ diffity/
 ### Package dependencies
 
 ```
-@diffity/ui ──► @diffity/parser
-                     ▲
-@diffity/cli ────────┤
-                     │
-              @diffity/git
+diffity (cli) ───► @diffity/api, @diffity/git, @diffity/github, @diffity/parser
+@diffity/ui ─────► @diffity/api, @diffity/parser
+@diffity/github ─► @diffity/api, @diffity/parser
+@diffity/api ────► @diffity/parser        (types only)
+@diffity/git ────► nothing
 ```
 
 The UI builds into `packages/cli/dist/ui/` so the CLI can serve it as static files. In production, everything ships as a single `diffity` npm package.

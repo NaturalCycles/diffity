@@ -3,6 +3,7 @@ import { render, cleanup, screen } from '@testing-library/react';
 import { GitHubDialog } from '../src/components/layout/github-dialog';
 import type { GitHubDetails } from '../src/lib/api';
 import type { CommentThread } from '../src/components/comments/types';
+import { makeComment, makeThread } from './helpers/wire';
 import { isSubmittable, threadToPayload } from '../src/lib/review-submission';
 
 const details: GitHubDetails = {
@@ -12,6 +13,7 @@ const details: GitHubDetails = {
   prCreatedAt: '2026-08-21T10:00:00.000Z',
   headSha: 'abc123',
   commentCount: 2,
+  prAuthor: 'octocat',
   viewerDidAuthor: false,
   prBody: '',
   reviews: [],
@@ -19,14 +21,9 @@ const details: GitHubDetails = {
 
 function thread(id: string, body: string, submittedAt: string | null = null): CommentThread {
   return {
-    id,
-    filePath: 'src/a.ts',
-    side: 'new',
-    startLine: 10,
-    endLine: 10,
-    status: 'open',
+    ...makeThread({ id }),
     submittedAt,
-    comments: [{ id: `c-${id}`, author: { name: 'Agent', type: 'agent' }, body, createdAt: '' }],
+    comments: [makeComment({ id: `c-${id}`, body })],
   };
 }
 

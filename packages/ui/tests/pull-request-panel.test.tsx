@@ -12,6 +12,7 @@ function details(overrides: Partial<GitHubDetails> = {}): GitHubDetails {
     headSha: 'abc123',
     commentCount: 0,
     viewerDidAuthor: false,
+    prAuthor: 'octocat',
     prBody: '## Summary\n\nThe field went stale until a refresh.',
     reviews: [],
     ...overrides,

@@ -1,9 +1,9 @@
-import type { TreeEntryResponse } from '../../lib/api';
+import type { TreeEntry } from '../../lib/api';
 import { FileIcon } from '../icons/file-icon';
 import { FolderIcon } from '../icons/folder-icon';
 
 interface FolderViewerProps {
-  entries: TreeEntryResponse[];
+  entries: TreeEntry[];
   onNavigate: (path: string, type: 'file' | 'dir') => void;
 }
 

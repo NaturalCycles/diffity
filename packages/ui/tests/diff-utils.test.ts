@@ -9,6 +9,7 @@ function makeFile(path: string, status: DiffFile['status'] = 'modified'): DiffFi
     status,
     additions: 1,
     deletions: 0,
+    isBinary: false,
     hunks: [],
   };
 }

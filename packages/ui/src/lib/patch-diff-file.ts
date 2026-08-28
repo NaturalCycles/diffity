@@ -8,7 +8,7 @@ import { getFilePath } from './diff-utils';
  *
  * A null replacement means the file no longer differs — an agent undoing its own edit does that.
  */
-export function patchDiffFile(diff: ParsedDiff, filePath: string, fresh: DiffFile | null): ParsedDiff {
+export function patchDiffFile<T extends ParsedDiff>(diff: T, filePath: string, fresh: DiffFile | null): T {
   const index = diff.files.findIndex(file => getFilePath(file) === filePath);
 
   if (index === -1) {

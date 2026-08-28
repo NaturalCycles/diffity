@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { GitHubDialog } from '../src/components/layout/github-dialog';
 import type { GitHubDetails } from '../src/lib/api';
 import type { CommentThread } from '../src/components/comments/types';
+import { makeComment, makeThread } from './helpers/wire';
 
 const details: GitHubDetails = {
   prNumber: 671,
@@ -13,20 +14,16 @@ const details: GitHubDetails = {
   headSha: 'abc123',
   commentCount: 0,
   viewerDidAuthor: false,
+  prAuthor: 'octocat',
+  prBody: '',
+  reviews: [],
 };
 
 function thread(id: string): CommentThread {
-  return {
+  return makeThread({
     id,
-    filePath: 'src/a.ts',
-    side: 'new',
-    startLine: 10,
-    endLine: 10,
-    status: 'open',
-    comments: [
-      { id: `c-${id}`, author: { name: 'Agent', type: 'agent' }, body: 'P2: something', createdAt: '' },
-    ],
-  };
+    comments: [makeComment({ id: `c-${id}`, body: 'P2: something' })],
+  });
 }
 
 function renderDialog(reviewInProgress: boolean, threads = [thread('t1')]) {

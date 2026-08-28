@@ -36,6 +36,7 @@ process.on('SIGTERM', () => {
 concurrently(
   [
     { command: 'npm run dev -w @diffity/parser', name: 'parser' },
+    { command: 'npm run dev -w @diffity/api', name: 'api' },
     { command: 'npm run dev -w @diffity/git', name: 'git' },
     { command: 'npm run dev -w @diffity/github', name: 'github' },
     { command: 'npm run dev:watch -w diffity', name: 'cli' },

@@ -7,8 +7,9 @@
     "jsx": "react-jsx",
     "lib": ["ES2022", "DOM", "DOM.Iterable"]
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", ".react-router/types/**/*"],
+  "include": ["src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts", "tests/**/*.tsx", ".react-router/types/**/*"],
   "references": [
+    { "path": "../api" },
     { "path": "../parser" }
   ]
 }

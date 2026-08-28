@@ -1,29 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import type { Tour, TourStatus, TourStep } from '@diffity/api';
 import { getDb, queryAll, queryOne } from './db.js';
 
-export type TourStatus = 'building' | 'ready';
-
-export interface TourStep {
-  id: string;
-  tourId: string;
-  sortOrder: number;
-  filePath: string;
-  startLine: number;
-  endLine: number;
-  body: string;
-  annotation: string;
-  createdAt: string;
-}
-
-export interface Tour {
-  id: string;
-  sessionId: string;
-  topic: string;
-  body: string;
-  status: TourStatus;
-  createdAt: string;
-  steps: TourStep[];
-}
+export type { Tour, TourStatus, TourStep } from '@diffity/api';
 
 interface TourRow {
   id: string;

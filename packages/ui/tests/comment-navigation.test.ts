@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { CommentThread } from '../src/types/comment';
+import { GENERAL_THREAD_FILE_PATH, type CommentThread } from '../src/components/comments/types';
+import { makeComment, makeThread as wireThread } from './helpers/wire';
 import {
   buildFirstOpenThreadByFile,
   buildThreadCountsByFile,
@@ -8,23 +9,19 @@ import {
 } from '../src/lib/comment-navigation';
 
 function makeThread(overrides: Partial<CommentThread> = {}): CommentThread {
-  return {
+  return wireThread({
     id: 'thread-1',
     filePath: 'src/example.ts',
-    side: 'new',
-    startLine: 10,
-    endLine: 10,
     comments: [
-      {
+      makeComment({
         id: 'comment-1',
         author: { name: 'You', type: 'user' },
         body: 'Please tighten this up a bit.',
         createdAt: '2026-03-17T12:00:00Z',
-      },
+      }),
     ],
-    status: 'open',
     ...overrides,
-  };
+  });
 }
 
 describe('buildFirstOpenThreadByFile', () => {
@@ -32,7 +29,7 @@ describe('buildFirstOpenThreadByFile', () => {
     const firstThreads = buildFirstOpenThreadByFile(
       [
         makeThread({ id: 'resolved', filePath: 'src/ignored.ts', status: 'resolved' }),
-        makeThread({ id: 'general', filePath: '__general__' }),
+        makeThread({ id: 'general', filePath: GENERAL_THREAD_FILE_PATH }),
         makeThread({ id: 'b-20', filePath: 'src/b.ts', startLine: 20 }),
         makeThread({ id: 'a-12', filePath: 'src/a.ts', startLine: 12, side: 'old' }),
         makeThread({ id: 'a-5', filePath: 'src/a.ts', startLine: 5 }),
@@ -53,7 +50,7 @@ describe('buildThreadCountsByFile', () => {
       makeThread({ id: 'one', filePath: 'src/a.ts' }),
       makeThread({ id: 'two', filePath: 'src/a.ts' }),
       makeThread({ id: 'resolved', filePath: 'src/b.ts', status: 'resolved' }),
-      makeThread({ id: 'general', filePath: '__general__' }),
+      makeThread({ id: 'general', filePath: GENERAL_THREAD_FILE_PATH }),
     ]);
 
     expect(Array.from(counts.entries())).toEqual([['src/a.ts', 2]]);
@@ -70,12 +67,12 @@ describe('thread formatting helpers', () => {
     const preview = getThreadPreview(
       makeThread({
         comments: [
-          {
+          makeComment({
             id: 'comment-1',
             author: { name: 'You', type: 'user' },
             body: '  Multi-line\ncomment with   extra spacing and enough text to force truncation in the preview list.  ',
             createdAt: '2026-03-17T12:00:00Z',
-          },
+          }),
         ],
       }),
       48,

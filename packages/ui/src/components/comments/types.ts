@@ -1,53 +1,15 @@
+import type { CommentAuthor, CommentSide, CommentThread } from '@diffity/api';
 import type { TourMark } from '../../lib/tour-marks';
 
-export const GENERAL_THREAD_FILE_PATH = '__general__';
-
-/**
- * What a comment is for, which decides where it can go. A review comment is the finding, and it can
- * be posted; an aside is the conversation about the review, and it stays on this machine. A comment
- * written before kinds existed has none, and is a review comment.
- */
-export type CommentKind = 'review' | 'aside';
-
-export interface CommentAuthor {
-  name: string;
-  avatarUrl?: string;
-  type: 'user' | 'agent';
-}
-
-export interface Comment {
-  id: string;
-  author: CommentAuthor;
-  body: string;
-  /** Absent on anything written before kinds existed, which means it is a review comment. */
-  kind?: CommentKind;
-  createdAt: string;
-  /** Set when an aside asked the agent for something, and as that request is picked up and answered. */
-  liveRequestedAt?: string | null;
-  /** Which button was pressed. Absent is a question. */
-  liveIntent?: 'ask' | 'act';
-  liveClaimedAt?: string | null;
-  liveAnsweredAt?: string | null;
-}
-
-export type CommentSide = 'old' | 'new';
-
-export type ThreadStatus = 'open' | 'resolved' | 'dismissed';
-
-export interface CommentThread {
-  id: string;
-  filePath: string;
-  side: CommentSide;
-  startLine: number;
-  endLine: number;
-  comments: Comment[];
-  status: ThreadStatus;
-  anchorContent?: string;
-  updatedAt?: string;
-  /** Set once this finding has been sent to the forge. Sending is not resolving. */
-  submittedAt?: string | null;
-  sessionId?: string;
-}
+export { GENERAL_THREAD_FILE_PATH } from '@diffity/api';
+export type {
+  Comment,
+  CommentAuthor,
+  CommentKind,
+  CommentSide,
+  CommentThread,
+  ThreadStatus,
+} from '@diffity/api';
 
 export const DEFAULT_AUTHOR: CommentAuthor = { name: 'You', type: 'user' };
 

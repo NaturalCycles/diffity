@@ -14,14 +14,21 @@ import {
   type ThreadStatus,
   type Thread,
 } from './threads.js';
-import { answerLiveRequest, type LiveRequest } from './live.js';
+import {
+  GENERAL_THREAD_FILE_PATH,
+  type ClaimResponse,
+  type GitHubDetails,
+  type LiveStatusResponse,
+  type RepoInfoResponse,
+} from '@diffity/api';
+import { answerLiveRequest } from './live.js';
 import { clampClientWait, CLIENT_WAIT_CAP_SECONDS } from './live-wait.js';
 import { directiveFor } from './live-intent.js';
 import { findInstanceForRepo, type RegistryEntry } from './registry.js';
 import { createHash } from 'node:crypto';
 import { createTour, addTourStep, updateTourStatus, deleteTour, deleteToursForSession, getTour } from './tours.js';
 import { unansweredRequest } from './live-unanswered.js';
-import { describeSince, type SinceLastWait } from './live-events.js';
+import { describeSince } from './live-events.js';
 import { readAnchor, clampToFile, countWorkingTreeLines } from './anchor.js';
 import { unescapeMarkdown as fromShell } from './unescape.js';
 import { startReviewRun, finishReviewRun } from './review-run.js';
@@ -89,7 +96,7 @@ function resolveTourId(shortId: string, sessionId: string): string {
 
 function formatThreadLine(thread: Thread): string {
   const shortId = thread.id.slice(0, 8);
-  const isGeneral = thread.filePath === '__general__';
+  const isGeneral = thread.filePath === GENERAL_THREAD_FILE_PATH;
   const statusColor = thread.status === 'open' ? pc.yellow : thread.status === 'resolved' ? pc.green : thread.status === 'dismissed' ? pc.dim : pc.cyan;
   const statusLabel = statusColor(`[${thread.status}]`);
   const firstComment = thread.comments[0]?.body || '';
@@ -131,13 +138,13 @@ async function fetchLiveStatus(port: number): Promise<LiveStatus | null> {
     if (!res.ok) {
       return null;
     }
-    const info = { live: (await res.json()) as { enabled?: boolean; listening?: boolean } };
-    if (!info.live?.enabled) {
+    const live = (await res.json()) as LiveStatusResponse;
+    if (!live.enabled) {
       return { available: false, reason: 'the server is not bound to loopback', mayChangeCode: false };
     }
 
     const details = await fetch(`http://127.0.0.1:${port}/api/github/details`);
-    const pr = details.ok ? ((await details.json()) as { viewerDidAuthor?: boolean } | null) : null;
+    const pr = details.ok ? ((await details.json()) as GitHubDetails | null) : null;
     // No pull request means this is your own working tree, which is the case changes exist for.
     return { available: true, reason: '', mayChangeCode: pr ? pr.viewerDidAuthor === true : true };
   } catch {
@@ -342,18 +349,13 @@ Examples:
         );
       }
       const startedAt = Date.now();
-      let payload: {
-        request: LiveRequest | null;
-        since?: SinceLastWait;
-        viewerPresent?: boolean;
-        viewerGone?: boolean;
-      };
+      let payload: ClaimResponse;
       try {
         // Park on the session the server is serving, not on whatever the shared current-session
         // file last named — those differ whenever another worktree has opened a review since.
         const info = await fetch(`http://127.0.0.1:${instance.port}/api/info`, { headers: AGENT_HEADER });
         const sessionId = info.ok
-          ? ((await info.json()) as { sessionId?: string }).sessionId
+          ? ((await info.json()) as RepoInfoResponse).sessionId
           : undefined;
         const claimUrl = `http://127.0.0.1:${instance.port}/api/live/claim?wait=${wait}`
           + (sessionId ? `&session=${encodeURIComponent(sessionId)}` : '');
@@ -363,7 +365,7 @@ Examples:
           process.exitCode = 1;
           return;
         }
-        payload = (await res.json()) as typeof payload;
+        payload = (await res.json()) as ClaimResponse;
       } catch (err) {
         // `fetch failed` on its own says nothing about why a held connection went away, and a
         // listener dying early is the failure that matters most here. The cause and how long it
@@ -471,7 +473,7 @@ Examples:
       const session = requireSession();
       const thread = createThread(
         session.id,
-        '__general__',
+        GENERAL_THREAD_FILE_PATH,
         'new',
         0,
         0,

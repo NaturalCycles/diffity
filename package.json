@@ -5,6 +5,7 @@
   "type": "module",
   "description": "GitHub-style git diff viewer in the browser",
   "workspaces": [
+    "packages/api",
     "packages/cli",
     "packages/git",
     "packages/github",

@@ -1,7 +1,6 @@
-export interface SinceLastWait {
-  /** Findings that went to the forge while the agent was waiting. */
-  submitted: number;
-}
+import type { SinceLastWait } from '@diffity/api';
+
+export type { SinceLastWait } from '@diffity/api';
 
 /**
  * What changed while the agent was parked, which it is otherwise never told.
