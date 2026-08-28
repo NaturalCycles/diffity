@@ -4,7 +4,8 @@ on:
   push:
     branches: [develop]
 
-# One release at a time, in merge order — two develop pushes must not race a publish.
+# Serialized: no two runs publish at once. GitHub keeps only the newest queued run, so a
+# rapid-fire merge's own run can be superseded — the survivor publishes the latest version.
 concurrency:
   group: release
   cancel-in-progress: false
@@ -39,12 +40,16 @@ jobs:
             exit 0
           fi
           echo "publish=no" >> "$GITHUB_OUTPUT"
-          # Already published. A merge that changed what a user gets must have re-bumped —
-          # this is the parallel-branch gap: two branches bump to the same number, the second
-          # to land would otherwise ship nothing, silently.
-          CHANGED=$(git diff --name-only HEAD^ HEAD -- 'packages/*/src' 'packages/skills' 'skills')
+          # Already published. A merge that changes what ships must have re-bumped — this is
+          # the parallel-branch gap: two branches bump to the same number, and the second to
+          # land would otherwise ship nothing, silently. Everything the artifact is built from
+          # counts; tests do not.
+          CHANGED=$(git diff --name-only HEAD^ HEAD -- \
+            ':(glob)packages/**' ':(glob)scripts/**' 'skills' \
+            'package.json' 'package-lock.json' 'tsconfig.json' \
+            ':(exclude,glob)packages/*/tests/**' ':(exclude)scripts/lib/utils.test.ts')
           if [ -n "$CHANGED" ]; then
-            echo "::error::$VERSION is already on npm, but this merge changed shipped code. Re-bump the version (npx tsx scripts/release.ts patch --no-git) and merge again."
+            echo "::error::$VERSION is already on npm, but this merge changed shipped code. Re-bump the version (npx tsx scripts/release.ts patch --no-git) and merge again. If a previous run of this same commit already published and only tagging failed, instead create the tag by hand: git tag v$VERSION && git push origin v$VERSION && gh release create v$VERSION --generate-notes"
             echo "$CHANGED"
             exit 1
           fi
@@ -64,8 +69,9 @@ jobs:
         name: Tag and release
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.decide.outputs.version }}
         run: |
-          VERSION=${{ steps.decide.outputs.version }}
-          git tag "v$VERSION"
+          # Idempotent, so a re-run that already got partway does not fail on its own leftovers.
+          git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null || git tag "v$VERSION"
           git push origin "v$VERSION"
-          gh release create "v$VERSION" --generate-notes --title "v$VERSION"
+          gh release view "v$VERSION" >/dev/null 2>&1 || gh release create "v$VERSION" --generate-notes --title "v$VERSION"

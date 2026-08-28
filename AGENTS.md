@@ -22,8 +22,9 @@ There are no npm publish scripts: every merge to develop whose version is not ye
 published by `.github/workflows/release.yml`, with a `v<version>` tag and a GitHub release. The
 workflow needs the `NPM_TOKEN` secret (publish rights on the `@naturalcycles` scope).
 
-Bump in every pull request that touches `packages/*/src`, `packages/skills` or `skills`. The
-release workflow enforces it: a merge to develop whose version is already on npm and whose diff
-touched those paths fails, which is what catches two parallel branches bumping to the same number —
-the second to land would otherwise ship nothing, silently. A comment-only source change trips the
-same wire; bump anyway, a patch number costs nothing.
+Bump in every pull request that touches anything the artifact is built from — `packages/`,
+`scripts/`, `skills/`, or the root `package.json`/`package-lock.json`/`tsconfig.json`; tests are
+exempt. The release workflow enforces exactly that set: a merge to develop whose version is already
+on npm and whose diff touched it fails, which is what catches two parallel branches bumping to the
+same number — the second to land would otherwise ship nothing, silently. A comment-only source
+change trips the same wire; bump anyway, a patch number costs nothing.
