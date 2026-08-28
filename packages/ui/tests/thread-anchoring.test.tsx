@@ -5,6 +5,7 @@ import type { DiffFile, DiffHunk, DiffLine } from '@diffity/parser';
 import { FileBlock } from '../src/components/diff/file-block';
 import type { CommentActions } from '../src/hooks/use-comment-actions';
 import type { CommentThread } from '../src/components/comments/types';
+import { makeComment, makeThread } from './helpers/wire';
 
 function line(type: DiffLine['type'], content: string, num: number): DiffLine {
   return {
@@ -36,15 +37,12 @@ const file: DiffFile = {
 };
 
 function thread(startLine: number, endLine: number, body: string): CommentThread {
-  return {
+  return makeThread({
     id: `t-${startLine}-${endLine}`,
-    filePath: 'src/a.ts',
-    side: 'new',
     startLine,
     endLine,
-    status: 'open',
-    comments: [{ id: `c-${startLine}`, author: { name: 'Agent', type: 'agent' }, body, createdAt: '' }],
-  };
+    comments: [makeComment({ id: `c-${startLine}`, body })],
+  });
 }
 
 function renderWith(threads: CommentThread[]) {

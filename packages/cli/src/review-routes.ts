@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import type { CommentSide } from '@diffity/api';
+import type { Comment, CommentSide } from '@diffity/api';
 import {
   createThread,
   getThreadsForSession,
@@ -98,7 +98,7 @@ export function handleReviewRoute(req: IncomingMessage, res: ServerResponse, pat
         requestedAt = stamp.requestedAt;
         notifyLiveListeners(stamp.sessionId);
       }
-      sendJson(res, { ...comment, liveRequestedAt: requestedAt });
+      sendJson(res, { ...comment, liveRequestedAt: requestedAt } satisfies Comment);
     });
     return true;
   }

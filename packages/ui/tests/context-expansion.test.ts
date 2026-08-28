@@ -8,6 +8,7 @@ function makeHunk(oldStart: number, oldCount: number, newStart: number, newCount
     oldCount,
     newStart,
     newCount,
+    header: '',
     lines: [],
   };
 }

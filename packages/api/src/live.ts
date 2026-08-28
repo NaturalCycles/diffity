@@ -43,8 +43,10 @@ export interface ClaimResponse {
 export interface LiveStatusResponse {
   enabled: boolean;
   listening: boolean;
+  /** An agent has taken a request for this review and not answered it yet. */
   working: boolean;
   waiting: number;
+  /** Whether the agent may edit code here, derived from who wrote the pull request. */
   mayChangeCode: boolean;
   viewerPresent: boolean;
 }

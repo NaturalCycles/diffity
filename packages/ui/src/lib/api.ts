@@ -7,16 +7,16 @@ import type {
   DiffFileResponse,
   DiffFingerprint,
   DiffResponse,
+  FileContentResponse,
   GitHubDetails,
-  PrComment,
   PullCommentsResult,
   RepoInfo,
-  ReviewEvent,
   ReviewResult,
   ReviewSession,
+  ReviewSubmission,
   Tour,
   TreeEntriesResponse,
-  TreeEntry,
+  TreeFingerprintResponse,
   TreePathsResponse,
 } from '@diffity/api';
 import type { DiffFile } from '@diffity/parser';
@@ -224,7 +224,7 @@ export function revertHunk(patch: string): Promise<void> {
 }
 
 export async function fetchFileContent(filePath: string, ref?: string): Promise<string[]> {
-  const json = await apiFetch<{ content: string[] }>(
+  const json = await apiFetch<FileContentResponse>(
     buildUrl(`/api/file/${encodeURIComponent(filePath)}`, { ref }),
   );
   return json.content;
@@ -238,11 +238,7 @@ export async function fetchGitHubDetails(): Promise<GitHubDetails | null> {
   return res.json();
 }
 
-export function createReviewOnGitHub(review: {
-  event: ReviewEvent;
-  body: string;
-  comments: PrComment[];
-}): Promise<ReviewResult> {
+export function createReviewOnGitHub(review: ReviewSubmission): Promise<ReviewResult> {
   return apiFetch('/api/github/create-review', {
     method: 'POST',
     headers: JSON_HEADERS,
@@ -279,12 +275,12 @@ export function fetchTreeInfo(): Promise<RepoInfo> {
 }
 
 export async function fetchTreeFingerprint(): Promise<string> {
-  const json = await apiFetch<{ fingerprint: string }>('/api/tree/fingerprint');
+  const json = await apiFetch<TreeFingerprintResponse>('/api/tree/fingerprint');
   return json.fingerprint;
 }
 
 export async function fetchTreeFileContent(filePath: string): Promise<string[]> {
-  const json = await apiFetch<{ content: string[] }>(
+  const json = await apiFetch<FileContentResponse>(
     `/api/tree/file/${encodeURIComponent(filePath)}`,
   );
   return json.content;

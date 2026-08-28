@@ -7,23 +7,15 @@ import {
   threadToPayload,
 } from '../src/lib/review-submission';
 import { GENERAL_THREAD_FILE_PATH } from '../src/components/comments/types';
-import type { CommentThread, ThreadStatus } from '../src/components/comments/types';
+import type { CommentThread } from '../src/components/comments/types';
+import { makeComment, makeThread } from './helpers/wire';
 
 function comment(body: string, name = 'You') {
-  return { id: body, author: { name, type: 'user' as const }, body, createdAt: '2026-08-21T10:00:00.000Z' };
+  return makeComment({ id: body, author: { name, type: 'user' }, body, createdAt: '2026-08-21T10:00:00.000Z' });
 }
 
 function thread(overrides: Partial<CommentThread> = {}): CommentThread {
-  return {
-    id: 't1',
-    filePath: 'src/a.ts',
-    side: 'new',
-    startLine: 10,
-    endLine: 10,
-    comments: [comment('P1: missing null check')],
-    status: 'open' as ThreadStatus,
-    ...overrides,
-  };
+  return makeThread({ comments: [comment('P1: missing null check')], ...overrides });
 }
 
 describe('threadToPayload', () => {
