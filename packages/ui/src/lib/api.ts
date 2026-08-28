@@ -81,27 +81,6 @@ export interface RepoInfo {
   review?: ReviewRun | null;
 }
 
-export interface Commit {
-  hash: string;
-  shortHash: string;
-  message: string;
-  relativeDate: string;
-}
-
-export interface OverviewFile {
-  path: string;
-  status: 'staged' | 'modified' | 'added';
-}
-
-export interface Overview {
-  files: OverviewFile[];
-}
-
-export interface CommitsPage {
-  commits: Commit[];
-  hasMore: boolean;
-}
-
 export function fetchDiff(hideWhitespace: boolean, ref?: string): Promise<ParsedDiff> {
   return apiFetch(buildUrl('/api/diff', {
     whitespace: hideWhitespace ? 'hide' : undefined,
@@ -143,13 +122,7 @@ export function openInEditor(filePath: string, line?: number): Promise<{ ok: boo
   });
 }
 
-export function fetchOverview(): Promise<Overview> {
-  return apiFetch('/api/overview');
-}
 
-export function fetchCommits(skip = 0, count = 10, search?: string): Promise<CommitsPage> {
-  return apiFetch(buildUrl('/api/commits', { skip: String(skip), count: String(count), search }));
-}
 
 export async function fetchSession(): Promise<{ id: string; ref: string; headHash: string } | null> {
   const res = await fetch('/api/sessions/current');
