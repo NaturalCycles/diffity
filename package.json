@@ -21,7 +21,7 @@
     "release:patch": "npm run build && tsx scripts/release.ts patch && npm publish -w packages/cli",
     "release:minor": "npm run build && tsx scripts/release.ts minor && npm publish -w packages/cli",
     "test:scripts": "vitest run scripts",
-    "typecheck": "npm run typecheck -w @diffity/parser && npm run typecheck -w @diffity/git && npm run typecheck -w @diffity/github && npm run typecheck -w @diffity/ui && npm run typecheck -w diffity"
+    "typecheck": "npm run typecheck -w @diffity/parser && npm run typecheck -w @diffity/api && npm run typecheck -w @diffity/git && npm run typecheck -w @diffity/github && npm run typecheck -w @diffity/ui && npm run typecheck -w diffity"
   },
   "keywords": [
     "git",
