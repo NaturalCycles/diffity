@@ -2,16 +2,25 @@
 
 # diffity
 
-[![npm version](https://img.shields.io/npm/v/diffity)](https://www.npmjs.com/package/diffity)
+[![npm version](https://img.shields.io/npm/v/@naturalcycles/diffity)](https://www.npmjs.com/package/@naturalcycles/diffity)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Diffity is an agent-agnostic, GitHub-style diff viewer and code review tool.
+Diffity is an agent-agnostic, GitHub-style diff viewer and code review tool — with a live loop
+where the reader asks questions or requests changes on any line and a parked agent answers.
+
+This is [Natural Cycles](https://github.com/NaturalCycles)' fork of
+[nilbuild/diffity](https://github.com/nilbuild/diffity) by Kamran Ahmed. The review loop, the live
+agent protocol, session carry-forward and the idle lifecycle are this fork's own; the viewer it
+grew from is upstream's.
 
 ```bash
-npm install -g diffity
+npm install -g @naturalcycles/diffity
+diffity skills install
 ```
 
-It works with Claude Code, Cursor, Codex, and any AI coding agent.
+The binary is `diffity`. `skills install` puts the agent skills into `~/.claude/skills`, replacing
+the ones diffity manages and nothing else — run it again after an update (`diffity update` says
+when the skills changed). It works with Claude Code, Cursor, Codex, and any AI coding agent.
 
 | What can you do? | Description |
 |---|---|
@@ -62,13 +71,7 @@ You can leave comments on any diff — working tree changes, branch comparisons,
 
 ## AI code review
 
-Install the skills for your coding agent (Claude Code, Cursor, Codex, etc.):
-
-```bash
-npx skills add nilbuild/diffity
-```
-
-Then use the slash commands:
+Install the skills for your coding agent (`diffity skills install`), then use the slash commands:
 
 ### `/diffity-diff`
 
@@ -107,6 +110,20 @@ Reads all open comments and makes the requested code changes. Works with both yo
 ```
 
 A typical workflow: run `/diffity-review` to get AI feedback, check the comments in the browser, then run `/diffity-resolve` to apply the fixes.
+
+## A live agent on the diff
+
+Every comment box carries **Ask** and **Act** next to the plain reply. Ask hands the agent a
+question — it answers in the thread, or amends the finding the question was about. Act hands it a
+change request — it edits the code and replies with what it did. A question never turns into an
+edit, and on somebody else's pull request the agent may answer but not touch code.
+
+The agent parks on the review with `diffity agent await` (the `diffity-live` skill drives the
+loop): it sleeps until you press one of the buttons, acts, and re-arms. The page shows whether an
+agent is listening, working, or absent — a request made with nobody listening says so, and is
+picked up when an agent next arms. When the review page closes, the parked agent is told and stops
+rather than waiting on a window nobody has open; the server itself stops a few minutes after its
+reader leaves, and everything is in SQLite, so running `diffity` again picks the review back up.
 
 ## Browse project files
 
@@ -395,4 +412,5 @@ reviewing. `diffity agent standards` prints both, and the review skill reads it 
 
 ## License
 
-[PolyForm Shield 1.0.0](./LICENSE) © [Kamran Ahmed](https://x.com/kamrify)
+[MIT](./LICENSE) — © Kamran Ahmed (the upstream
+[diffity](https://github.com/nilbuild/diffity)), with this fork's changes by Natural Cycles.

@@ -1,7 +1,7 @@
 {
-  "name": "diffity",
-  "version": "0.9.20",
-  "description": "GitHub-style git diff viewer in the browser",
+  "name": "@naturalcycles/diffity",
+  "version": "0.10.0",
+  "description": "Agent-agnostic, GitHub-style diff viewer and code review tool with a live agent loop",
   "type": "module",
   "bin": {
     "diffity": "./dist/index.js"
@@ -31,15 +31,15 @@
     "code-review",
     "github"
   ],
-  "author": "Kamran Ahmed <kamranahmed.se@gmail.com> (https://kamranahmed.se)",
+  "author": "Natural Cycles",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/kamranahmedse/diffity.git"
+    "url": "git+https://github.com/NaturalCycles/diffity.git"
   },
-  "homepage": "https://diffity.com",
+  "homepage": "https://github.com/NaturalCycles/diffity",
   "bugs": {
-    "url": "https://github.com/kamranahmedse/diffity/issues"
+    "url": "https://github.com/NaturalCycles/diffity/issues"
   },
   "engines": {
     "node": ">=22.13"
@@ -50,5 +50,8 @@
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vitest": "^4.1.0"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
