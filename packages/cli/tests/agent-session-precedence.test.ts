@@ -10,6 +10,7 @@ let root: string;
 let repoDir: string;
 let origCwd: string;
 let origHome: string | undefined;
+let origUserProfile: string | undefined;
 let stub: Server | null = null;
 
 function listen(server: Server): Promise<number> {
@@ -44,6 +45,7 @@ function registerStub(port: number): void {
 beforeAll(() => {
   origCwd = process.cwd();
   origHome = process.env.HOME;
+  origUserProfile = process.env.USERPROFILE;
   root = mkdtempSync(join(tmpdir(), 'diffity-precedence-'));
   repoDir = join(root, 'repo');
   mkdirSync(repoDir);
@@ -55,8 +57,10 @@ beforeAll(() => {
   execFileSync('git', ['add', '.'], { cwd: repoDir, stdio: 'pipe' });
   execFileSync('git', ['commit', '-m', 'init'], { cwd: repoDir, stdio: 'pipe' });
   process.env.DIFFITY_DATA_DIR = join(root, 'notes');
-  // The registry lives under the home directory, so the test owns a fake one.
+  // The registry lives under the home directory, so the test owns a fake one. Windows resolves
+  // the home from USERPROFILE, so both are set.
   process.env.HOME = join(root, 'home');
+  process.env.USERPROFILE = join(root, 'home');
   process.chdir(repoDir);
 });
 
@@ -69,6 +73,11 @@ afterAll(() => {
   } else {
     process.env.HOME = origHome;
   }
+  if (origUserProfile === undefined) {
+    delete process.env.USERPROFILE;
+  } else {
+    process.env.USERPROFILE = origUserProfile;
+  }
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -77,18 +86,23 @@ describe('resolveAgentSession', () => {
     const { findOrCreateSession } = await import('../src/session.js');
     const { resolveAgentSession } = await import('../src/agent-session.js');
     const session = findOrCreateSession('main');
+    // The ambient file now names a different session, so passing means the id really won.
+    const decoy = findOrCreateSession('work');
 
     const resolved = await resolveAgentSession(session.id);
 
+    expect(resolved).not.toBeNull();
     expect(resolved?.id).toBe(session.id);
+    expect(resolved?.id).not.toBe(decoy.id);
   });
 
   it("takes the running server's session over the ambient file", async () => {
-    const { findOrCreateSession } = await import('../src/session.js');
+    const { findOrCreateSession, getCurrentSession } = await import('../src/session.js');
     const { resolveAgentSession } = await import('../src/agent-session.js');
-    // The ambient file now names the work session; the stub server answers with another.
-    findOrCreateSession('work');
+    // The stub answers with one session while the ambient file names another, created last.
     const other = findOrCreateSession('main');
+    const decoy = findOrCreateSession('work');
+    expect(getCurrentSession()?.id).toBe(decoy.id);
 
     stub = createServer((req, res) => {
       if (req.url === '/api/sessions/ensure' && req.method === 'POST') {
@@ -103,16 +117,18 @@ describe('resolveAgentSession', () => {
 
     const resolved = await resolveAgentSession();
 
+    expect(resolved).not.toBeNull();
     expect(resolved?.id).toBe(other.id);
     stub.close();
     stub = null;
   });
 
   it("falls back to an old server's info route when the ensure route is not there", async () => {
-    const { findOrCreateSession } = await import('../src/session.js');
+    const { findOrCreateSession, getCurrentSession } = await import('../src/session.js');
     const { resolveAgentSession } = await import('../src/agent-session.js');
-    findOrCreateSession('work');
     const named = findOrCreateSession('main');
+    const decoy = findOrCreateSession('work');
+    expect(getCurrentSession()?.id).toBe(decoy.id);
 
     stub = createServer((req, res) => {
       if (req.url === '/api/info' && req.method === 'GET') {
@@ -128,6 +144,7 @@ describe('resolveAgentSession', () => {
 
     const resolved = await resolveAgentSession();
 
+    expect(resolved).not.toBeNull();
     expect(resolved?.id).toBe(named.id);
     stub.close();
     stub = null;
@@ -145,6 +162,7 @@ describe('resolveAgentSession', () => {
 
     const resolved = await resolveAgentSession();
 
+    expect(resolved).not.toBeNull();
     expect(resolved?.id).toBe(getCurrentSession()?.id);
   });
 });

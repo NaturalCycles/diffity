@@ -45,6 +45,21 @@ export function finishReviewRun(sessionId: string): void {
     .run(sessionId);
 }
 
+/**
+ * Whether any review of this checkout is still being written. The session an agent works on is
+ * not the server's startup session — a tree review, or one carried forward by a commit — so the
+ * question has to be asked repo-wide.
+ */
+export function anyReviewInProgress(repoRoot: string | null): boolean {
+  const row = queryOne<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM review_runs r
+       JOIN review_sessions s ON s.id = r.session_id
+      WHERE s.repo_root IS ? AND r.finished_at IS NULL`,
+    repoRoot,
+  );
+  return (row?.n ?? 0) > 0;
+}
+
 /** An unfinished run follows the session, so committing mid-review does not clear the warning. */
 export function carryReviewRun(fromSessionId: string, toSessionId: string): void {
   const run = queryOne<{ started_at: string; note: string }>(

@@ -37,6 +37,8 @@ export function tourOptions(tourId: string) {
   return queryOptions({
     queryKey: ['tour', tourId],
     queryFn: () => fetchTour(tourId),
-    staleTime: 60_000,
+    // An agent adds steps while the page is open, and the server follows the reader by
+    // this poll — a focus-refetch of the tree chrome would otherwise steer it away for good.
+    refetchInterval: 3000,
   });
 }

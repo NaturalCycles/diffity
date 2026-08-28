@@ -294,7 +294,7 @@ diffity agent tour-delete --all         # or clear the session's finished ones
 ```
 
 Every command follows the running server's own session. `diffity agent --session <id> <command>`
-(the flag goes between `agent` and the command) addresses another session by id or 8-char prefix.
+(canonically between `agent` and the command) addresses another session by id or 8-char prefix.
 
 A comment's line range is trimmed to the file's length, and you are told when that happens: a range
 running past the end would otherwise be counted and highlighted with nothing to show.

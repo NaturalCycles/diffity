@@ -133,7 +133,10 @@ interface LiveStatus {
 
 async function fetchLiveStatus(port: number): Promise<LiveStatus | null> {
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/api/live/status`);
+    const res = await fetch(`http://127.0.0.1:${port}/api/live/status`, {
+      headers: AGENT_HEADER,
+      signal: AbortSignal.timeout(2000),
+    });
     if (!res.ok) {
       return null;
     }
@@ -142,7 +145,10 @@ async function fetchLiveStatus(port: number): Promise<LiveStatus | null> {
       return { available: false, reason: 'the server is not bound to loopback', mayChangeCode: false };
     }
 
-    const details = await fetch(`http://127.0.0.1:${port}/api/github/details`);
+    const details = await fetch(`http://127.0.0.1:${port}/api/github/details`, {
+      headers: AGENT_HEADER,
+      signal: AbortSignal.timeout(2000),
+    });
     const pr = details.ok ? ((await details.json()) as GitHubDetails | null) : null;
     // No pull request means this is your own working tree, which is the case changes exist for.
     return { available: true, reason: '', mayChangeCode: pr ? pr.viewerDidAuthor === true : true };

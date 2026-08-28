@@ -9,9 +9,15 @@ import {
   type TourStatus,
 } from './tours.js';
 import { sendJson, sendError, withJsonBody } from './http-utils.js';
-import { resolveSessionId } from './session.js';
+import { getSessionById, resolveSessionId } from './session.js';
 
-export function handleTourRoute(req: IncomingMessage, res: ServerResponse, pathname: string, url: URL): boolean {
+export function handleTourRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  pathname: string,
+  url: URL,
+  onTourViewed?: (ref: string) => void,
+): boolean {
   if (pathname === '/api/tours' && req.method === 'GET') {
     const sid = resolveSessionId(url.searchParams.get('session'));
     if (!sid) {
@@ -69,6 +75,12 @@ export function handleTourRoute(req: IncomingMessage, res: ServerResponse, pathn
     if (!tour) {
       sendError(res, 404, 'Tour not found');
       return true;
+    }
+    // Reading a tour is reading its session: the tour page's chrome also touches the tree
+    // routes, so without this the agent would follow those to the tree instead.
+    const ref = getSessionById(tour.sessionId)?.ref;
+    if (ref) {
+      onTourViewed?.(ref);
     }
     sendJson(res, tour);
     return true;
