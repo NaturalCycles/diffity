@@ -5,3 +5,4 @@ export * from './info.js';
 export * from './tours.js';
 export * from './sessions.js';
 export * from './diff.js';
+export * from './tree.js';

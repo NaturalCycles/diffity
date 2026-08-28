@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { CommentThread } from '../src/components/comments/types';
+import { GENERAL_THREAD_FILE_PATH, type CommentThread } from '../src/components/comments/types';
 import { makeComment, makeThread as wireThread } from './helpers/wire';
 import {
   buildFirstOpenThreadByFile,
@@ -29,7 +29,7 @@ describe('buildFirstOpenThreadByFile', () => {
     const firstThreads = buildFirstOpenThreadByFile(
       [
         makeThread({ id: 'resolved', filePath: 'src/ignored.ts', status: 'resolved' }),
-        makeThread({ id: 'general', filePath: '__general__' }),
+        makeThread({ id: 'general', filePath: GENERAL_THREAD_FILE_PATH }),
         makeThread({ id: 'b-20', filePath: 'src/b.ts', startLine: 20 }),
         makeThread({ id: 'a-12', filePath: 'src/a.ts', startLine: 12, side: 'old' }),
         makeThread({ id: 'a-5', filePath: 'src/a.ts', startLine: 5 }),
@@ -50,7 +50,7 @@ describe('buildThreadCountsByFile', () => {
       makeThread({ id: 'one', filePath: 'src/a.ts' }),
       makeThread({ id: 'two', filePath: 'src/a.ts' }),
       makeThread({ id: 'resolved', filePath: 'src/b.ts', status: 'resolved' }),
-      makeThread({ id: 'general', filePath: '__general__' }),
+      makeThread({ id: 'general', filePath: GENERAL_THREAD_FILE_PATH }),
     ]);
 
     expect(Array.from(counts.entries())).toEqual([['src/a.ts', 2]]);

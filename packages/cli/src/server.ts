@@ -18,7 +18,7 @@ import type {
   FileContentResponse,
   LiveStatusResponse,
   PullCommentsResult,
-  RepoInfo,
+  RepoInfoResponse,
   TreeEntriesResponse,
   TreeFingerprintResponse,
   TreePathsResponse,
@@ -691,7 +691,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             review: sessionId ? getReviewRun(sessionId) : null,
             github: githubRemote,
             editor: editorAvailable,
-          } satisfies RepoInfo);
+          } satisfies RepoInfoResponse);
           return;
         }
 
@@ -888,7 +888,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             sessionId: session.id,
             github: githubRemote,
             editor: editorAvailable,
-          } satisfies RepoInfo);
+          } satisfies RepoInfoResponse);
           return;
         }
 

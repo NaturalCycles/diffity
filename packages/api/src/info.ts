@@ -14,7 +14,7 @@ export interface RefCapabilities {
 }
 
 /** What `/api/info` and `/api/tree/info` answer. The tree has no review run to speak of. */
-export interface RepoInfo {
+export interface RepoInfoResponse {
   name: string;
   branch: string;
   root: string;

@@ -14,7 +14,13 @@ import {
   type ThreadStatus,
   type Thread,
 } from './threads.js';
-import { GENERAL_THREAD_FILE_PATH, type ClaimResponse, type GitHubDetails, type LiveStatusResponse, type RepoInfo } from '@diffity/api';
+import {
+  GENERAL_THREAD_FILE_PATH,
+  type ClaimResponse,
+  type GitHubDetails,
+  type LiveStatusResponse,
+  type RepoInfoResponse,
+} from '@diffity/api';
 import { answerLiveRequest } from './live.js';
 import { clampClientWait, CLIENT_WAIT_CAP_SECONDS } from './live-wait.js';
 import { directiveFor } from './live-intent.js';
@@ -349,7 +355,7 @@ Examples:
         // file last named — those differ whenever another worktree has opened a review since.
         const info = await fetch(`http://127.0.0.1:${instance.port}/api/info`, { headers: AGENT_HEADER });
         const sessionId = info.ok
-          ? ((await info.json()) as RepoInfo).sessionId
+          ? ((await info.json()) as RepoInfoResponse).sessionId
           : undefined;
         const claimUrl = `http://127.0.0.1:${instance.port}/api/live/claim?wait=${wait}`
           + (sessionId ? `&session=${encodeURIComponent(sessionId)}` : '');

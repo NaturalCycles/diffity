@@ -10,7 +10,7 @@ import type {
   FileContentResponse,
   GitHubDetails,
   PullCommentsResult,
-  RepoInfo,
+  RepoInfoResponse,
   ReviewResult,
   ReviewSession,
   ReviewSubmission,
@@ -27,7 +27,7 @@ export type {
   GitHubRemote,
   PrComment,
   PrReview,
-  RepoInfo,
+  RepoInfoResponse,
   ReviewEvent,
   ReviewResult,
   ReviewRun,
@@ -94,7 +94,7 @@ export async function fetchDiffFingerprint(ref?: string): Promise<DiffFingerprin
   return { fingerprint: json.fingerprint, files: json.files ?? {} };
 }
 
-export function fetchRepoInfo(ref?: string): Promise<RepoInfo> {
+export function fetchRepoInfo(ref?: string): Promise<RepoInfoResponse> {
   return apiFetch(buildUrl('/api/info', { ref }));
 }
 
@@ -270,7 +270,7 @@ export function fetchTreeEntries(dirPath?: string): Promise<TreeEntriesResponse>
   return apiFetch(buildUrl('/api/tree/entries', { path: dirPath }));
 }
 
-export function fetchTreeInfo(): Promise<RepoInfo> {
+export function fetchTreeInfo(): Promise<RepoInfoResponse> {
   return apiFetch('/api/tree/info');
 }
 
