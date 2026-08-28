@@ -27,6 +27,10 @@ copyFileSync(
   resolve(root, 'packages/cli/README.md'),
 );
 
+// npm includes a LICENSE only from the package directory, and MIT requires the notice to
+// travel with every copy.
+copyFileSync(resolve(root, 'LICENSE'), resolve(root, 'packages/cli/LICENSE'));
+
 // Into dist, so the published package carries them and `diffity skills install` has something
 // to install from.
 const shippedSkills = resolve(root, 'packages/cli/dist/skills');

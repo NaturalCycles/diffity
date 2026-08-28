@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -15,7 +15,7 @@ beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'diffity-skills-'));
 });
 
-afterAll(() => {
+afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 

@@ -28,7 +28,7 @@ diffity agent reply <id> --body "<text>"
 
 ## Prerequisites
 
-1. Check that `diffity` is available: run `which diffity`. If not found, install it with `npm install -g diffity`.
+1. Check that `diffity` is available: run `which diffity`. If not found, install it with `npm install -g @naturalcycles/diffity` and run `diffity skills install`.
 2. Check that a tree session exists: run `diffity agent list`. If this fails with "No active review session", tell the user to start diffity tree first (e.g. `diffity tree`).
 
 ## Instructions

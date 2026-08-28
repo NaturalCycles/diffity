@@ -32,7 +32,7 @@ diffity agent reply <id> --body "<text>"
 
 ## Prerequisites
 
-1. Check that `diffity` is available: run `which diffity`. If not found, install it with `npm install -g diffity`.
+1. Check that `diffity` is available: run `which diffity`. If not found, install it with `npm install -g @naturalcycles/diffity` and run `diffity skills install`.
 2. **Work out which repository to use.** A project directory often holds several worktrees as
    subdirectories rather than being a repository itself, so the current directory may not be one.
    - If the current directory is a git repository (`git rev-parse --show-toplevel` succeeds), use it.

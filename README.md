@@ -18,9 +18,12 @@ npm install -g @naturalcycles/diffity
 diffity skills install
 ```
 
-The binary is `diffity`. `skills install` puts the agent skills into `~/.claude/skills`, replacing
-the ones diffity manages and nothing else — run it again after an update (`diffity update` says
-when the skills changed). It works with Claude Code, Cursor, Codex, and any AI coding agent.
+The binary is `diffity`. `skills install` puts the agent skills into `~/.claude/skills` — run it
+again after an update (`diffity update` says when the skills changed). Any skill directory named
+`diffity-*` is treated as diffity's and may be replaced or removed there; `diffity-dev-*` and
+everything else is never touched. Had upstream's `diffity` installed? `npm uninstall -g diffity`
+first, or npm refuses the colliding binary. It works with Claude Code, Cursor, Codex, and any AI
+coding agent.
 
 | What can you do? | Description |
 |---|---|
@@ -116,7 +119,7 @@ A typical workflow: run `/diffity-review` to get AI feedback, check the comments
 Every comment box carries **Ask** and **Act** next to the plain reply. Ask hands the agent a
 question — it answers in the thread, or amends the finding the question was about. Act hands it a
 change request — it edits the code and replies with what it did. A question never turns into an
-edit, and on somebody else's pull request the agent may answer but not touch code.
+edit, and on somebody else's pull request the agent is told not to touch code.
 
 The agent parks on the review with `diffity agent await` (the `diffity-live` skill drives the
 loop): it sleeps until you press one of the buttons, acts, and re-arms. The page shows whether an

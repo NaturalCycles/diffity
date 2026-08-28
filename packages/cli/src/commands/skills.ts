@@ -47,11 +47,11 @@ export function registerSkillsCommand(program: Command, skillsHash: string): voi
 
   skills
     .command('install')
-    .description('Install the skills into ~/.claude/skills, replacing the ones diffity manages')
+    .description('Install the skills into ~/.claude/skills. Directories named diffity-* are treated as diffity\'s and may be replaced or removed; diffity-dev-* is never touched')
     .option('--dir <path>', 'Install into this directory instead')
     .action((opts: { dir?: string }) => {
       const source = join(__dirname, 'skills');
-      if (!existsSync(source)) {
+      if (!existsSync(source) || skillDirs(source).length === 0) {
         console.error(pc.red('This build carries no skills.'));
         console.error(pc.dim('An npm install has them; a checkout needs `npm run build` first.'));
         process.exitCode = 1;

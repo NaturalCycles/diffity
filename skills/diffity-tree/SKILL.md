@@ -10,7 +10,7 @@ You are opening the diffity file tree browser so the user can browse repository 
 
 ## Instructions
 
-1. Check that `diffity` is available: run `which diffity`. If not found, install it with `npm install -g diffity`.
+1. Check that `diffity` is available: run `which diffity`. If not found, install it with `npm install -g @naturalcycles/diffity` and run `diffity skills install`.
 2. Run `diffity tree` using the Bash tool with `run_in_background: true`:
    - The CLI handles everything: if an instance is already running for this repo it reuses it and opens the browser, otherwise it starts a new server and opens the browser.
    - Do NOT use `&` or `--quiet` — let the Bash tool handle backgrounding.
