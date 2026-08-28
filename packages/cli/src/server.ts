@@ -10,6 +10,19 @@ import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import { parseDiff, type ParsedDiff } from '@diffity/parser';
+import type {
+  ClaimResponse,
+  DiffFileResponse,
+  DiffFingerprint,
+  DiffResponse,
+  FileContentResponse,
+  LiveStatusResponse,
+  PullCommentsResult,
+  RepoInfo,
+  TreeEntriesResponse,
+  TreeFingerprintResponse,
+  TreePathsResponse,
+} from '@diffity/api';
 import {
   getDiff,
   getDiffStat,
@@ -413,7 +426,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             waiting: sid ? pendingLiveCount(sid) : 0,
             mayChangeCode: resolveMayChangeCode(purpose, authorship()),
             viewerPresent: viewerIsPresent(viewerSnapshot(), awakeMs()),
-          });
+          } satisfies LiveStatusResponse);
           return;
         }
 
@@ -452,7 +465,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           // A window that has never been open is a different matter: an agent is usually armed
           // before the reader opens the page, so that case waits.
           if (viewerHasGone(viewerSnapshot(), awakeMs())) {
-            sendJson(res, { request: null, since, viewerPresent: false, viewerGone: true });
+            sendJson(res, { request: null, since, viewerPresent: false, viewerGone: true } satisfies ClaimResponse);
             return;
           }
           // Set by the watcher below, read by the handler: `listenerGone` is aborted both when the
@@ -476,7 +489,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
                 return;
               }
               if (endedBecauseViewerLeft) {
-                sendJson(res, { request: null, since, viewerPresent: false, viewerGone: true });
+                sendJson(res, { request: null, since, viewerPresent: false, viewerGone: true } satisfies ClaimResponse);
                 return;
               }
               if (listenerGone.signal.aborted) {
@@ -484,7 +497,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
               }
               const viewerPresent = viewerIsPresent(viewerSnapshot(), awakeMs());
               if (!request) {
-                sendJson(res, { request: null, since, viewerPresent, viewerGone: false });
+                sendJson(res, { request: null, since, viewerPresent, viewerGone: false } satisfies ClaimResponse);
                 return;
               }
               // Carried on the request rather than left for the agent to look up: a rule nobody
@@ -494,7 +507,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
                 since,
                 viewerPresent,
                 viewerGone: false,
-              });
+              } satisfies ClaimResponse);
             },
             err => {
               stopWatching();
@@ -572,7 +585,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             files: parseDiffStatFiles(
               ref ? getDiffStatForRef(ref) : getDiffStat(diffArgs),
             ),
-          });
+          } satisfies DiffFingerprint);
           return;
         }
 
@@ -618,7 +631,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           const parsed = enrichWithLineCounts(parseDiff(raw), baseRef);
           // Null rather than an empty diff: the file may no longer differ at all, which the page
           // has to be able to tell from "here it is, unchanged".
-          sendJson(res, { file: parsed.files[0] ?? null });
+          sendJson(res, { file: parsed.files[0] ?? null } satisfies DiffFileResponse);
           return;
         }
 
@@ -631,13 +644,13 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
 
           if (ref) {
             const diff = enrichWithLineCounts(parseDiff(resolveRef(ref, extraArgs)), baseRef);
-            sendJson(res, { ...diff, suppressed: suppressedByWhitespace(hiding, diff, ref) });
+            sendJson(res, { ...diff, suppressed: suppressedByWhitespace(hiding, diff, ref) } satisfies DiffResponse);
             return;
           }
 
           const args = hiding ? [...diffArgs, '-w'] : diffArgs;
           const diff = enrichWithLineCounts(parseDiff(getFullDiff(args)), baseRef);
-          sendJson(res, { ...diff, suppressed: suppressedByWhitespace(hiding, diff, null) });
+          sendJson(res, { ...diff, suppressed: suppressedByWhitespace(hiding, diff, null) } satisfies DiffResponse);
           return;
         }
 
@@ -649,7 +662,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           const baseRef = ref ? resolveBaseRef(ref) : 'HEAD';
           try {
             const content = getFileContent(filePath, baseRef);
-            sendJson(res, { path: filePath, content: content.split('\n') });
+            sendJson(res, { path: filePath, content: content.split('\n') } satisfies FileContentResponse);
           } catch {
             sendError(res, 404, `File not found: ${filePath}`);
           }
@@ -678,7 +691,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             review: sessionId ? getReviewRun(sessionId) : null,
             github: githubRemote,
             editor: editorAvailable,
-          });
+          } satisfies RepoInfo);
           return;
         }
 
@@ -803,7 +816,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             }
             pulled++;
           }
-          sendJson(res, { pulled, skipped, resolved: settled.length, resolutionUnavailable: remoteState === null });
+          sendJson(res, { pulled, skipped, resolved: settled.length, resolutionUnavailable: remoteState === null } satisfies PullCommentsResult);
           return;
         }
 
@@ -813,14 +826,14 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             .update(raw)
             .digest('hex')
             .slice(0, 12);
-          sendJson(res, { fingerprint: hash });
+          sendJson(res, { fingerprint: hash } satisfies TreeFingerprintResponse);
           return;
         }
 
         if (pathname === '/api/tree') {
           try {
             const paths = getTree();
-            sendJson(res, { paths });
+            sendJson(res, { paths } satisfies TreePathsResponse);
           } catch (err) {
             sendError(res, 500, `Failed to get tree: ${err}`);
           }
@@ -831,7 +844,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           try {
             const dirPath = url.searchParams.get('path') || undefined;
             const entries = getTreeEntries('HEAD', dirPath);
-            sendJson(res, { entries });
+            sendJson(res, { entries } satisfies TreeEntriesResponse);
           } catch (err) {
             sendError(res, 500, `Failed to get tree entries: ${err}`);
           }
@@ -844,7 +857,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           );
           try {
             const content = getWorkingTreeFileContent(filePath);
-            sendJson(res, { path: filePath, content: content.split('\n') });
+            sendJson(res, { path: filePath, content: content.split('\n') } satisfies FileContentResponse);
           } catch {
             sendError(res, 404, `File not found: ${filePath}`);
           }
@@ -875,7 +888,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             sessionId: session.id,
             github: githubRemote,
             editor: editorAvailable,
-          });
+          } satisfies RepoInfo);
           return;
         }
 

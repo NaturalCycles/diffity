@@ -22,7 +22,7 @@ import { newAnswers, dropSeenAlerts, positionForAlert, unreadAlerts, type Answer
 import { useFaviconBadge } from '../../hooks/use-favicon-badge';
 import { whereIsThread, type ThreadPosition } from '../../lib/thread-visibility';
 import { AnswerBubble } from '../layout/answer-bubble';
-import { fetchDiffFile } from '../../lib/api';
+import { fetchDiffFile, type DiffResponse } from '../../lib/api';
 import { diffOptions } from '../../queries/diff';
 import { tourMarks, marksByPath, focusRangesFromMarks, type TourFocusRange } from '../../lib/tour-marks';
 import { TourStepper } from './tour-stepper';
@@ -171,7 +171,7 @@ export function DiffPage() {
       return null;
     }
     const base = info?.description ?? '';
-    const suppressed = (diff as { suppressed?: { files: number; lines: number } } | undefined)?.suppressed;
+    const suppressed = diff?.suppressed;
     if (!suppressed || (suppressed.files === 0 && suppressed.lines === 0)) {
       return `${base} · whitespace hidden`;
     }
@@ -493,7 +493,7 @@ export function DiffPage() {
   // object identity, so their collapse states, their place and the rest of the page are untouched.
   const handleRefreshFile = useCallback(async (path: string) => {
     const fresh = await fetchDiffFile(path, hideWhitespace, refParam);
-    queryClient.setQueryData<ParsedDiff>(
+    queryClient.setQueryData<DiffResponse>(
       diffOptions(hideWhitespace, refParam).queryKey,
       current => {
         if (!current) {

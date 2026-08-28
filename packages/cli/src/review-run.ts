@@ -1,10 +1,7 @@
+import type { ReviewRun } from '@diffity/api';
 import { getDb, queryOne } from './db.js';
 
-export interface ReviewRun {
-  inProgress: boolean;
-  startedAt: string | null;
-  note: string;
-}
+export type { ReviewRun } from '@diffity/api';
 
 const ABSENT: ReviewRun = { inProgress: false, startedAt: null, note: '' };
 

@@ -11,6 +11,7 @@ const root = resolve(__dirname, '..');
 const steps = [
   'npm run build:skills',
   'npm run build -w @diffity/parser',
+  'npm run build -w @diffity/api',
   'npm run build -w @diffity/git',
   'npm run build -w @diffity/github',
   'npm run build -w @diffity/ui',

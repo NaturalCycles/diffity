@@ -1,5 +1,6 @@
-/** What the reader pressed: a question, or a request for a change. */
-export type LiveIntent = 'ask' | 'act';
+import type { LiveIntent } from '@diffity/api';
+
+export type { LiveIntent } from '@diffity/api';
 
 /** Anything not plainly `act` is a question: least privilege, and it covers old and malformed alike. */
 export function normaliseIntent(value: unknown): LiveIntent {

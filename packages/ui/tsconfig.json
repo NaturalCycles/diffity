@@ -9,6 +9,7 @@
   },
   "include": ["src/**/*.ts", "src/**/*.tsx", ".react-router/types/**/*"],
   "references": [
+    { "path": "../api" },
     { "path": "../parser" }
   ]
 }

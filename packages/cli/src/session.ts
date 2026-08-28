@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { ReviewSession } from '@diffity/api';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { getHeadHash, getDiffityDir, getRepoRoot, getCurrentBranch, getRenameStatus, WORKING_TREE_REFS } from '@diffity/git';
@@ -8,11 +9,7 @@ import { reanchorInWorkingTree } from './anchor.js';
 import { carryReviewRun } from './review-run.js';
 import { updateThreadLines, updateThreadPath } from './threads.js';
 
-export interface Session {
-  id: string;
-  ref: string;
-  headHash: string;
-}
+export type Session = ReviewSession;
 
 /**
  * `git rev-parse --abbrev-ref HEAD` says `HEAD` on a detached checkout, which is not a branch name.

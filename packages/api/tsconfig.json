@@ -7,9 +7,6 @@
   },
   "include": ["src/**/*.ts"],
   "references": [
-    { "path": "../api" },
-    { "path": "../git" },
-    { "path": "../github" },
     { "path": "../parser" }
   ]
 }

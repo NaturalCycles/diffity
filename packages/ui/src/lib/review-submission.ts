@@ -1,6 +1,6 @@
 import type { CommentKind, CommentThread } from '../components/comments/types';
 import { GENERAL_THREAD_FILE_PATH, isThreadResolved } from '../components/comments/types';
-import type { PrCommentPayload, ReviewEvent } from './api';
+import type { PrComment, ReviewEvent } from './api';
 
 export function isReviewComment(comment: { kind?: CommentKind }): boolean {
   return (comment.kind ?? 'review') === 'review';
@@ -15,7 +15,7 @@ export function findingOf(thread: CommentThread): string | undefined {
   return thread.comments.find(isReviewComment)?.body;
 }
 
-export function threadToPayload(thread: CommentThread): PrCommentPayload {
+export function threadToPayload(thread: CommentThread): PrComment {
   const finding = findingOf(thread);
 
   return {

@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { CommentSide } from '@diffity/api';
 import {
   createThread,
   getThreadsForSession,
@@ -57,8 +58,9 @@ export function handleReviewRoute(req: IncomingMessage, res: ServerResponse, pat
         return;
       }
       const threadKind: CommentKind = kind === 'aside' ? 'aside' : 'review';
+      const threadSide: CommentSide = side === 'old' ? 'old' : 'new';
       const thread = createThread(
-        sid as string, filePath as string, side as string, startLine, endLine,
+        sid as string, filePath as string, threadSide, startLine, endLine,
         commentBody as string, author as ThreadAuthor,
         anchorContent as string | undefined,
         threadKind,
