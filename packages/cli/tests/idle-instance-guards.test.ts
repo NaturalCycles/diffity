@@ -61,6 +61,41 @@ describe('a server judging whether it is still needed', () => {
     expect(shouldShutDown({ ...facts, reviewInProgress: false })).toBe(true);
   });
 
+  it('lets go of a review once the commit-carried run is finished where it moved to', async () => {
+    const { findOrCreateSession } = await import('../src/session.js');
+    const { getRepoRoot } = await import('@diffity/git');
+    const { startReviewRun, finishReviewRun, carryReviewRun, anyReviewInProgress } = await import('../src/review-run.js');
+
+    const before = findOrCreateSession('work');
+    startReviewRun(before.id, 'reviewing');
+    const after = findOrCreateSession('__tree__');
+    carryReviewRun(before.id, after.id);
+
+    expect(anyReviewInProgress(getRepoRoot())).toBe(true);
+
+    finishReviewRun(after.id);
+
+    // The donor's half-open row must not survive the move, or this stays true forever.
+    expect(anyReviewInProgress(getRepoRoot())).toBe(false);
+  });
+
+  it('stops counting a run nobody has touched for hours', async () => {
+    const { findOrCreateSession } = await import('../src/session.js');
+    const { getRepoRoot } = await import('@diffity/git');
+    const { startReviewRun, anyReviewInProgress } = await import('../src/review-run.js');
+    const { getDb } = await import('../src/db.js');
+
+    const session = findOrCreateSession('HEAD~0');
+    startReviewRun(session.id, 'abandoned');
+    expect(anyReviewInProgress(getRepoRoot())).toBe(true);
+
+    getDb()
+      .prepare("UPDATE review_runs SET started_at = datetime('now', '-3 hours') WHERE session_id = ?")
+      .run(session.id);
+
+    expect(anyReviewInProgress(getRepoRoot())).toBe(false);
+  });
+
   it('counts a listener parked on any session, not only the startup one', async () => {
     const { findOrCreateSession } = await import('../src/session.js');
     const { waitForLiveRequest, liveListenerTotal } = await import('../src/live.js');

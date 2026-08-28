@@ -9,7 +9,7 @@ import {
   type TourStatus,
 } from './tours.js';
 import { sendJson, sendError, withJsonBody } from './http-utils.js';
-import { getSessionById, resolveSessionId } from './session.js';
+import { resolveSessionId, sessionRef } from './session.js';
 
 export function handleTourRoute(
   req: IncomingMessage,
@@ -77,8 +77,9 @@ export function handleTourRoute(
       return true;
     }
     // Reading a tour is reading its session: the tour page's chrome also touches the tree
-    // routes, so without this the agent would follow those to the tree instead.
-    const ref = getSessionById(tour.sessionId)?.ref;
+    // routes, so without this the agent would follow those to the tree instead. Carry-forward
+    // moves tour rows, so the session this row names is already the newest of its review.
+    const ref = sessionRef(tour.sessionId);
     if (ref) {
       onTourViewed?.(ref);
     }

@@ -10,6 +10,7 @@ import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import { parseDiff, type ParsedDiff } from '@diffity/parser';
+import { AGENT_TRAFFIC_HEADER } from '@diffity/api';
 import type {
   ClaimResponse,
   ReviewSession,
@@ -704,7 +705,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             const session = findOrCreateSession(ref);
             sessionId = session.id;
           }
-          if (ref && req.headers['x-diffity-agent'] !== '1') {
+          if (ref && req.headers[AGENT_TRAFFIC_HEADER] !== '1') {
             lastViewedRef = ref;
           }
           sendJson(res, {
@@ -912,7 +913,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
         if (pathname === '/api/tree/info') {
           const info = getRepoInfo();
           const session = findOrCreateSession('__tree__');
-          if (req.headers['x-diffity-agent'] !== '1') {
+          if (req.headers[AGENT_TRAFFIC_HEADER] !== '1') {
             lastViewedRef = '__tree__';
           }
           sendJson(res, {
@@ -931,7 +932,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
         }
 
         if (handleTourRoute(req, res, pathname, url, ref => {
-          if (req.headers['x-diffity-agent'] !== '1') {
+          if (req.headers[AGENT_TRAFFIC_HEADER] !== '1') {
             lastViewedRef = ref;
           }
         })) {

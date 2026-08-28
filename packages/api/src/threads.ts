@@ -1,6 +1,12 @@
 /** Threads with this path are about the whole diff rather than any file. */
 export const GENERAL_THREAD_FILE_PATH = '__general__';
 
+/**
+ * Marks a request as the agent's own traffic. A reader's polls steer which session the agent
+ * follows and whether anyone is watching; requests carrying this header steer neither.
+ */
+export const AGENT_TRAFFIC_HEADER = 'x-diffity-agent';
+
 export type CommentSide = 'old' | 'new';
 
 /**

@@ -22,7 +22,7 @@ import {
 import { answerLiveRequest } from './live.js';
 import { clampClientWait, CLIENT_WAIT_CAP_SECONDS } from './live-wait.js';
 import { directiveFor } from './live-intent.js';
-import { AGENT_HEADER, findRunningInstance, resolveAgentSession } from './agent-session.js';
+import { AGENT_HEADER, SERVER_TIMEOUT_MS, findRunningInstance, resolveAgentSession } from './agent-session.js';
 import type { Session } from './session.js';
 import { createTour, addTourStep, updateTourStatus, deleteTour, deleteToursForSession, getTour } from './tours.js';
 import { unansweredRequest } from './live-unanswered.js';
@@ -135,7 +135,7 @@ async function fetchLiveStatus(port: number): Promise<LiveStatus | null> {
   try {
     const res = await fetch(`http://127.0.0.1:${port}/api/live/status`, {
       headers: AGENT_HEADER,
-      signal: AbortSignal.timeout(2000),
+      signal: AbortSignal.timeout(SERVER_TIMEOUT_MS),
     });
     if (!res.ok) {
       return null;
@@ -147,7 +147,7 @@ async function fetchLiveStatus(port: number): Promise<LiveStatus | null> {
 
     const details = await fetch(`http://127.0.0.1:${port}/api/github/details`, {
       headers: AGENT_HEADER,
-      signal: AbortSignal.timeout(2000),
+      signal: AbortSignal.timeout(SERVER_TIMEOUT_MS),
     });
     const pr = details.ok ? ((await details.json()) as GitHubDetails | null) : null;
     // No pull request means this is your own working tree, which is the case changes exist for.

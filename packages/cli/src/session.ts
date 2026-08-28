@@ -392,6 +392,14 @@ export function getCurrentSession(): Session | null {
   }
 }
 
+/** The ref a session row holds, read plainly — for callers whose row is already the newest. */
+export function sessionRef(sessionId: string): string | null {
+  return queryOne<{ ref: string }>(
+    'SELECT ref FROM review_sessions WHERE id = ?',
+    sessionId,
+  )?.ref ?? null;
+}
+
 /** When an agent last finished waiting on this session, or null if none ever has. */
 export function agentSeenAt(sessionId: string): string | null {
   return queryOne<{ agent_seen_at: string | null }>(

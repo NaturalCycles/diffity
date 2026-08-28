@@ -1,14 +1,14 @@
 import { createHash } from 'node:crypto';
-import type { ReviewSession } from '@diffity/api';
+import { AGENT_TRAFFIC_HEADER, type ReviewSession } from '@diffity/api';
 import { getRepoRoot } from '@diffity/git';
 import { findInstanceForRepo, type RegistryEntry } from './registry.js';
 import { getCurrentSession, getSessionById } from './session.js';
 
 /** How the server tells the agent's own traffic from a page somebody is looking at. */
-export const AGENT_HEADER = { 'x-diffity-agent': '1' } as const;
+export const AGENT_HEADER: Record<string, string> = { [AGENT_TRAFFIC_HEADER]: '1' };
 
 /** The registry's own health probe allows the same; a wedged server must not hang every command. */
-const SERVER_TIMEOUT_MS = 2000;
+export const SERVER_TIMEOUT_MS = 2000;
 
 export function findRunningInstance(): RegistryEntry | null {
   const repoRoot = getRepoRoot();
