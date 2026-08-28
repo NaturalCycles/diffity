@@ -44,6 +44,10 @@ describe('threadsResolvedRemotely', () => {
     expect(threadsResolvedRemotely([local({ githubCommentId: null })], [remote({ firstCommentId: 900 })])).toEqual(['t1']);
   });
 
+  it('falls back to wording when the remote state carries no id, even though this side has one', () => {
+    expect(threadsResolvedRemotely([local({ githubCommentId: 900 })], [remote({ firstCommentId: null })])).toEqual(['t1']);
+  });
+
   it('takes a sent thread the author has resolved', () => {
     expect(threadsResolvedRemotely([local()], [remote()])).toEqual(['t1']);
   });

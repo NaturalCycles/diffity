@@ -802,9 +802,11 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             if (existing) {
               skipped++;
               // A thread sent before ids were recorded is recognised by wording once more, and
-              // from then on by id.
+              // from then on by id. The snapshot is updated too, so a second wording twin in
+              // this same pull sees the claimed id instead of overwriting it.
               if (existing.githubCommentId == null) {
                 setThreadForgeComment(existing.id, rt.firstCommentId);
+                existing.githubCommentId = rt.firstCommentId;
               }
               continue;
             }

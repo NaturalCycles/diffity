@@ -2,18 +2,22 @@ export interface SentComment {
   threadId?: string;
   path: string;
   body: string;
+  endLine: number;
 }
 
 export interface CreatedComment {
   id: number;
   path: string;
   body: string;
+  /** The comment's end line as the forge anchored it, or null when it reports none. */
+  line: number | null;
 }
 
 /**
- * Which created comment answers which sent finding. Matched on path and body within the one review
- * that was just posted, consuming each created comment at most once, so two identical findings in
- * one file pair up in order instead of both claiming the first id.
+ * Which created comment answers which sent finding. Matched on path, line and body within the one
+ * review that was just posted, consuming each created comment at most once — so two identical
+ * findings on one line, the only pair the key cannot separate, pair up in order instead of both
+ * claiming the first id.
  */
 export function matchCreatedComments(
   sent: SentComment[],
@@ -26,7 +30,11 @@ export function matchCreatedComments(
     if (!comment.threadId) {
       continue;
     }
-    const index = unclaimed.findIndex(c => c.path === comment.path && c.body === comment.body);
+    const index = unclaimed.findIndex(c =>
+      c.path === comment.path
+      && c.body === comment.body
+      && (c.line == null || c.line === comment.endLine),
+    );
     if (index === -1) {
       continue;
     }

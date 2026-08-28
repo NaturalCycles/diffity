@@ -54,7 +54,7 @@ describe('existingThreadFor', () => {
     expect(existingThreadFor([amended], remote())).toBe(amended);
   });
 
-  it('does not take a wording twin when the id says it is a different thread', () => {
+  it('still takes a wording twin even when the ids disagree, rather than duplicating the thread', () => {
     const other = local({ githubCommentId: 901 });
 
     // The wording fallback still matches it: an id mismatch alone must not create a duplicate,

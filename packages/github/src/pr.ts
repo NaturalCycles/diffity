@@ -73,7 +73,7 @@ const REVIEW_THREADS_QUERY = `query($owner:String!,$repo:String!,$number:Int!){
           originalLine
           diffSide
           path
-          comments(first:1){ nodes{ body databaseId } }
+          comments(first:1){ nodes{ body fullDatabaseId } }
         }
       }
     }
@@ -118,7 +118,8 @@ export function pullThreadState(owner: string, repo: string, prNumber: number): 
         endLine: node.line ?? node.originalLine ?? null,
         body: first.body,
         isResolved: !!node.isResolved,
-        firstCommentId: first.databaseId ?? null,
+        // A BigInt on the wire, serialized as a string; exact in a number until 2^53.
+        firstCommentId: first.fullDatabaseId != null ? Number(first.fullDatabaseId) : null,
       }];
     });
   } catch {
@@ -132,7 +133,7 @@ interface RawReviewThread {
   originalLine: number | null;
   diffSide: string;
   path: string;
-  comments?: { nodes?: { body: string; databaseId?: number | null }[] };
+  comments?: { nodes?: { body: string; fullDatabaseId?: string | null }[] };
 }
 
 export function pullComments(owner: string, repo: string, prNumber: number): PulledThread[] {
@@ -252,7 +253,7 @@ export function createReview(
     comments.push(toReviewComment(comment));
     if (comment.threadId) {
       sentThreadIds.push(comment.threadId);
-      sentForIds.push({ threadId: comment.threadId, path: comment.filePath, body: comment.body });
+      sentForIds.push({ threadId: comment.threadId, path: comment.filePath, body: comment.body, endLine: comment.endLine });
     }
   }
 
@@ -307,6 +308,18 @@ export function createReview(
  * by several commits appears several times, and only the last one survives being collected, so
  * whether a comment was allowed depended on which commit happened to touch that line last.
  */
+function getPatch(owner: string, repo: string, prNumber: number): string {
+  try {
+    return execFileSync('gh', ['pr', 'diff', String(prNumber), '--repo', `${owner}/${repo}`], {
+      encoding: 'utf-8',
+      stdio: 'pipe',
+      maxBuffer: 50 * 1024 * 1024,
+    });
+  } catch {
+    return '';
+  }
+}
+
 /**
  * The ids the forge gave the comments of one just-posted review. Failing to learn them is not
  * failing the submit: a thread without an id is still recognised by its sent wording.
@@ -322,20 +335,13 @@ function getReviewCommentIds(owner: string, repo: string, prNumber: number, revi
     if (!Array.isArray(data)) {
       return [];
     }
-    return data.map((c: { id: number; path: string; body: string }) => ({ id: c.id, path: c.path, body: c.body }));
+    return data.map((c: { id: number; path: string; body: string; line?: number | null }) => ({
+      id: c.id,
+      path: c.path,
+      body: c.body,
+      line: c.line ?? null,
+    }));
   } catch {
     return [];
-  }
-}
-
-function getPatch(owner: string, repo: string, prNumber: number): string {
-  try {
-    return execFileSync('gh', ['pr', 'diff', String(prNumber), '--repo', `${owner}/${repo}`], {
-      encoding: 'utf-8',
-      stdio: 'pipe',
-      maxBuffer: 50 * 1024 * 1024,
-    });
-  } catch {
-    return '';
   }
 }
