@@ -67,3 +67,26 @@ describe('POST /api/sessions/ensure', () => {
     expect(second.body.id).toBe(first.body.id);
   });
 });
+
+describe('the session ensure follows the reader to', () => {
+  it("is the tree once a page poll names the tree, and the agent's own polls change nothing", async () => {
+    const before = await req('/api/sessions/ensure', { method: 'POST' });
+    expect(before.body.ref).toBe('work');
+
+    // The tree page polls its info route; the server now knows where the reader is.
+    await req('/api/tree/info');
+    const afterTree = await req('/api/sessions/ensure', { method: 'POST' });
+    expect(afterTree.body.ref).toBe('__tree__');
+    expect(afterTree.body.id).not.toBe(before.body.id);
+
+    // An agent's info poll is not a reader; it must not steal the ensure back.
+    await req('/api/info?ref=work', { headers: { 'x-diffity-agent': '1' } });
+    const still = await req('/api/sessions/ensure', { method: 'POST' });
+    expect(still.body.ref).toBe('__tree__');
+
+    // A page poll for the diff brings the ensure back to it.
+    await req('/api/info?ref=work');
+    const back = await req('/api/sessions/ensure', { method: 'POST' });
+    expect(back.body.id).toBe(before.body.id);
+  });
+});

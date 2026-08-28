@@ -346,7 +346,12 @@ export function resolveSessionId(sessionId: string | null | undefined): string {
   return newest?.id ?? sessionId;
 }
 
-/** A session by its id, or the 8-char prefix every other id in the CLI accepts. */
+/**
+ * A session by its id, or the 8-char prefix every other id in the CLI accepts. A superseded id is
+ * chased to the newest session of the same review: the id somebody passes came from a page URL or
+ * an earlier command, and a commit since then has carried the work forward — honouring the old id
+ * literally would answer an empty review.
+ */
 export function getSessionById(idOrPrefix: string): Session | null {
   let row = queryOne<{ id: string; ref: string; head_hash: string }>(
     'SELECT id, ref, head_hash FROM review_sessions WHERE id = ?',
@@ -355,12 +360,27 @@ export function getSessionById(idOrPrefix: string): Session | null {
 
   if (!row && idOrPrefix.length >= 8) {
     row = queryOne<{ id: string; ref: string; head_hash: string }>(
-      'SELECT id, ref, head_hash FROM review_sessions WHERE id LIKE ?',
-      idOrPrefix + '%',
+      "SELECT id, ref, head_hash FROM review_sessions WHERE id LIKE ? ESCAPE '\\' ORDER BY created_at DESC, rowid DESC",
+      idOrPrefix.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_') + '%',
     );
   }
 
-  return row ? { id: row.id, ref: row.ref, headHash: row.head_hash } : null;
+  if (!row) {
+    return null;
+  }
+
+  const newestId = resolveSessionId(row.id);
+  if (newestId !== row.id) {
+    const newest = queryOne<{ id: string; ref: string; head_hash: string }>(
+      'SELECT id, ref, head_hash FROM review_sessions WHERE id = ?',
+      newestId,
+    );
+    if (newest) {
+      row = newest;
+    }
+  }
+
+  return { id: row.id, ref: row.ref, headHash: row.head_hash };
 }
 
 export function getCurrentSession(): Session | null {

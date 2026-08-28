@@ -346,6 +346,11 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
     // VS Code CLI not found
   }
 
+  // The ref whose page somebody last looked at on this instance. One server gets reused for other
+  // refs and for the tree, so the startup ref is not what an agent should follow — and the page's
+  // own polls, never the agent's traffic, are what say where the reader actually is.
+  let lastViewedRef: string | null = null;
+
   // Who wrote the pull request does not change between two questions asked a minute apart, and the
   // lookup is a subprocess on a path that is meant to feel immediate.
   let authorshipCache: { viewerDidAuthor?: boolean } | null | undefined;
@@ -423,11 +428,12 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
         // tab's info poll rewrites. Ensuring is deliberate: an agent arriving after a commit
         // needs the carry-forward that findOrCreateSession performs.
         if (pathname === '/api/sessions/ensure' && req.method === 'POST') {
-          if (!effectiveRef) {
+          const ref = lastViewedRef ?? effectiveRef;
+          if (!ref) {
             sendError(res, 400, 'This server has no review ref');
             return;
           }
-          sendJson(res, findOrCreateSession(effectiveRef) satisfies ReviewSession);
+          sendJson(res, findOrCreateSession(ref) satisfies ReviewSession);
           return;
         }
 
@@ -685,6 +691,9 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
 
         if (pathname === '/api/info') {
           const ref = url.searchParams.get('ref') || effectiveRef;
+          if (ref && req.headers['x-diffity-agent'] !== '1') {
+            lastViewedRef = ref;
+          }
           const info = getRepoInfo();
           let refDescription =
             description || diffArgs.join(' ') || 'Unstaged changes';
@@ -900,6 +909,9 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
         }
 
         if (pathname === '/api/tree/info') {
+          if (req.headers['x-diffity-agent'] !== '1') {
+            lastViewedRef = '__tree__';
+          }
           const info = getRepoInfo();
           const session = findOrCreateSession('__tree__');
           sendJson(res, {
