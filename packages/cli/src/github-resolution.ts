@@ -1,11 +1,6 @@
-export interface RemoteThreadState {
-  filePath: string;
-  side: 'old' | 'new';
-  /** Null once GitHub marks the thread outdated, so it cannot be part of the identity. */
-  endLine: number | null;
-  body: string;
-  isResolved: boolean;
-}
+import type { RemoteThreadState } from '@diffity/github';
+
+export type { RemoteThreadState } from '@diffity/github';
 
 interface LocalThreadLike {
   id: string;
@@ -15,6 +10,7 @@ interface LocalThreadLike {
   status: string;
   submittedAt?: string | null;
   submittedBody?: string | null;
+  githubCommentId?: number | null;
   comments: { body: string }[];
 }
 
@@ -25,11 +21,11 @@ interface LocalThreadLike {
  * the author, and matching one to a remote thread that merely looks like it would resolve a finding
  * nobody has seen.
  *
- * Matched on file and wording rather than on line. GitHub nulls a thread's line once it goes
- * outdated, which is the state most resolved threads are in by the time anyone looks, so a line in
- * the key means the sync quietly does nothing on exactly the threads it exists for. Two findings
- * with identical wording in one file would both resolve together; a missed resolution leaves a
- * thread open, which is the cheaper way to be wrong.
+ * When both sides know the forge's comment id, that is the identity and nothing else is consulted.
+ * Threads sent before the id was recorded fall back to file and wording — not line, because GitHub
+ * nulls a thread's line once it goes outdated, which is the state most resolved threads are in by
+ * the time anyone looks. Two id-less findings with identical wording in one file would both resolve
+ * together; a missed resolution leaves a thread open, which is the cheaper way to be wrong.
  *
  * The wording compared is the one that was sent, not the one held now: amending rewrites the body
  * here and leaves the forge showing the old text. Threads sent before that was recorded fall back
@@ -43,15 +39,20 @@ export function threadsResolvedRemotely(
 
   return local
     .filter(thread => thread.submittedAt && thread.status === 'open')
-    .filter(thread =>
-      resolvedRemotely.some(
-        state =>
-          state.filePath === thread.filePath
-          && state.side === thread.side
-          && wordingSent(thread).includes(state.body),
-      ),
-    )
+    .filter(thread => resolvedRemotely.some(state => sameThread(thread, state)))
     .map(thread => thread.id);
+}
+
+function sameThread(thread: LocalThreadLike, state: RemoteThreadState): boolean {
+  if (thread.githubCommentId != null && state.firstCommentId != null) {
+    return thread.githubCommentId === state.firstCommentId;
+  }
+
+  return (
+    state.filePath === thread.filePath
+    && state.side === thread.side
+    && wordingSent(thread).includes(state.body)
+  );
 }
 
 function wordingSent(thread: LocalThreadLike): string[] {

@@ -30,6 +30,8 @@ export interface PulledThread {
   side: 'old' | 'new';
   startLine: number;
   endLine: number;
+  /** The forge's id for the thread's first comment, which is what identifies the thread here. */
+  firstCommentId: number;
   comments: PulledThreadComment[];
 }
 

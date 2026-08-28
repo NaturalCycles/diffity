@@ -33,6 +33,7 @@ export function makeThread(overrides: Partial<CommentThread> = {}): CommentThrea
     submittedReviewUrl: null,
     submittedHeadSha: null,
     submittedBody: null,
+    githubCommentId: null,
     comments: [],
     ...overrides,
   };

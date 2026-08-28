@@ -26,6 +26,7 @@ interface ThreadRow {
   submitted_review_url?: string | null;
   submitted_body?: string | null;
   submitted_head_sha?: string | null;
+  github_comment_id?: number | null;
   id: string;
   session_id: string;
   file_path: string;
@@ -68,6 +69,7 @@ function rowToThread(row: ThreadRow, comments: ThreadComment[]): Thread {
     submittedReviewUrl: row.submitted_review_url ?? null,
     submittedBody: row.submitted_body ?? null,
     submittedHeadSha: row.submitted_head_sha ?? null,
+    githubCommentId: row.github_comment_id ?? null,
     comments,
   };
 }
@@ -116,7 +118,7 @@ export interface SubmittedIn {
 }
 
 export function markThreadsSubmitted(
-  sent: (string | { threadId: string; body?: string })[],
+  sent: (string | { threadId: string; body?: string; githubCommentId?: number })[],
   submittedIn: SubmittedIn = {},
 ): void {
   if (sent.length === 0) {
@@ -129,14 +131,29 @@ export function markThreadsSubmitted(
         SET submitted_at = strftime('%Y-%m-%d %H:%M:%f', 'now'),
             submitted_review_url = ?,
             submitted_head_sha = ?,
-            submitted_body = COALESCE(?, submitted_body)
+            submitted_body = COALESCE(?, submitted_body),
+            github_comment_id = COALESCE(?, github_comment_id)
       WHERE id = ?`,
   );
 
   for (const entry of sent) {
-    const { threadId, body } = typeof entry === 'string' ? { threadId: entry, body: undefined } : entry;
-    statement.run(submittedIn.reviewUrl ?? null, submittedIn.headSha ?? null, body ?? null, threadId);
+    const { threadId, body, githubCommentId } =
+      typeof entry === 'string' ? { threadId: entry, body: undefined, githubCommentId: undefined } : entry;
+    statement.run(
+      submittedIn.reviewUrl ?? null,
+      submittedIn.headSha ?? null,
+      body ?? null,
+      githubCommentId ?? null,
+      threadId,
+    );
   }
+}
+
+/** Records which forge comment a thread exists as, once that is learned. */
+export function setThreadForgeComment(threadId: string, githubCommentId: number): void {
+  getDb()
+    .prepare('UPDATE comment_threads SET github_comment_id = ? WHERE id = ?')
+    .run(githubCommentId, threadId);
 }
 
 export function updateThreadPath(threadId: string, filePath: string): void {
@@ -195,6 +212,7 @@ export function createThread(
     submittedReviewUrl: null,
     submittedBody: null,
     submittedHeadSha: null,
+    githubCommentId: null,
     comments: [{
       id: commentId,
       author,

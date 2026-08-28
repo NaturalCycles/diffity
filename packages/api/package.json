@@ -1,6 +1,6 @@
 {
   "name": "@diffity/api",
-  "version": "0.9.18",
+  "version": "0.9.19",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
@@ -13,7 +13,8 @@
   },
   "scripts": {
     "build": "tsc",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "typecheck": "tsc -p tsconfig.typecheck.json"
   },
   "files": [
     "dist"

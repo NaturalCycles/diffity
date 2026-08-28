@@ -22,11 +22,32 @@ function remote(over: Partial<RemoteThreadState> = {}): RemoteThreadState {
     endLine: 54,
     body: 'P2: the finding',
     isResolved: true,
+    firstCommentId: null,
     ...over,
   };
 }
 
 describe('threadsResolvedRemotely', () => {
+  it('matches on the forge comment id however the wording has changed since', () => {
+    const amended = local({ githubCommentId: 900, submittedBody: 'the old wording', comments: [{ body: 'rewritten' }] });
+
+    expect(threadsResolvedRemotely([amended], [remote({ firstCommentId: 900, body: 'the old wording, which no longer matches anything held here' })])).toEqual(['t1']);
+  });
+
+  it('does not resolve on wording alone when the ids say two different threads', () => {
+    const other = local({ githubCommentId: 901 });
+
+    expect(threadsResolvedRemotely([other], [remote({ firstCommentId: 900 })])).toEqual([]);
+  });
+
+  it('falls back to wording for a thread sent before ids were recorded', () => {
+    expect(threadsResolvedRemotely([local({ githubCommentId: null })], [remote({ firstCommentId: 900 })])).toEqual(['t1']);
+  });
+
+  it('falls back to wording when the remote state carries no id, even though this side has one', () => {
+    expect(threadsResolvedRemotely([local({ githubCommentId: 900 })], [remote({ firstCommentId: null })])).toEqual(['t1']);
+  });
+
   it('takes a sent thread the author has resolved', () => {
     expect(threadsResolvedRemotely([local()], [remote()])).toEqual(['t1']);
   });
