@@ -74,6 +74,9 @@ export function ghAsync(
       },
     );
     if (options.input !== undefined) {
+      // A gh that exits before draining stdin EPIPEs the stream; the failure already arrives
+      // through the callback, and an unhandled stream error would take the whole process.
+      child.stdin?.once('error', () => {});
       child.stdin?.end(options.input);
     }
   });

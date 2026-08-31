@@ -91,12 +91,14 @@ describe('a slow forge', () => {
     const details = fetch(`http://127.0.0.1:${port}/api/github/details`, {
       headers: { 'x-diffity-agent': '1' },
     });
-    // Give the details request time to reach its gh subprocess before measuring.
+    // The timer's own lateness is what discriminates: a synchronous gh boundary starves this
+    // 200ms timer for the full two seconds, because the block elapses before any timer can fire.
+    const before = Date.now();
     await new Promise(resolve => setTimeout(resolve, 200));
+    expect(Date.now() - before).toBeLessThan(1200);
 
     const info = await timed('/api/info');
     expect(info.status).toBe(200);
-    // Sync gh would hold the event loop for the full two seconds.
     expect(info.ms).toBeLessThan(1000);
 
     const answered = await details;

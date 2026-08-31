@@ -86,6 +86,7 @@ import { sinceLastWait } from './live-events.js';
 import pc from 'picocolors';
 import { shouldShutDown, IDLE_CHECK_MS } from './idle-shutdown.js';
 import { handleReviewRoute } from './review-routes.js';
+import { serializer } from './serialize.js';
 import { handleTourRoute } from './tour-routes.js';
 import { sendJson, sendError, withJsonBody } from './http-utils.js';
 import {
@@ -366,6 +367,11 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
       : Promise.resolve(null);
     return authorshipCache;
   }
+
+  // Both mutating GitHub routes were loop-atomic while the gh boundary was synchronous: a second
+  // submit always saw the first one's comments, and a second pull saw its threads. What
+  // serialized by accident serializes on purpose.
+  const oneGhMutationAtATime = serializer();
 
   const server = createServer(
     async (req: IncomingMessage, res: ServerResponse) => {
@@ -724,7 +730,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             sendError(res, 409, 'You have uncommitted local changes. Commit or stash them first.');
             return;
           }
-          withJsonBody(res, req, 'Failed to create review', parseReviewSubmission, async (submission) => {
+          withJsonBody(res, req, 'Failed to create review', parseReviewSubmission, (submission) => oneGhMutationAtATime(async () => {
             // A verdict carries its own meaning; only a plain comment needs something in it.
             if (submission.event === 'COMMENT' && submission.comments.length === 0 && !submission.body.trim()) {
               sendError(res, 400, 'A comment review needs a summary or at least one comment');
@@ -751,7 +757,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
               },
             );
             sendJson(res, result);
-          });
+          }));
           return;
         }
 
@@ -775,7 +781,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             return;
           }
 
-          withJsonBody(res, req, 'Failed to pull comments', parsePullCommentsRequest, async (body) => {
+          withJsonBody(res, req, 'Failed to pull comments', parsePullCommentsRequest, (body) => oneGhMutationAtATime(async () => {
             const sid = body.sessionId;
             const [remoteThreads, remoteState] = await Promise.all([
               pullGitHubComments(githubRemote.owner, githubRemote.repo, details.prNumber),
@@ -819,7 +825,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
               pulled++;
             }
             sendJson(res, { pulled, skipped, resolved: settled.length, resolutionUnavailable: remoteState === null } satisfies PullCommentsResult);
-          });
+          }));
           return;
         }
 

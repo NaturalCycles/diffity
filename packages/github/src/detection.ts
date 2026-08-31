@@ -27,16 +27,20 @@ export function detectRemote(): GitHubRemote | null {
   return remote;
 }
 
-// Remembered only when true: a missing or unauthenticated gh is retried on the next ask, so
-// logging in does not require a restart — but the ready answer cannot change while we live.
-let cliKnownReady = false;
+// The in-flight promise is what is remembered, so concurrent first asks share one probe pair.
+// A "no" clears itself: a missing or unauthenticated gh is re-asked on the next call, so logging
+// in does not require a restart — while a "yes" cannot change while the process lives.
+let cliReadyPromise: Promise<boolean> | undefined;
 
-async function cliReady(): Promise<boolean> {
-  if (cliKnownReady) {
-    return true;
-  }
-  cliKnownReady = (await ghSucceeds(['--version'])) && (await ghSucceeds(['auth', 'status']));
-  return cliKnownReady;
+function cliReady(): Promise<boolean> {
+  cliReadyPromise ??= (async () => {
+    const ready = (await ghSucceeds(['--version'])) && (await ghSucceeds(['auth', 'status']));
+    if (!ready) {
+      cliReadyPromise = undefined;
+    }
+    return ready;
+  })();
+  return cliReadyPromise;
 }
 
 export async function fetchDetails(owner: string, repo: string, prNumber?: number): Promise<GitHubDetails | null> {

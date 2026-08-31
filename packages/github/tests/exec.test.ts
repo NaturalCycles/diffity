@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync, chmodSync } from 'node:fs';
 import { join, delimiter } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -22,6 +22,10 @@ beforeAll(() => {
   chmodSync(join(fakeBin, 'gh'), 0o755);
   origPath = process.env.PATH;
   process.env.PATH = `${fakeBin}${delimiter}${origPath ?? ''}`;
+});
+
+afterEach(() => {
+  delete process.env.FAKE_GH_ECHO_STDIN;
 });
 
 afterAll(() => {
@@ -99,6 +103,15 @@ describe('the async twin', () => {
     process.env.FAKE_GH_ECHO_STDIN = '1';
 
     await expect(ghAsync(['api', 'x', '--input', '-'], { input: '{"a":1}' })).resolves.toBe('{"a":1}');
-    delete process.env.FAKE_GH_ECHO_STDIN;
+  });
+
+  it('a gh that dies before draining its stdin fails the call, not the process', async () => {
+    process.env.FAKE_GH_EXIT = '1';
+    process.env.FAKE_GH_STDERR = 'gh: boom';
+    process.env.FAKE_GH_STDOUT = '';
+
+    // Larger than a pipe buffer, so the write is still pending when the exit lands.
+    await expect(ghAsync(['api', 'x', '--input', '-'], { input: 'x'.repeat(200_000) }))
+      .rejects.toThrowError('gh api x failed: gh: boom');
   });
 });
