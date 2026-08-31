@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { GENERAL_THREAD_FILE_PATH, isThreadResolved, DEFAULT_AUTHOR } from './types';
 import type { CommentThread as CommentThreadType } from './types';
+import type { CommentAuthor, CommentSide } from './types';
 import type { CommentActions } from '../../hooks/use-comment-actions';
 import { CommentForm } from './comment-form';
 import { CommentIcon } from '../icons/comment-icon';
@@ -10,10 +11,20 @@ import { ThreadCard } from './thread-card';
 interface GeneralCommentsProps {
   threads: CommentThreadType[];
   commentActions: CommentActions;
+  /** Hands the reply to the agent as a question. Absent when no agent can be reached. */
+  onAskReply?: (threadId: string, body: string, author: CommentAuthor) => void;
+  /** Asks the agent to make the change. Absent when the code is not the reader's to change. */
+  onActReply?: (threadId: string, body: string, author: CommentAuthor) => void;
+  /** The same, for a question nobody has commented on yet. */
+  onAskThread?: (filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor) => void;
+  onActThread?: (filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor) => void;
+  askIsHeard?: boolean;
 }
 
 export function GeneralComments(props: GeneralCommentsProps) {
-  const { threads: allThreads, commentActions } = props;
+  const {
+    threads: allThreads, commentActions, onAskReply, onActReply, onAskThread, onActThread, askIsHeard,
+  } = props;
 
   const threads = allThreads.filter(t => t.filePath === GENERAL_THREAD_FILE_PATH);
   const [isExpanded, setIsExpanded] = useState(threads.length > 0);
@@ -59,6 +70,15 @@ export function GeneralComments(props: GeneralCommentsProps) {
                   commentActions.addThread(GENERAL_THREAD_FILE_PATH, 'new', 0, 0, body, DEFAULT_AUTHOR);
                   setShowForm(false);
                 }}
+                onAsk={onAskThread && ((body) => {
+                  onAskThread(GENERAL_THREAD_FILE_PATH, 'new', 0, 0, body, DEFAULT_AUTHOR);
+                  setShowForm(false);
+                })}
+                onAct={onActThread && ((body) => {
+                  onActThread(GENERAL_THREAD_FILE_PATH, 'new', 0, 0, body, DEFAULT_AUTHOR);
+                  setShowForm(false);
+                })}
+                askIsHeard={askIsHeard}
                 onCancel={() => setShowForm(false)}
                 placeholder="Leave a general comment..."
                 submitLabel="Comment"
@@ -72,6 +92,9 @@ export function GeneralComments(props: GeneralCommentsProps) {
                   key={thread.id}
                   thread={thread}
                   onReply={(body) => commentActions.addReply(thread.id, body, DEFAULT_AUTHOR)}
+                  onAskReply={onAskReply && ((body) => onAskReply(thread.id, body, DEFAULT_AUTHOR))}
+                  onActReply={onActReply && ((body) => onActReply(thread.id, body, DEFAULT_AUTHOR))}
+                  askIsHeard={askIsHeard}
                   onResolve={() => commentActions.resolveThread(thread.id)}
                   onUnresolve={() => commentActions.unresolveThread(thread.id)}
                   onEditComment={(commentId, body) => commentActions.editComment(commentId, body)}

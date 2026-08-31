@@ -340,6 +340,11 @@ export function DiffView(props: DiffViewProps) {
         <GeneralComments
           threads={threads}
           commentActions={commentActions}
+          onAskReply={onAskReply}
+          onActReply={onActReply}
+          onAskThread={onAskThread}
+          onActThread={onActThread}
+          askIsHeard={askIsHeard}
         />
       )}
       {commentsEnabled && lostThreads.length > 0 && (
