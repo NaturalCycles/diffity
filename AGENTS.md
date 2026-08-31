@@ -24,7 +24,8 @@ workflow needs the `NPM_TOKEN` secret (publish rights on the `@naturalcycles` sc
 
 Bump in every pull request that touches anything the artifact is built from — `packages/`,
 `scripts/`, `skills/`, `README.md`, `LICENSE`, or the root
-`package.json`/`package-lock.json`/`tsconfig.json`; tests are exempt. The release workflow enforces exactly that set: a merge to develop whose version is already
-on npm and whose diff touched it fails, which is what catches two parallel branches bumping to the
-same number — the second to land would otherwise ship nothing, silently. A comment-only source
-change trips the same wire; bump anyway, a patch number costs nothing.
+`package.json`/`package-lock.json`/`tsconfig.json`; tests are exempt. The release workflow enforces exactly that set: a merge to develop whose version is
+already on npm and whose diff (since that version's tag) touched it fails, which is what catches
+two parallel branches bumping to the same number — the second to land would otherwise ship
+nothing, silently. A comment-only source change trips the same wire; bump anyway, a patch number
+costs nothing.

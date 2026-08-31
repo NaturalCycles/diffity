@@ -19,9 +19,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          # HEAD^ is what this merge is judged against.
-          fetch-depth: 2
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -35,6 +32,13 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           PUBLISHED=$(npm view "@naturalcycles/diffity@$VERSION" version 2>/dev/null || true)
           if [ "$PUBLISHED" != "$VERSION" ]; then
+            # Re-running an old failed run must not publish an old version over a newer one —
+            # npm would move `latest` back to it.
+            NEWEST=$(npm view "@naturalcycles/diffity" version 2>/dev/null || true)
+            if [ -n "$NEWEST" ] && [ "$(printf '%s\n%s\n' "$NEWEST" "$VERSION" | sort -V | tail -1)" != "$VERSION" ]; then
+              echo "::error::$VERSION is older than the published $NEWEST — refusing. Re-run the newest run instead."
+              exit 1
+            fi
             echo "publish=yes" >> "$GITHUB_OUTPUT"
             echo "Version $VERSION is not on npm — publishing."
             exit 0
@@ -78,8 +82,9 @@ jobs:
           VERSION: ${{ steps.decide.outputs.version }}
         run: |
           # Runs on both paths and is idempotent throughout: a fresh publish creates all three,
-          # a later run heals whichever of them a partial failure left missing. On the
-          # already-published path, decide has fetched the tag, so rev-parse sees it.
+          # and a later run heals a missing release — a missing tag stops decide with
+          # instructions instead. On the already-published path, decide has fetched the tag,
+          # so rev-parse sees it.
           git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null || git tag "v$VERSION"
           git push origin "v$VERSION"
           gh release view "v$VERSION" >/dev/null 2>&1 || gh release create "v$VERSION" --generate-notes --title "v$VERSION"
