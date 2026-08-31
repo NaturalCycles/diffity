@@ -56,6 +56,10 @@ function describeGhFailure(args: string[], error: unknown): string {
  * The async twin of `gh`, for callers on the server's event loop: a slow forge answer must not
  * stall every poll and heartbeat the server is carrying. Same arguments, same failure shape.
  */
+// Long enough for a slow forge, short enough that a gh that never exits frees the callers
+// queued behind it — the mutating routes run one at a time, so a hang would wedge them all.
+const GH_TIMEOUT_MS = 60_000;
+
 export function ghAsync(
   args: string[],
   options: { input?: string; maxBuffer?: number } = {},
@@ -64,7 +68,7 @@ export function ghAsync(
     const child = execFile(
       'gh',
       args,
-      { encoding: 'utf-8', maxBuffer: options.maxBuffer ?? MAX_BUFFER },
+      { encoding: 'utf-8', maxBuffer: options.maxBuffer ?? MAX_BUFFER, timeout: GH_TIMEOUT_MS },
       (error, stdout, stderr) => {
         if (error) {
           reject(new Error(describeGhFailure(args, Object.assign(error, { stderr })), { cause: error }));

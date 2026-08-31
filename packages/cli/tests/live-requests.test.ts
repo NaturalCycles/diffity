@@ -347,6 +347,22 @@ describe('a listener whose connection goes away', () => {
     expect(await waitForLiveRequest(s.id, 60_000, controller.signal)).toBeNull();
     expect(liveListenerCount(s.id)).toBe(0);
   });
+
+  it('claims nothing when it arrives already hung up, so the request stays answerable', async () => {
+    const { addReply } = await import('../src/threads.js');
+    const { waitForLiveRequest, requestLive, pendingLiveCount } = await import('../src/live.js');
+    await drainRequests();
+    const s = await session();
+    const thread = await finding();
+    const reply = addReply(thread.id, 'still there?', you, 'aside');
+    requestLive(reply.id);
+    const controller = new AbortController();
+    controller.abort();
+
+    expect(await waitForLiveRequest(s.id, 60_000, controller.signal)).toBeNull();
+    // A live listener must still find it; claimed-by-nobody costs the reader ten minutes.
+    expect(pendingLiveCount(s.id)).toBe(1);
+  });
 });
 
 describe('while an agent is busy with a request', () => {
