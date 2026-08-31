@@ -31,6 +31,10 @@ never did is guessing.
 
 `findingBody` is usually the thing being asked about. Read it before the question.
 
+`filePath` may be `__general__`: the thread is about the whole diff rather than any file, and its
+lines are 0. Answer about the review as a whole — there is no file to open, and no place to quote
+back.
+
 ## Re-arm first
 
 Before answering, put the loop back:
