@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { ghAsync } from './exec.js';
 import type { PrReview } from './types.js';
 
 interface RawReview {
@@ -39,14 +39,10 @@ export function parseReviews(json: string): PrReview[] {
     .filter(isWorthShowing);
 }
 
-export function getReviews(owner: string, repo: string, prNumber: number): PrReview[] {
+export async function getReviews(owner: string, repo: string, prNumber: number): Promise<PrReview[]> {
   try {
     return parseReviews(
-      execFileSync(
-        'gh',
-        ['api', `repos/${owner}/${repo}/pulls/${prNumber}/reviews`, '--paginate'],
-        { encoding: 'utf-8', stdio: 'pipe', maxBuffer: 10 * 1024 * 1024 },
-      ),
+      await ghAsync(['api', `repos/${owner}/${repo}/pulls/${prNumber}/reviews`, '--paginate']),
     );
   } catch {
     return [];

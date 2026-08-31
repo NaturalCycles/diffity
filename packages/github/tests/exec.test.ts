@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync, chmodSync } from 'node:fs';
 import { join, delimiter } from 'node:path';
 import { tmpdir } from 'node:os';
-import { gh } from '../src/exec.js';
+import { gh, ghAsync } from '../src/exec.js';
 import { pullThreadState } from '../src/pr.js';
 
 let fakeBin: string;
@@ -13,14 +13,21 @@ beforeAll(() => {
   fakeBin = mkdtempSync(join(tmpdir(), 'diffity-fake-gh-'));
   writeFileSync(join(fakeBin, 'gh'), [
     '#!/bin/sh',
-    'if [ -n "$FAKE_GH_STDERR" ]; then echo "$FAKE_GH_STDERR" >&2; fi',
-    'if [ -n "$FAKE_GH_STDOUT" ]; then echo "$FAKE_GH_STDOUT"; fi',
+    'if [ -n "$FAKE_GH_SLEEP" ]; then sleep "$FAKE_GH_SLEEP"; fi',
+    'if [ -n "$FAKE_GH_STDERR" ]; then printf \'%s\\n\' "$FAKE_GH_STDERR" >&2; fi',
+    'if [ -n "$FAKE_GH_ECHO_STDIN" ]; then cat; fi',
+    'if [ -n "$FAKE_GH_STDOUT" ]; then printf \'%s\\n\' "$FAKE_GH_STDOUT"; fi',
     'exit "${FAKE_GH_EXIT:-0}"',
     '',
   ].join('\n'));
   chmodSync(join(fakeBin, 'gh'), 0o755);
   origPath = process.env.PATH;
   process.env.PATH = `${fakeBin}${delimiter}${origPath ?? ''}`;
+});
+
+afterEach(() => {
+  delete process.env.FAKE_GH_ECHO_STDIN;
+  delete process.env.FAKE_GH_SLEEP;
 });
 
 afterAll(() => {
@@ -55,27 +62,68 @@ describe('what a gh failure says', () => {
 });
 
 describe('what pullThreadState answers', () => {
-  it('a GraphQL answer with no data is "could not ask", not "no threads"', () => {
+  it('a GraphQL answer with no data is "could not ask", not "no threads"', async () => {
     process.env.FAKE_GH_EXIT = '0';
     process.env.FAKE_GH_STDERR = '';
     process.env.FAKE_GH_STDOUT = '{"data":null,"errors":[{"message":"SAML enforcement"}]}';
 
-    expect(pullThreadState('o', 'r', 1)).toBeNull();
+    await expect(pullThreadState('o', 'r', 1)).resolves.toBeNull();
   });
 
-  it('an empty thread list is a real answer', () => {
+  it('an empty thread list is a real answer', async () => {
     process.env.FAKE_GH_EXIT = '0';
     process.env.FAKE_GH_STDERR = '';
     process.env.FAKE_GH_STDOUT = '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}';
 
-    expect(pullThreadState('o', 'r', 1)).toEqual([]);
+    await expect(pullThreadState('o', 'r', 1)).resolves.toEqual([]);
   });
 
-  it('a failed call is null too', () => {
+  it('a failed call is null too', async () => {
     process.env.FAKE_GH_EXIT = '1';
     process.env.FAKE_GH_STDERR = 'gh: Not Found (HTTP 404)';
     process.env.FAKE_GH_STDOUT = '';
 
-    expect(pullThreadState('o', 'r', 1)).toBeNull();
+    await expect(pullThreadState('o', 'r', 1)).resolves.toBeNull();
+  });
+});
+
+describe('the async twin', () => {
+  it('fails with the same shape, preferring the gh: line over noise before it', async () => {
+    process.env.FAKE_GH_EXIT = '1';
+    process.env.FAKE_GH_STDERR = 'some progress chatter\ngh: Validation Failed (HTTP 422)';
+    process.env.FAKE_GH_STDOUT = '';
+
+    await expect(ghAsync(['api', 'user'])).rejects.toThrowError(
+      'gh api user failed: gh: Validation Failed (HTTP 422)',
+    );
+  });
+
+  it('hands stdin through and answers with stdout', async () => {
+    process.env.FAKE_GH_EXIT = '0';
+    process.env.FAKE_GH_STDERR = '';
+    process.env.FAKE_GH_STDOUT = '';
+    process.env.FAKE_GH_ECHO_STDIN = '1';
+
+    await expect(ghAsync(['api', 'x', '--input', '-'], { input: '{"a":1}' })).resolves.toBe('{"a":1}');
+  });
+
+  it('a gh that outlives its budget is killed, and the failure says so', async () => {
+    process.env.FAKE_GH_EXIT = '0';
+    process.env.FAKE_GH_STDERR = '';
+    process.env.FAKE_GH_STDOUT = 'too late';
+    process.env.FAKE_GH_SLEEP = '2';
+
+    await expect(ghAsync(['pr', 'diff'], { timeoutMs: 300 }))
+      .rejects.toThrowError('gh pr diff failed: timed out after 0.3s');
+  });
+
+  it('a gh that dies before draining its stdin fails the call, not the process', async () => {
+    process.env.FAKE_GH_EXIT = '1';
+    process.env.FAKE_GH_STDERR = 'gh: boom';
+    process.env.FAKE_GH_STDOUT = '';
+
+    // Larger than a pipe buffer, so the write is still pending when the exit lands.
+    await expect(ghAsync(['api', 'x', '--input', '-'], { input: 'x'.repeat(200_000) }))
+      .rejects.toThrowError('gh api x failed: gh: boom');
   });
 });
