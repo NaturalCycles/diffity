@@ -29,28 +29,36 @@ export function withJsonBody<T>(
   req: IncomingMessage,
   errorPrefix: string,
   parseBody: (body: unknown) => ParseResult<T>,
-  handler: (body: T) => void,
+  handler: (body: T) => void | Promise<void>,
 ) {
-  readBody(req).then(
-    (raw) => {
-      let body: unknown;
-      try {
-        body = JSON.parse(raw);
-      } catch {
-        sendError(res, 400, 'Request body must be valid JSON');
+  void (async () => {
+    let raw: string;
+    try {
+      raw = await readBody(req);
+    } catch (err) {
+      sendError(res, 500, `${errorPrefix}: ${err}`);
+      return;
+    }
+    let body: unknown;
+    try {
+      body = JSON.parse(raw);
+    } catch {
+      sendError(res, 400, 'Request body must be valid JSON');
+      return;
+    }
+    try {
+      const parsed = parseBody(body);
+      if (!parsed.ok) {
+        sendError(res, 400, parsed.error);
         return;
       }
-      try {
-        const parsed = parseBody(body);
-        if (!parsed.ok) {
-          sendError(res, 400, parsed.error);
-          return;
-        }
-        handler(parsed.value);
-      } catch (err) {
+      await handler(parsed.value);
+    } catch (err) {
+      // The handler may have answered before it threw; a second write would itself throw, and
+      // out of here nothing catches it.
+      if (!res.headersSent) {
         sendError(res, 500, `${errorPrefix}: ${err}`);
       }
-    },
-    (err) => sendError(res, 500, `${errorPrefix}: ${err}`),
-  );
+    }
+  })();
 }

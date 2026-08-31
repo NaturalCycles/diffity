@@ -1,5 +1,4 @@
-import { execFileSync } from 'node:child_process';
-import { gh } from './exec.js';
+import { ghAsync } from './exec.js';
 import { matchCreatedComments, type CreatedComment, type SentComment } from './comment-ids.js';
 import type { PrComment, PulledThread, ReviewResult, ReviewSubmission } from './types.js';
 import { commentableLines, isAlreadyCommented } from './comment-targets.js';
@@ -12,9 +11,9 @@ interface ExistingComment {
   body: string;
 }
 
-export function getComments(owner: string, repo: string, prNumber: number): ExistingComment[] {
+export async function getComments(owner: string, repo: string, prNumber: number): Promise<ExistingComment[]> {
   try {
-    const json = gh([
+    const json = await ghAsync([
       'api',
       `repos/${owner}/${repo}/pulls/${prNumber}/comments`,
       '--paginate',
@@ -37,8 +36,8 @@ export function getComments(owner: string, repo: string, prNumber: number): Exis
   }
 }
 
-export function getCommentCount(owner: string, repo: string, prNumber: number): number {
-  return getComments(owner, repo, prNumber).length;
+export async function getCommentCount(owner: string, repo: string, prNumber: number): Promise<number> {
+  return (await getComments(owner, repo, prNumber)).length;
 }
 
 interface GitHubCommentRaw {
@@ -92,9 +91,9 @@ const REVIEW_THREADS_QUERY = `query($owner:String!,$repo:String!,$number:Int!){
  * as opposed to `[]`, which means it was asked and nothing came back. The two look identical to a
  * reader otherwise.
  */
-export function pullThreadState(owner: string, repo: string, prNumber: number): RemoteThreadState[] | null {
+export async function pullThreadState(owner: string, repo: string, prNumber: number): Promise<RemoteThreadState[] | null> {
   try {
-    const json = gh([
+    const json = await ghAsync([
       'api', 'graphql',
       '-f', `query=${REVIEW_THREADS_QUERY}`,
       '-F', `owner=${owner}`,
@@ -140,9 +139,9 @@ interface RawReviewThread {
   comments?: { nodes?: { body: string; fullDatabaseId?: string | null }[] };
 }
 
-export function pullComments(owner: string, repo: string, prNumber: number): PulledThread[] {
+export async function pullComments(owner: string, repo: string, prNumber: number): Promise<PulledThread[]> {
   try {
-    const json = gh([
+    const json = await ghAsync([
       'api',
       `repos/${owner}/${repo}/pulls/${prNumber}/comments`,
       '--paginate',
@@ -220,15 +219,18 @@ function toReviewComment(comment: PrComment): ReviewCommentPayload {
  *
  * GitHub does not deduplicate, so comments already on the pull request are dropped first.
  */
-export function createReview(
+export async function createReview(
   owner: string,
   repo: string,
   prNumber: number,
   headSha: string,
   submission: ReviewSubmission,
-): ReviewResult {
-  const commentable = commentableLines(getPatch(owner, repo, prNumber));
-  const existing = getComments(owner, repo, prNumber);
+): Promise<ReviewResult> {
+  const [patch, existing] = await Promise.all([
+    getPatch(owner, repo, prNumber),
+    getComments(owner, repo, prNumber),
+  ]);
+  const commentable = commentableLines(patch);
 
   const errors: string[] = [];
   const comments: ReviewCommentPayload[] = [];
@@ -269,17 +271,12 @@ export function createReview(
   }
 
   try {
-    const raw = execFileSync(
-      'gh',
+    const raw = await ghAsync(
       ['api', `repos/${owner}/${repo}/pulls/${prNumber}/reviews`, '--method', 'POST', '--input', '-'],
-      {
-        input: JSON.stringify({ commit_id: headSha, event: submission.event, body, comments }),
-        encoding: 'utf-8',
-        stdio: 'pipe',
-      },
+      { input: JSON.stringify({ commit_id: headSha, event: submission.event, body, comments }) },
     );
     const review = JSON.parse(raw) as { html_url?: string; id?: number };
-    const created = review.id ? getReviewCommentIds(owner, repo, prNumber, review.id) : [];
+    const created = review.id ? await getReviewCommentIds(owner, repo, prNumber, review.id) : [];
     return {
       submitted: comments.length,
       submittedThreadIds: sentThreadIds,
@@ -312,12 +309,13 @@ export function createReview(
  * by several commits appears several times, and only the last one survives being collected, so
  * whether a comment was allowed depended on which commit happened to touch that line last.
  */
-function getPatch(owner: string, repo: string, prNumber: number): string {
+async function getPatch(owner: string, repo: string, prNumber: number): Promise<string> {
   try {
-    return execFileSync('gh', ['pr', 'diff', String(prNumber), '--repo', `${owner}/${repo}`], {
-      encoding: 'utf-8',
-      stdio: 'pipe',
+    // A huge pull request streams for a while; the budget is bounded, not tight, because an
+    // empty answer here drops every comment as "not in PR diff".
+    return await ghAsync(['pr', 'diff', String(prNumber), '--repo', `${owner}/${repo}`], {
       maxBuffer: 50 * 1024 * 1024,
+      timeoutMs: 300_000,
     });
   } catch {
     return '';
@@ -328,9 +326,9 @@ function getPatch(owner: string, repo: string, prNumber: number): string {
  * The ids the forge gave the comments of one just-posted review. Failing to learn them is not
  * failing the submit: a thread without an id is still recognised by its sent wording.
  */
-function getReviewCommentIds(owner: string, repo: string, prNumber: number, reviewId: number): CreatedComment[] {
+async function getReviewCommentIds(owner: string, repo: string, prNumber: number, reviewId: number): Promise<CreatedComment[]> {
   try {
-    const json = gh([
+    const json = await ghAsync([
       'api',
       `repos/${owner}/${repo}/pulls/${prNumber}/reviews/${reviewId}/comments`,
       '--paginate',

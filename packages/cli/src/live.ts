@@ -169,8 +169,13 @@ export function waitForLiveRequest(
   waitMs: number,
   signal?: AbortSignal,
 ): Promise<LiveRequest | null> {
+  // Checked before claiming: a listener that hung up while the route awaited something must not
+  // take a request nobody will answer — reclaiming it costs the reader ten minutes.
+  if (signal?.aborted) {
+    return Promise.resolve(null);
+  }
   const claimed = claimNextLiveRequest(sessionId);
-  if (claimed || waitMs <= 0 || signal?.aborted) {
+  if (claimed || waitMs <= 0) {
     return Promise.resolve(claimed);
   }
 

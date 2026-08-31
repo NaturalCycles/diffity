@@ -86,6 +86,7 @@ import { sinceLastWait } from './live-events.js';
 import pc from 'picocolors';
 import { shouldShutDown, IDLE_CHECK_MS } from './idle-shutdown.js';
 import { handleReviewRoute } from './review-routes.js';
+import { serializer } from './serialize.js';
 import { handleTourRoute } from './tour-routes.js';
 import { sendJson, sendError, withJsonBody } from './http-utils.js';
 import {
@@ -356,17 +357,21 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
   // own polls, never the agent's traffic, are what say where the reader actually is.
   let lastViewedRef: string | null = null;
 
-  // Who wrote the pull request does not change between two questions asked a minute apart, and the
-  // lookup is a subprocess on a path that is meant to feel immediate.
-  let authorshipCache: { viewerDidAuthor?: boolean } | null | undefined;
-  function authorship(): { viewerDidAuthor?: boolean } | null {
-    if (authorshipCache === undefined) {
-      authorshipCache = githubRemote
-        ? fetchGitHubDetails(githubRemote.owner, githubRemote.repo, prNumber)
-        : null;
-    }
+  // Who wrote the pull request does not change between two questions asked a minute apart, and
+  // the lookup is a subprocess on a path that is meant to feel immediate. The promise is what is
+  // remembered, so concurrent first asks share one lookup.
+  let authorshipCache: Promise<{ viewerDidAuthor?: boolean } | null> | undefined;
+  function authorship(): Promise<{ viewerDidAuthor?: boolean } | null> {
+    authorshipCache ??= githubRemote
+      ? fetchGitHubDetails(githubRemote.owner, githubRemote.repo, prNumber)
+      : Promise.resolve(null);
     return authorshipCache;
   }
+
+  // Both mutating GitHub routes were loop-atomic while the gh boundary was synchronous: a second
+  // submit always saw the first one's comments, and a second pull saw its threads. What
+  // serialized by accident serializes on purpose.
+  const oneGhMutationAtATime = serializer();
 
   const server = createServer(
     async (req: IncomingMessage, res: ServerResponse) => {
@@ -449,7 +454,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             listening: sid ? liveListenerCount(sid) > 0 : false,
             working: sid ? liveWorkingCount(sid) > 0 : false,
             waiting: sid ? pendingLiveCount(sid) : 0,
-            mayChangeCode: resolveMayChangeCode(purpose, authorship()),
+            mayChangeCode: resolveMayChangeCode(purpose, await authorship()),
             viewerPresent: viewerIsPresent(viewerSnapshot(), awakeMs()),
           } satisfies LiveStatusResponse);
           return;
@@ -477,6 +482,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           const listenerGone = new AbortController();
           req.on('close', () => listenerGone.abort());
 
+          const mayChangeCode = resolveMayChangeCode(purpose, await authorship());
           // What happened while the last agent was parked, before this wait resets the watermark.
           const since = sinceLastWait(
             getThreadsForSession(sid).map(thread => thread.submittedAt),
@@ -528,7 +534,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
               // Carried on the request rather than left for the agent to look up: a rule nobody
               // has to remember is a rule that holds.
               sendJson(res, {
-                request: { ...request, mayChangeCode: resolveMayChangeCode(purpose, authorship()) },
+                request: { ...request, mayChangeCode },
                 since,
                 viewerPresent,
                 viewerGone: false,
@@ -704,13 +710,13 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             sendJson(res, null);
             return;
           }
-          const details = fetchGitHubDetails(githubRemote.owner, githubRemote.repo, prNumber);
+          const details = await fetchGitHubDetails(githubRemote.owner, githubRemote.repo, prNumber);
           sendJson(res, details);
           return;
         }
 
         if (pathname === '/api/github/create-review' && req.method === 'POST') {
-          const details = githubRemote ? fetchGitHubDetails(githubRemote.owner, githubRemote.repo, prNumber) : null;
+          const details = githubRemote ? await fetchGitHubDetails(githubRemote.owner, githubRemote.repo, prNumber) : null;
           if (!githubRemote || !details?.headSha) {
             sendError(res, 400, 'No GitHub PR detected');
             return;
@@ -724,13 +730,13 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             sendError(res, 409, 'You have uncommitted local changes. Commit or stash them first.');
             return;
           }
-          withJsonBody(res, req, 'Failed to create review', parseReviewSubmission, (submission) => {
+          withJsonBody(res, req, 'Failed to create review', parseReviewSubmission, (submission) => oneGhMutationAtATime(async () => {
             // A verdict carries its own meaning; only a plain comment needs something in it.
             if (submission.event === 'COMMENT' && submission.comments.length === 0 && !submission.body.trim()) {
               sendError(res, 400, 'A comment review needs a summary or at least one comment');
               return;
             }
-            const result = createGitHubReview(
+            const result = await createGitHubReview(
               githubRemote.owner,
               githubRemote.repo,
               details.prNumber,
@@ -751,7 +757,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
               },
             );
             sendJson(res, result);
-          });
+          }));
           return;
         }
 
@@ -760,7 +766,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             sendError(res, 400, 'No GitHub repo detected');
             return;
           }
-          const details = fetchGitHubDetails(githubRemote.owner, githubRemote.repo, prNumber);
+          const details = await fetchGitHubDetails(githubRemote.owner, githubRemote.repo, prNumber);
           if (!details) {
             sendError(res, 400, 'No GitHub PR detected');
             return;
@@ -775,12 +781,14 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             return;
           }
 
-          withJsonBody(res, req, 'Failed to pull comments', parsePullCommentsRequest, (body) => {
+          withJsonBody(res, req, 'Failed to pull comments', parsePullCommentsRequest, (body) => oneGhMutationAtATime(async () => {
             const sid = body.sessionId;
-            const remoteThreads = pullGitHubComments(githubRemote.owner, githubRemote.repo, details.prNumber);
+            const [remoteThreads, remoteState] = await Promise.all([
+              pullGitHubComments(githubRemote.owner, githubRemote.repo, details.prNumber),
+              pullGitHubThreadState(githubRemote.owner, githubRemote.repo, details.prNumber),
+            ]);
             const localThreads = getThreadsForSession(sid);
 
-            const remoteState = pullGitHubThreadState(githubRemote.owner, githubRemote.repo, details.prNumber);
             const settled = remoteState ? threadsResolvedRemotely(localThreads, remoteState) : [];
             for (const threadId of settled) {
               updateThreadStatus(threadId, 'resolved');
@@ -817,7 +825,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
               pulled++;
             }
             sendJson(res, { pulled, skipped, resolved: settled.length, resolutionUnavailable: remoteState === null } satisfies PullCommentsResult);
-          });
+          }));
           return;
         }
 
