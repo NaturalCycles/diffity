@@ -1,6 +1,6 @@
 import { existsSync, statSync } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
-import type { Command } from 'commander';
+import { InvalidArgumentError, type Command } from 'commander';
 import pc from 'picocolors';
 import { isGitRepo, getDiffFiles, resolveRef, getRepoRoot } from '@diffity/git';
 import {
@@ -51,6 +51,16 @@ async function requireSession(explicitId?: string): Promise<Session> {
     process.exit(1);
   }
   return session;
+}
+
+// Rejected where the typo happens: a 0-line thread would otherwise sit quietly in the session
+// until it blocks the whole review submission at the forge boundary.
+function lineNumber(value: string): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new InvalidArgumentError('Lines are 1-indexed integers.');
+  }
+  return parsed;
 }
 
 function assertFileExists(filePath: string): void {
@@ -220,8 +230,8 @@ Examples:
     .command('comment')
     .description('Create a new comment thread')
     .requiredOption('--file <path>', 'File path (relative to repo root)')
-    .requiredOption('--line <n>', 'Line number (1-indexed)', parseInt)
-    .option('--end-line <n>', 'End line for multi-line comments (1-indexed)', parseInt)
+    .requiredOption('--line <n>', 'Line number (1-indexed)', lineNumber)
+    .option('--end-line <n>', 'End line for multi-line comments (1-indexed)', lineNumber)
     .option('--side <side>', 'Which side of the diff (new or old)', 'new')
     .requiredOption('--body <text>', 'Comment body')
     .action(async (opts) => {
@@ -229,14 +239,8 @@ Examples:
         console.error(pc.red(`Error: Invalid side "${opts.side}". Must be "new" or "old"`));
         process.exit(1);
       }
-      // Rejected where the typo happens: a 0-line thread would otherwise sit quietly in the
-      // session until it blocks the whole review submission at the forge boundary.
-      if (!Number.isInteger(opts.line) || opts.line < 1) {
-        console.error(pc.red(`Error: Invalid line "${opts.line}". Lines are 1-indexed`));
-        process.exit(1);
-      }
-      if (opts.endLine != null && (!Number.isInteger(opts.endLine) || opts.endLine < opts.line)) {
-        console.error(pc.red(`Error: Invalid end line "${opts.endLine}". It must be an integer >= --line`));
+      if (opts.endLine != null && opts.endLine < opts.line) {
+        console.error(pc.red(`Error: Invalid end line "${opts.endLine}". It must be >= --line`));
         process.exit(1);
       }
       const session = await requireSession(agent.opts().session);
@@ -581,12 +585,16 @@ Examples:
     .description('Add a step to a guided tour')
     .requiredOption('--tour <id>', 'Tour ID')
     .requiredOption('--file <path>', 'File path (relative to repo root)')
-    .requiredOption('--line <n>', 'Start line number (1-indexed)', parseInt)
-    .option('--end-line <n>', 'End line number (1-indexed)', parseInt)
+    .requiredOption('--line <n>', 'Start line number (1-indexed)', lineNumber)
+    .option('--end-line <n>', 'End line number (1-indexed)', lineNumber)
     .option('--body <text>', 'Narrative text shown in sidebar', '')
     .option('--annotation <text>', 'Short inline annotation on highlighted code', '')
     .option('--json', 'Output as JSON')
     .action(async (opts) => {
+      if (opts.endLine != null && opts.endLine < opts.line) {
+        console.error(pc.red(`Error: Invalid end line "${opts.endLine}". It must be >= --line`));
+        process.exit(1);
+      }
       const session = await requireSession(agent.opts().session);
       assertFileExists(opts.file);
       const tourId = resolveTourId(opts.tour, session.id);

@@ -81,8 +81,6 @@ describe('a thread request', () => {
   it('rejects a range that ends before it starts', () => {
     expect(errorOf(parseCreateThreadRequest({ ...goodThread, startLine: 5, endLine: 2 })))
       .toBe('endLine must not be before startLine');
-    expect(errorOf(parseAddTourStepRequest({ filePath: 'a.ts', startLine: 4, endLine: 1 })))
-      .toBe('endLine must not be before startLine');
   });
 
   it('allows line 0, where general comments live', () => {
@@ -118,6 +116,8 @@ describe('the smaller bodies', () => {
     expect(errorOf(parseCreateTourRequest({ sessionId: 's1' }))).toContain('topic');
     expect(parseAddTourStepRequest({ filePath: 'a.ts', startLine: 1, endLine: 2 }).ok).toBe(true);
     expect(errorOf(parseAddTourStepRequest({ filePath: 'a.ts', startLine: 1, endLine: 2.5 }))).toContain('endLine');
+    expect(errorOf(parseAddTourStepRequest({ filePath: 'a.ts', startLine: 4, endLine: 1 })))
+      .toBe('endLine must not be before startLine');
     expect(parseUpdateTourStatusRequest({ status: 'ready' }).ok).toBe(true);
     expect(errorOf(parseUpdateTourStatusRequest({ status: 'done' }))).toBe('status must be one of: building, ready');
   });
@@ -164,6 +164,17 @@ describe('a review submission', () => {
   it('rejects an unknown verdict instead of coercing it', () => {
     expect(errorOf(parseReviewSubmission({ event: 'SHIP_IT' })))
       .toBe('event must be one of: COMMENT, APPROVE, REQUEST_CHANGES');
+  });
+
+  it('carries a real start line through, and lets the field check name a bad end line', () => {
+    const ranged = parseReviewSubmission({ event: 'COMMENT', comments: [{ ...comment, startLine: 3, endLine: 5 }] });
+    expect(ranged).toEqual({
+      ok: true,
+      value: { event: 'COMMENT', body: '', comments: [{ ...comment, startLine: 3, endLine: 5 }] },
+    });
+    // A non-number end line is the field's own error, not a cross-field one.
+    expect(errorOf(parseReviewSubmission({ event: 'COMMENT', comments: [{ ...comment, startLine: 3, endLine: 'x' }] })))
+      .toBe('comments[0].endLine must be an integer >= 1');
   });
 
   it('names the comment that is wrong', () => {
