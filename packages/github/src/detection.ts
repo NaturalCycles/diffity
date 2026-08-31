@@ -1,4 +1,4 @@
-import { exec, execSilent, gh } from './exec.js';
+import { exec, execSilent, ghAsync, ghSucceeds } from './exec.js';
 import { parseRemoteUrl } from './remote.js';
 import { getReviews } from './reviews.js';
 import type { GitHubRemote, GitHubDetails } from './types.js';
@@ -27,17 +27,33 @@ export function detectRemote(): GitHubRemote | null {
   return remote;
 }
 
-export function fetchDetails(owner: string, repo: string, prNumber?: number): GitHubDetails | null {
-  if (!isCliInstalled() || !isAuthenticated()) {
+// Remembered only when true: a missing or unauthenticated gh is retried on the next ask, so
+// logging in does not require a restart — but the ready answer cannot change while we live.
+let cliKnownReady = false;
+
+async function cliReady(): Promise<boolean> {
+  if (cliKnownReady) {
+    return true;
+  }
+  cliKnownReady = (await ghSucceeds(['--version'])) && (await ghSucceeds(['auth', 'status']));
+  return cliKnownReady;
+}
+
+export async function fetchDetails(owner: string, repo: string, prNumber?: number): Promise<GitHubDetails | null> {
+  if (!(await cliReady())) {
     return null;
   }
 
-  const pr = getPr(owner, repo, prNumber);
+  const pr = await getPr(owner, repo, prNumber);
   if (!pr) {
     return null;
   }
 
-  const commentCount = getReviewCommentCount(owner, repo, pr.number);
+  const [commentCount, reviews, viewerLogin] = await Promise.all([
+    getReviewCommentCount(owner, repo, pr.number),
+    getReviews(owner, repo, pr.number),
+    getViewerLogin(),
+  ]);
 
   return {
     prNumber: pr.number,
@@ -47,9 +63,9 @@ export function fetchDetails(owner: string, repo: string, prNumber?: number): Gi
     headSha: pr.headSha,
     commentCount,
     prAuthor: pr.authorLogin ?? '',
-    viewerDidAuthor: !!pr.authorLogin && pr.authorLogin === getViewerLogin(),
+    viewerDidAuthor: !!pr.authorLogin && pr.authorLogin === viewerLogin,
     prBody: pr.body,
-    reviews: getReviews(owner, repo, pr.number),
+    reviews,
   };
 }
 
@@ -64,17 +80,15 @@ interface PrData {
 }
 
 // gh has no `viewerDidAuthor` field, so authorship is settled by comparing logins. The
-// authenticated user cannot change while the process lives, so it is asked for once.
-let viewerLogin: string | null | undefined;
+// authenticated user cannot change while the process lives, so it is asked for once — the
+// promise is what is remembered, so concurrent first asks share one subprocess.
+let viewerLogin: Promise<string | null> | undefined;
 
-function getViewerLogin(): string | null {
-  if (viewerLogin === undefined) {
-    try {
-      viewerLogin = gh(['api', 'user', '--jq', '.login']) || null;
-    } catch {
-      viewerLogin = null;
-    }
-  }
+function getViewerLogin(): Promise<string | null> {
+  viewerLogin ??= ghAsync(['api', 'user', '--jq', '.login']).then(
+    login => login || null,
+    () => null,
+  );
   return viewerLogin;
 }
 
@@ -82,7 +96,7 @@ function getViewerLogin(): string | null {
  * Without a number, gh resolves the pull request from the current branch — which fails on a
  * detached checkout, and a merged pull request has no branch left to check out.
  */
-function getPr(owner: string, repo: string, prNumber?: number): PrData | null {
+async function getPr(owner: string, repo: string, prNumber?: number): Promise<PrData | null> {
   try {
     // Pinned to the repository the local remote names. Left to itself, gh resolves a fork's
     // parent, which is how a review can be aimed at the wrong repository entirely.
@@ -91,7 +105,7 @@ function getPr(owner: string, repo: string, prNumber?: number): PrData | null {
       args.push(String(prNumber));
     }
     args.push('--repo', `${owner}/${repo}`, '--json', 'number,title,url,headRefOid,createdAt,author,body');
-    const json = gh(args);
+    const json = await ghAsync(args);
     const data = JSON.parse(json);
     if (data.number && data.url && data.headRefOid) {
       return {
@@ -110,9 +124,9 @@ function getPr(owner: string, repo: string, prNumber?: number): PrData | null {
   }
 }
 
-function getReviewCommentCount(owner: string, repo: string, prNumber: number): number {
+async function getReviewCommentCount(owner: string, repo: string, prNumber: number): Promise<number> {
   try {
-    const raw = gh([
+    const raw = await ghAsync([
       'api',
       `repos/${owner}/${repo}/pulls/${prNumber}/comments`,
       '--jq',
