@@ -8,18 +8,6 @@ export function exec(cmd: string): string {
   }).trim();
 }
 
-export function execJson<T>(cmd: string): T | null {
-  try {
-    const raw = exec(cmd);
-    if (!raw) {
-      return null;
-    }
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
-  }
-}
-
 export function execSilent(cmd: string): boolean {
   try {
     execSync(cmd, { stdio: 'pipe' });
@@ -34,20 +22,28 @@ const MAX_BUFFER = 10 * 1024 * 1024;
 /**
  * Runs gh without a shell. Owner and repository names come from a remote URL, which a submodule
  * in a pull request controls, so they must never be interpolated into a command string.
+ *
+ * A failure throws with gh's own words in it: execFileSync says only "Command failed", and the
+ * reason — an expired token, a missing scope, push protection — is on stderr. Callers that treat
+ * a failure as "no" keep catching; wherever the error surfaces, it now says why.
  */
 export function gh(args: string[]): string {
-  return execFileSync('gh', args, {
-    encoding: 'utf-8',
-    stdio: ['pipe', 'pipe', 'pipe'],
-    maxBuffer: MAX_BUFFER,
-  }).trim();
+  try {
+    return execFileSync('gh', args, {
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      maxBuffer: MAX_BUFFER,
+    }).trim();
+  } catch (error) {
+    throw new Error(describeGhFailure(args, error), { cause: error });
+  }
 }
 
-export function ghJson<T>(args: string[]): T | null {
-  try {
-    const raw = gh(args);
-    return raw ? (JSON.parse(raw) as T) : null;
-  } catch {
-    return null;
-  }
+function describeGhFailure(args: string[], error: unknown): string {
+  const what = `gh ${args.slice(0, 2).join(' ')}`;
+  const stderr = (error as { stderr?: unknown }).stderr;
+  const text = typeof stderr === 'string' ? stderr : stderr instanceof Buffer ? stderr.toString('utf-8') : '';
+  const reason = text.split('\n').find(line => line.trim())?.trim()
+    ?? (error instanceof Error ? error.message : String(error));
+  return `${what} failed: ${reason}`;
 }

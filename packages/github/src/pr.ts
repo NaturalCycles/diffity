@@ -106,7 +106,11 @@ export function pullThreadState(owner: string, repo: string, prNumber: number): 
     const data = JSON.parse(json) as {
       data?: { repository?: { pullRequest?: { reviewThreads?: { nodes?: RawReviewThread[] } } } };
     };
-    const nodes = data.data?.repository?.pullRequest?.reviewThreads?.nodes ?? [];
+    // GraphQL can answer 200 with errors and no data; that is "could not ask", not "no threads".
+    const nodes = data.data?.repository?.pullRequest?.reviewThreads?.nodes;
+    if (!nodes) {
+      return null;
+    }
 
     return nodes.flatMap(node => {
       const first = node.comments?.nodes?.[0];
