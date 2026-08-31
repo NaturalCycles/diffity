@@ -90,7 +90,7 @@ const REVIEW_THREADS_QUERY = `query($owner:String!,$repo:String!,$number:Int!){
  *
  * `null` means the question could not be asked — an expired token, a rate limit, a schema change —
  * as opposed to `[]`, which means it was asked and nothing came back. The two look identical to a
- * reader otherwise, and this whole change exists because a thread was quiet about what it knew.
+ * reader otherwise.
  */
 export function pullThreadState(owner: string, repo: string, prNumber: number): RemoteThreadState[] | null {
   try {
@@ -106,7 +106,11 @@ export function pullThreadState(owner: string, repo: string, prNumber: number): 
     const data = JSON.parse(json) as {
       data?: { repository?: { pullRequest?: { reviewThreads?: { nodes?: RawReviewThread[] } } } };
     };
-    const nodes = data.data?.repository?.pullRequest?.reviewThreads?.nodes ?? [];
+    // GraphQL can answer 200 with errors and no data; that is "could not ask", not "no threads".
+    const nodes = data.data?.repository?.pullRequest?.reviewThreads?.nodes;
+    if (!nodes) {
+      return null;
+    }
 
     return nodes.flatMap(node => {
       const first = node.comments?.nodes?.[0];

@@ -25,7 +25,7 @@ function listen(server: Server): Promise<number> {
 /** What `registerInstance` writes, pointed at a stub server this test controls. */
 function registerStub(port: number): void {
   const repoHash = createHash('sha256').update(repoDir).digest('hex').slice(0, 12);
-  const dir = join(root, 'home', '.diffity');
+  const dir = join(root, 'notes');
   mkdirSync(dir, { recursive: true });
   writeFileSync(
     join(dir, 'registry.json'),
@@ -56,9 +56,9 @@ beforeAll(() => {
   writeFileSync(join(repoDir, 'a.ts'), 'const a = 1;\n');
   execFileSync('git', ['add', '.'], { cwd: repoDir, stdio: 'pipe' });
   execFileSync('git', ['commit', '-m', 'init'], { cwd: repoDir, stdio: 'pipe' });
+  // The registry follows DIFFITY_DATA_DIR too, so the stub entry goes under `notes`. The home
+  // is faked as well for whatever else resolves it; Windows resolves it from USERPROFILE.
   process.env.DIFFITY_DATA_DIR = join(root, 'notes');
-  // The registry lives under the home directory, so the test owns a fake one. Windows resolves
-  // the home from USERPROFILE, so both are set.
   process.env.HOME = join(root, 'home');
   process.env.USERPROFILE = join(root, 'home');
   process.chdir(repoDir);
