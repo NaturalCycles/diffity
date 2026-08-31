@@ -62,22 +62,24 @@ describe('asking the agent from a general comment', () => {
     expect(onAskReply).toHaveBeenCalledWith('g1', 'why only one P3?', DEFAULT_AUTHOR);
   });
 
-  it('a fresh question goes out as a general thread', () => {
-    const onAskThread = vi.fn();
+  it.each([
+    ['Ask', 'is the migration covered?'],
+    ['Act', 'add the missing migration'],
+  ])('a fresh %s goes out as a general thread and the form closes', (button, text) => {
+    const handler = vi.fn();
     render(
       <GeneralComments
         threads={[]}
         commentActions={{} as CommentActions}
-        onAskThread={onAskThread}
+        {...(button === 'Ask' ? { onAskThread: handler } : { onActThread: handler })}
       />,
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Add comment' }));
-    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'is the migration covered?' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Ask' }));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: text } });
+    fireEvent.click(screen.getByRole('button', { name: button }));
 
-    expect(onAskThread).toHaveBeenCalledWith(
-      GENERAL_THREAD_FILE_PATH, 'new', 0, 0, 'is the migration covered?', DEFAULT_AUTHOR,
-    );
+    expect(handler).toHaveBeenCalledWith(GENERAL_THREAD_FILE_PATH, 'new', 0, 0, text, DEFAULT_AUTHOR);
+    expect(screen.queryByRole('textbox')).toBeNull();
   });
 });
