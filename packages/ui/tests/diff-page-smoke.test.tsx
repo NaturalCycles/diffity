@@ -10,11 +10,12 @@ import type {
   RepoInfoResponse,
   Tour,
 } from '@diffity/api';
+import { makeThread, makeComment } from './helpers/wire';
 
 // Shiki loads a wasm highlighter in an effect; the page renders plain tokens while it is null,
 // which is the state this smoke test pins anyway.
 vi.mock('../src/hooks/use-highlighter', () => ({
-  useHighlighter: () => ({ highlight: () => null }),
+  useHighlighter: () => ({ highlight: () => null, ready: false }),
 }));
 
 import { DiffPage } from '../src/components/diff/diff-page';
@@ -53,34 +54,13 @@ const liveStatus: LiveStatusResponse = {
   viewerPresent: true,
 };
 
-const threads: CommentThread[] = [{
-  id: 't1',
+const threads: CommentThread[] = [makeThread({
   sessionId: 's1',
   filePath: 'src/greeter.ts',
-  side: 'new',
   startLine: 2,
   endLine: 2,
-  status: 'open',
-  anchorContent: null,
-  createdAt: new Date().toISOString(),
-  updatedAt: new Date().toISOString(),
-  submittedAt: null,
-  submittedReviewUrl: null,
-  submittedBody: null,
-  submittedHeadSha: null,
-  githubCommentId: null,
-  comments: [{
-    id: 'c1',
-    author: { name: 'Agent', type: 'agent' },
-    body: 'P2: greet the reviewer by name',
-    kind: 'review',
-    createdAt: new Date().toISOString(),
-    liveRequestedAt: null,
-    liveIntent: null,
-    liveClaimedAt: null,
-    liveAnsweredAt: null,
-  }],
-}];
+  comments: [makeComment({ body: 'P2: greet the reviewer by name' })],
+})];
 
 const tours: Tour[] = [];
 
@@ -97,9 +77,15 @@ function stubbedFetch(input: RequestInfo | URL): Promise<Response> {
     '/api/tours': tours,
     '/api/viewer': { ok: true },
   };
-  const body = pathname in answers ? answers[pathname] : {};
+  // Unknown paths fail loudly with their name: a surface added later must extend the fixture,
+  // not pass on an accidental {}.
+  if (!(pathname in answers)) {
+    return Promise.resolve(
+      new Response(JSON.stringify({ error: `unstubbed: ${pathname}` }), { status: 404 }),
+    );
+  }
   return Promise.resolve(
-    new Response(JSON.stringify(body), {
+    new Response(JSON.stringify(answers[pathname]), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     }),
@@ -120,8 +106,8 @@ let queryClient: QueryClient;
 beforeAll(() => {
   vi.stubGlobal('fetch', stubbedFetch);
   vi.stubGlobal('ResizeObserver', InertResizeObserver);
-  Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, get: () => 800 });
-  Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, get: () => 1200 });
+  vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(800);
+  vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(1200);
   vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({
     width: 1200, height: 800, top: 0, left: 0, bottom: 800, right: 1200, x: 0, y: 0,
     toJSON: () => ({}),
@@ -131,8 +117,6 @@ beforeAll(() => {
 afterAll(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
-  delete (HTMLElement.prototype as { offsetHeight?: unknown }).offsetHeight;
-  delete (HTMLElement.prototype as { offsetWidth?: unknown }).offsetWidth;
 });
 
 afterEach(() => {
@@ -174,9 +158,11 @@ describe('the diff page, mounted whole', () => {
       expect(text).toContain('P2: greet the reviewer by name');
     }, { timeout: 4000 });
 
-    // The toolbar's view switch.
+    // The toolbar's view switch, and the thread really anchored — an unanchorable one would
+    // render its body in the orphan fallback instead.
     expect(screen.getByRole('button', { name: 'Unified' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Split' })).toBeTruthy();
+    expect(screen.queryByTestId('threads-without-file')).toBeNull();
   });
 
   it('says when the working tree has nothing to show', async () => {
