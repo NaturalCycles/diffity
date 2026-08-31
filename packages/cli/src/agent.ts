@@ -55,7 +55,7 @@ async function requireSession(explicitId?: string): Promise<Session> {
 
 // Rejected where the typo happens: a 0-line thread would otherwise sit quietly in the session
 // until it blocks the whole review submission at the forge boundary.
-function lineNumber(value: string): number {
+export function lineNumber(value: string): number {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 1) {
     throw new InvalidArgumentError('Lines are 1-indexed integers.');

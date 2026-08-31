@@ -22,7 +22,7 @@ export function readBody(req: IncomingMessage): Promise<string> {
 
 /**
  * Reads, parses and validates a request body, then hands the typed value to the handler. What the
- * sender got wrong is a 400 with the field named; only the handler's own failures are a 500.
+ * sender got wrong is a 400 with the field named; anything else that throws is a 500.
  */
 export function withJsonBody<T>(
   res: ServerResponse,
