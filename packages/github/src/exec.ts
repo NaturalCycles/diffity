@@ -23,9 +23,10 @@ const MAX_BUFFER = 10 * 1024 * 1024;
  * Runs gh without a shell. Owner and repository names come from a remote URL, which a submodule
  * in a pull request controls, so they must never be interpolated into a command string.
  *
- * A failure throws with gh's own words in it: execFileSync says only "Command failed", and the
- * reason — an expired token, a missing scope, push protection — is on stderr. Callers that treat
- * a failure as "no" keep catching; wherever the error surfaces, it now says why.
+ * A failure throws with the reason first: execFileSync's own error leads with the full command
+ * line — which can embed a whole GraphQL query — before any stderr, and an ENOENT carries no
+ * stderr at all. Callers that treat a failure as "no" keep catching; wherever the error
+ * surfaces, gh's own words lead it.
  */
 export function gh(args: string[]): string {
   try {

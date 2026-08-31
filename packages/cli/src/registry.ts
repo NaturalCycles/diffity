@@ -26,7 +26,23 @@ export interface RegistryEntry {
  */
 export function diffityDir(): string {
   const dir = process.env.DIFFITY_DATA_DIR?.trim();
-  return dir && isAbsolute(dir) ? dir : join(homedir(), '.diffity');
+  if (dir && !isAbsolute(dir)) {
+    warnRelativeOverrideOnce(dir);
+    return join(homedir(), '.diffity');
+  }
+  return dir || join(homedir(), '.diffity');
+}
+
+// Once: this runs on every registry touch, and the point is to surface the misconfiguration,
+// not to narrate it.
+let warnedRelativeOverride = false;
+
+function warnRelativeOverrideOnce(dir: string): void {
+  if (warnedRelativeOverride) {
+    return;
+  }
+  warnedRelativeOverride = true;
+  console.error(`diffity: ignoring relative DIFFITY_DATA_DIR "${dir}" for the registry; using ~/.diffity`);
 }
 
 function registryPath(): string {
