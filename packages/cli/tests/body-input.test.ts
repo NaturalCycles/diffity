@@ -51,4 +51,8 @@ describe('where a body comes from', () => {
   it('absent everywhere is null, for the options that default instead of requiring', () => {
     expect(resolveBodyText({})).toBeNull();
   });
+
+  it('given but empty stays empty — that is its own message, not "missing"', () => {
+    expect(resolveBodyText({ body: '' })).toBe('');
+  });
 });
