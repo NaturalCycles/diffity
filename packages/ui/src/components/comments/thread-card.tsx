@@ -41,7 +41,10 @@ export function ThreadCard(props: ThreadCardProps) {
     headerRight,
     className,
     children,
-   onAskReply, onActReply, askIsHeard,} = props;
+    onAskReply,
+    onActReply,
+    askIsHeard,
+  } = props;
   const [showReply, setShowReply] = useState(false);
   const [unheard, setUnheard] = useState<{ title: string; description: string } | null>(null);
   const resolved = isThreadResolved(thread);
