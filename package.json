@@ -15,7 +15,7 @@
   "scripts": {
     "build": "tsx scripts/build.ts",
     "build:skills": "tsx scripts/build-skills.ts",
-    "test": "npm run typecheck && npm run test -w @diffity/git && npm run test -w @diffity/github && npm run test -w @diffity/parser && npm run test -w @diffity/ui && npm run test -w @naturalcycles/diffity && npm run test:scripts",
+    "test": "npm run typecheck && npm run test -w @diffity/api && npm run test -w @diffity/git && npm run test -w @diffity/github && npm run test -w @diffity/parser && npm run test -w @diffity/ui && npm run test -w @naturalcycles/diffity && npm run test:scripts",
     "link-dev": "tsx scripts/link-dev.ts",
     "dev": "tsx scripts/dev.ts",
     "test:scripts": "vitest run scripts",

@@ -10,7 +10,14 @@ import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import { parseDiff, type ParsedDiff } from '@diffity/parser';
-import { AGENT_TRAFFIC_HEADER } from '@diffity/api';
+import {
+  AGENT_TRAFFIC_HEADER,
+  parseOpenInEditorRequest,
+  parsePullCommentsRequest,
+  parseReviewSubmission,
+  parseRevertFileRequest,
+  parseRevertHunkRequest,
+} from '@diffity/api';
 import type {
   ClaimResponse,
   ReviewSession,
@@ -56,8 +63,6 @@ import {
   createReview as createGitHubReview,
   pullComments as pullGitHubComments,
   pullThreadState as pullGitHubThreadState,
-  type PrComment,
-  type ReviewEvent,
 } from '@diffity/github';
 import { findOrCreateSession, resolveSessionId, agentSeenAt, markAgentSeen } from './session.js';
 import { resolveMayChangeCode, type SessionPurpose } from './live-permissions.js';
@@ -82,7 +87,7 @@ import pc from 'picocolors';
 import { shouldShutDown, IDLE_CHECK_MS } from './idle-shutdown.js';
 import { handleReviewRoute } from './review-routes.js';
 import { handleTourRoute } from './tour-routes.js';
-import { sendJson, sendError, readBody } from './http-utils.js';
+import { sendJson, sendError, withJsonBody } from './http-utils.js';
 import {
   registerInstance,
   deregisterInstance
@@ -111,8 +116,6 @@ const MIME_TYPES: Record<string, string> = {
  * `script-src` still needs 'unsafe-inline' for the inline scripts in the built index.html;
  * markdown is sanitized separately, and every exfiltration sink is closed here.
  */
-const REVIEW_EVENTS = new Set(['COMMENT', 'APPROVE', 'REQUEST_CHANGES']);
-
 const CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
   "base-uri 'none'",
@@ -542,34 +545,18 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
         }
 
         if (pathname === '/api/revert-file' && req.method === 'POST') {
-          try {
-            const body = JSON.parse(await readBody(req));
-            const { filePath: path, isUntracked } = body;
-            if (!path || typeof path !== 'string') {
-              sendError(res, 400, 'Missing filePath');
-              return;
-            }
-            revertFile(path, !!isUntracked);
+          withJsonBody(res, req, 'Failed to revert file', parseRevertFileRequest, (body) => {
+            revertFile(body.filePath, body.isUntracked === true);
             sendJson(res, { ok: true });
-          } catch (err) {
-            sendError(res, 500, `Failed to revert file: ${err}`);
-          }
+          });
           return;
         }
 
         if (pathname === '/api/revert-hunk' && req.method === 'POST') {
-          try {
-            const body = JSON.parse(await readBody(req));
-            const { patch } = body;
-            if (!patch || typeof patch !== 'string') {
-              sendError(res, 400, 'Missing patch');
-              return;
-            }
-            revertHunk(patch);
+          withJsonBody(res, req, 'Failed to revert hunk', parseRevertHunkRequest, (body) => {
+            revertHunk(body.patch);
             sendJson(res, { ok: true });
-          } catch (err) {
-            sendError(res, 500, `Failed to revert hunk: ${err}`);
-          }
+          });
           return;
         }
 
@@ -578,21 +565,13 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             sendError(res, 404, 'No editor available');
             return;
           }
-          try {
-            const body = JSON.parse(await readBody(req));
-            const { filePath, line } = body;
-            if (typeof filePath !== 'string') {
-              sendError(res, 400, 'Missing filePath');
-              return;
-            }
+          withJsonBody(res, req, 'Failed to open editor', parseOpenInEditorRequest, (body) => {
             const repoRoot = getRepoInfo().root;
-            const fullPath = filePath ? resolveInRepo(filePath) : repoRoot;
-            const gotoArg = line ? `${fullPath}:${line}` : fullPath;
+            const fullPath = body.filePath ? resolveInRepo(body.filePath) : repoRoot;
+            const gotoArg = body.line ? `${fullPath}:${body.line}` : fullPath;
             execFile('code', [repoRoot, '--goto', gotoArg], { timeout: 5000 }, () => {});
             sendJson(res, { ok: true });
-          } catch (err) {
-            sendError(res, 500, `Failed to open editor: ${err}`);
-          }
+          });
           return;
         }
 
@@ -745,40 +724,34 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             sendError(res, 409, 'You have uncommitted local changes. Commit or stash them first.');
             return;
           }
-          const body = JSON.parse(await readBody(req));
-          const comments = (body.comments ?? []) as PrComment[];
-          const summary = typeof body.body === 'string' ? body.body : '';
-          const event = REVIEW_EVENTS.has(body.event) ? (body.event as ReviewEvent) : 'COMMENT';
-          if (!Array.isArray(comments)) {
-            sendError(res, 400, 'comments must be an array');
-            return;
-          }
-          // A verdict carries its own meaning; only a plain comment needs something in it.
-          if (event === 'COMMENT' && comments.length === 0 && !summary.trim()) {
-            sendError(res, 400, 'A comment review needs a summary or at least one comment');
-            return;
-          }
-          const result = createGitHubReview(
-            githubRemote.owner,
-            githubRemote.repo,
-            details.prNumber,
-            details.headSha,
-            { event, body: summary, comments },
-          );
-          const sentBodies = new Map(comments.map(comment => [comment.threadId, comment.body]));
-          const forgeIds = new Map(result.commentIds.map(entry => [entry.threadId, entry.githubCommentId]));
-          markThreadsSubmitted(
-            result.submittedThreadIds.map(threadId => ({
-              threadId,
-              body: sentBodies.get(threadId),
-              githubCommentId: forgeIds.get(threadId),
-            })),
-            {
-              reviewUrl: result.reviewUrl,
-              headSha: details.headSha,
-            },
-          );
-          sendJson(res, result);
+          withJsonBody(res, req, 'Failed to create review', parseReviewSubmission, (submission) => {
+            // A verdict carries its own meaning; only a plain comment needs something in it.
+            if (submission.event === 'COMMENT' && submission.comments.length === 0 && !submission.body.trim()) {
+              sendError(res, 400, 'A comment review needs a summary or at least one comment');
+              return;
+            }
+            const result = createGitHubReview(
+              githubRemote.owner,
+              githubRemote.repo,
+              details.prNumber,
+              details.headSha,
+              submission,
+            );
+            const sentBodies = new Map(submission.comments.map(comment => [comment.threadId, comment.body]));
+            const forgeIds = new Map(result.commentIds.map(entry => [entry.threadId, entry.githubCommentId]));
+            markThreadsSubmitted(
+              result.submittedThreadIds.map(threadId => ({
+                threadId,
+                body: sentBodies.get(threadId),
+                githubCommentId: forgeIds.get(threadId),
+              })),
+              {
+                reviewUrl: result.reviewUrl,
+                headSha: details.headSha,
+              },
+            );
+            sendJson(res, result);
+          });
           return;
         }
 
@@ -792,13 +765,6 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             sendError(res, 400, 'No GitHub PR detected');
             return;
           }
-          const body = JSON.parse(await readBody(req));
-          const { sessionId: sid } = body;
-          if (!sid) {
-            sendError(res, 400, 'Missing sessionId');
-            return;
-          }
-
           const localHead = getHeadHash();
           if (localHead !== details.headSha) {
             sendError(res, 409, 'Local branch is out of sync with the PR. Push or pull your git changes first.');
@@ -809,46 +775,49 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             return;
           }
 
-          const remoteThreads = pullGitHubComments(githubRemote.owner, githubRemote.repo, details.prNumber);
-          const localThreads = getThreadsForSession(sid);
+          withJsonBody(res, req, 'Failed to pull comments', parsePullCommentsRequest, (body) => {
+            const sid = body.sessionId;
+            const remoteThreads = pullGitHubComments(githubRemote.owner, githubRemote.repo, details.prNumber);
+            const localThreads = getThreadsForSession(sid);
 
-          const remoteState = pullGitHubThreadState(githubRemote.owner, githubRemote.repo, details.prNumber);
-          const settled = remoteState ? threadsResolvedRemotely(localThreads, remoteState) : [];
-          for (const threadId of settled) {
-            updateThreadStatus(threadId, 'resolved');
-          }
+            const remoteState = pullGitHubThreadState(githubRemote.owner, githubRemote.repo, details.prNumber);
+            const settled = remoteState ? threadsResolvedRemotely(localThreads, remoteState) : [];
+            for (const threadId of settled) {
+              updateThreadStatus(threadId, 'resolved');
+            }
 
-          let pulled = 0;
-          let skipped = 0;
-          for (const rt of remoteThreads) {
-            const firstComment = rt.comments[0];
-            const existing = existingThreadFor(localThreads, rt);
-            if (existing) {
-              skipped++;
-              // A thread sent before ids were recorded is recognised by wording once more, and
-              // from then on by id. The snapshot is updated too, so a second wording twin in
-              // this same pull sees the claimed id instead of overwriting it.
-              if (existing.githubCommentId == null) {
-                setThreadForgeComment(existing.id, rt.firstCommentId);
-                existing.githubCommentId = rt.firstCommentId;
+            let pulled = 0;
+            let skipped = 0;
+            for (const rt of remoteThreads) {
+              const firstComment = rt.comments[0];
+              const existing = existingThreadFor(localThreads, rt);
+              if (existing) {
+                skipped++;
+                // A thread sent before ids were recorded is recognised by wording once more, and
+                // from then on by id. The snapshot is updated too, so a second wording twin in
+                // this same pull sees the claimed id instead of overwriting it.
+                if (existing.githubCommentId == null) {
+                  setThreadForgeComment(existing.id, rt.firstCommentId);
+                  existing.githubCommentId = rt.firstCommentId;
+                }
+                continue;
               }
-              continue;
-            }
-            const thread = createThread(sid, rt.filePath, rt.side, rt.startLine, rt.endLine, firstComment.body, {
-              name: firstComment.authorName,
-              type: firstComment.authorType,
-            });
-            setThreadForgeComment(thread.id, rt.firstCommentId);
-            for (let i = 1; i < rt.comments.length; i++) {
-              const reply = rt.comments[i];
-              addReply(thread.id, reply.body, {
-                name: reply.authorName,
-                type: reply.authorType,
+              const thread = createThread(sid, rt.filePath, rt.side, rt.startLine, rt.endLine, firstComment.body, {
+                name: firstComment.authorName,
+                type: firstComment.authorType,
               });
+              setThreadForgeComment(thread.id, rt.firstCommentId);
+              for (let i = 1; i < rt.comments.length; i++) {
+                const reply = rt.comments[i];
+                addReply(thread.id, reply.body, {
+                  name: reply.authorName,
+                  type: reply.authorType,
+                });
+              }
+              pulled++;
             }
-            pulled++;
-          }
-          sendJson(res, { pulled, skipped, resolved: settled.length, resolutionUnavailable: remoteState === null } satisfies PullCommentsResult);
+            sendJson(res, { pulled, skipped, resolved: settled.length, resolutionUnavailable: remoteState === null } satisfies PullCommentsResult);
+          });
           return;
         }
 

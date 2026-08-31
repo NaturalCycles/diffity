@@ -1,6 +1,6 @@
 {
   "name": "@diffity/api",
-  "version": "0.10.1",
+  "version": "0.10.2",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
@@ -14,7 +14,9 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "typecheck": "tsc -p tsconfig.typecheck.json"
+    "typecheck": "tsc -p tsconfig.typecheck.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "files": [
     "dist"
@@ -23,6 +25,7 @@
     "@diffity/parser": "*"
   },
   "devDependencies": {
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0"
   }
 }

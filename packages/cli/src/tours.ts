@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Tour, TourStatus, TourStep } from '@diffity/api';
+import { isTourStatus, type Tour, type TourStatus, type TourStep } from '@diffity/api';
 import { getDb, queryAll, queryOne } from './db.js';
 
 export type { Tour, TourStatus, TourStep } from '@diffity/api';
@@ -45,7 +45,7 @@ function rowToTour(row: TourRow, steps: TourStep[]): Tour {
     sessionId: row.session_id,
     topic: row.topic,
     body: row.body,
-    status: row.status as TourStatus,
+    status: isTourStatus(row.status) ? row.status : 'ready',
     createdAt: row.created_at,
     steps,
   };

@@ -1,9 +1,8 @@
 import type {
   Comment,
   CommentAuthor,
-  CommentKind,
-  CommentSide,
   CommentThread,
+  CreateThreadRequest,
   DiffFileResponse,
   DiffFingerprint,
   DiffResponse,
@@ -11,8 +10,10 @@ import type {
   GitHubDetails,
   PullCommentsResult,
   RepoInfoResponse,
+  ReplyRequest,
   ReviewResult,
   ReviewSubmission,
+  ThreadStatus,
   Tour,
   TreeEntriesResponse,
   TreeFingerprintResponse,
@@ -107,7 +108,7 @@ export function openInEditor(filePath: string, line?: number): Promise<{ ok: boo
 
 
 
-export async function fetchThreads(sessionId: string, status?: string): Promise<CommentThread[]> {
+export async function fetchThreads(sessionId: string, status?: ThreadStatus): Promise<CommentThread[]> {
   const res = await fetch(buildUrl('/api/threads', { session: sessionId, status }));
   if (!res.ok) {
     return [];
@@ -117,20 +118,7 @@ export async function fetchThreads(sessionId: string, status?: string): Promise<
 
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
 
-export function createThread(data: {
-  sessionId: string;
-  filePath: string;
-  side: CommentSide;
-  startLine: number;
-  endLine: number;
-  body: string;
-  author: CommentAuthor;
-  anchorContent?: string;
-  /** An aside starts a conversation rather than a finding, and is never posted. */
-  kind?: CommentKind;
-  live?: boolean;
-  intent?: 'ask' | 'act';
-}): Promise<CommentThread> {
+export function createThread(data: CreateThreadRequest): Promise<CommentThread> {
   return apiFetch('/api/threads', {
     method: 'POST',
     headers: JSON_HEADERS,
@@ -153,20 +141,21 @@ export function replyToThread(
   author: CommentAuthor,
   options: ReplyOptions = {},
 ): Promise<Comment> {
+  const request: ReplyRequest = {
+    body,
+    author,
+    kind: options.aside ? 'aside' : 'review',
+    live: options.live === true,
+    intent: options.intent ?? 'ask',
+  };
   return apiFetch(`/api/threads/${threadId}/reply`, {
     method: 'POST',
     headers: JSON_HEADERS,
-    body: JSON.stringify({
-      body,
-      author,
-      kind: options.aside ? 'aside' : 'review',
-      live: options.live === true,
-      intent: options.intent ?? 'ask',
-    }),
+    body: JSON.stringify(request),
   });
 }
 
-export function updateThreadStatus(threadId: string, status: string, summary?: string): Promise<void> {
+export function updateThreadStatus(threadId: string, status: ThreadStatus, summary?: string): Promise<void> {
   return apiVoid(`/api/threads/${threadId}/status`, {
     method: 'PATCH',
     headers: JSON_HEADERS,
