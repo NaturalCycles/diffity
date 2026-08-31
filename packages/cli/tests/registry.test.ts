@@ -56,6 +56,8 @@ describe('a pid that came back as somebody else', () => {
     expect(entryIsAlive(entry({ startedAt: '2001-01-01T00:00:00.000Z' }))).toBe(false);
     expect(entryIsAlive(entry({ startedAt: new Date().toISOString() }))).toBe(true);
     expect(entryIsAlive(entry({ pid: deadPid() }))).toBe(false);
+    // An unreadable stamp cannot prove reuse, so the alive pid keeps the entry.
+    expect(entryIsAlive(entry({ startedAt: 'garbage' }))).toBe(true);
   });
 
   it('reading the registry drops it', async () => {

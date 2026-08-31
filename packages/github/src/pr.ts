@@ -90,7 +90,7 @@ const REVIEW_THREADS_QUERY = `query($owner:String!,$repo:String!,$number:Int!){
  *
  * `null` means the question could not be asked — an expired token, a rate limit, a schema change —
  * as opposed to `[]`, which means it was asked and nothing came back. The two look identical to a
- * reader otherwise, and this whole change exists because a thread was quiet about what it knew.
+ * reader otherwise.
  */
 export function pullThreadState(owner: string, repo: string, prNumber: number): RemoteThreadState[] | null {
   try {

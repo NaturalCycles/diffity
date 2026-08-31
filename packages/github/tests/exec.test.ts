@@ -24,7 +24,11 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  process.env.PATH = origPath;
+  if (origPath === undefined) {
+    delete process.env.PATH;
+  } else {
+    process.env.PATH = origPath;
+  }
   delete process.env.FAKE_GH_EXIT;
   delete process.env.FAKE_GH_STDERR;
   delete process.env.FAKE_GH_STDOUT;

@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync, unlinkSync, existsSync, statSync, mkdirSyn
 import { execFileSync } from 'node:child_process';
 import { AGENT_TRAFFIC_HEADER } from '@diffity/api';
 import { get } from 'node:http';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { homedir } from 'node:os';
 
 export interface RegistryEntry {
@@ -17,11 +17,16 @@ export interface RegistryEntry {
   version?: string;
 }
 
-// The registry spans every repository, so it does not live in a per-repo data directory — but it
-// honors the same override, so an instance told to keep its data elsewhere is findable under the
-// same roof and a test never writes into the real one.
-function diffityDir(): string {
-  return process.env.DIFFITY_DATA_DIR?.trim() || join(homedir(), '.diffity');
+/**
+ * Where all cross-repo state lives. The registry spans every repository, so it does not live in a
+ * per-repo data directory — but it honors the same override, so an instance told to keep its data
+ * elsewhere is findable under the same roof and a test never writes into the real one. Only an
+ * absolute override counts: there is no repo root here to resolve a relative one against, and
+ * cwd-relative registries would scatter one per directory.
+ */
+export function diffityDir(): string {
+  const dir = process.env.DIFFITY_DATA_DIR?.trim();
+  return dir && isAbsolute(dir) ? dir : join(homedir(), '.diffity');
 }
 
 function registryPath(): string {
@@ -73,6 +78,8 @@ function processStartedAtMs(pid: number): number | null {
     const lstart = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
+      // %c output follows the locale, and a date Date.parse cannot read would void the guard.
+      env: { ...process.env, LC_ALL: 'C' },
     }).trim();
     const parsed = Date.parse(lstart);
     return Number.isFinite(parsed) ? parsed : null;
