@@ -29,7 +29,6 @@ import { createTour, addTourStep, updateTourStatus, deleteTour, deleteToursForSe
 import { unansweredRequest } from './live-unanswered.js';
 import { describeSince } from './live-events.js';
 import { readAnchor, clampToFile, countWorkingTreeLines } from './anchor.js';
-
 import { startReviewRun, finishReviewRun } from './review-run.js';
 import { readRepoConfig, DEFAULT_SEVERITIES, resolveInRepo, REPO_CONFIG_FILE } from '@diffity/git';
 import { readFileSync } from 'node:fs';
@@ -71,10 +70,11 @@ export function resolveBodyText(
   let raw: string;
   try {
     raw = read(opts.bodyFile === '-' ? 0 : opts.bodyFile);
-  } catch {
-    throw new Error(`Could not read ${opts.bodyFile === '-' ? 'stdin' : `"${opts.bodyFile}"`}`);
+  } catch (err) {
+    const what = opts.bodyFile === '-' ? 'stdin' : `"${opts.bodyFile}"`;
+    throw new Error(`Could not read ${what}: ${err instanceof Error ? err.message : err}`);
   }
-  return raw.replace(/\n$/, '');
+  return raw.replace(/\r?\n$/, '');
 }
 
 function bodyTextOrExit(opts: { body?: string; bodyFile?: string }, required: boolean): string {
@@ -86,7 +86,11 @@ function bodyTextOrExit(opts: { body?: string; bodyFile?: string }, required: bo
     if (!required) {
       return '';
     }
-    console.error(pc.red('Error: Provide --body <text> or --body-file <path> ("-" reads stdin)'));
+    console.error(pc.red(
+      body === ''
+        ? 'Error: The body is empty'
+        : 'Error: Provide --body <text> or --body-file <path> ("-" reads stdin)',
+    ));
   } catch (err) {
     console.error(pc.red(`Error: ${err instanceof Error ? err.message : err}`));
   }
@@ -360,7 +364,7 @@ Examples:
     .option('--body-file <path>', 'Read the body from a file; "-" reads stdin')
     .option('--aside', 'A note for the reader that never goes to the forge')
     .option('--answers <comment-id>', 'The request this answers, so the page stops waiting on it')
-    .action(async (id: string, opts: { body: string; aside?: boolean; answers?: string }) => {
+    .action(async (id: string, opts: { body?: string; bodyFile?: string; aside?: boolean; answers?: string }) => {
       const session = await requireSession(agent.opts().session);
       const thread = resolveThreadId(id, session.id);
       const stillOpen = unansweredRequest(thread.comments);
@@ -501,7 +505,7 @@ Examples:
     .argument('<comment-id>', 'Comment to rewrite')
     .option('--body <text>', 'The new body')
     .option('--body-file <path>', 'Read the body from a file; "-" reads stdin')
-    .action(async (commentId: string, opts: { body: string }) => {
+    .action(async (commentId: string, opts: { body?: string; bodyFile?: string }) => {
       const session = await requireSession(agent.opts().session);
       const sent = findSubmittedThreadForComment(commentId, session.id);
       editComment(commentId, bodyTextOrExit(opts, true));

@@ -19,6 +19,9 @@ describe('where a body comes from', () => {
 
       writeFileSync(file, 'kept blank line\n\n');
       expect(resolveBodyText({ bodyFile: file })).toBe('kept blank line\n');
+
+      writeFileSync(file, 'written on windows\r\n');
+      expect(resolveBodyText({ bodyFile: file })).toBe('written on windows');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -40,9 +43,9 @@ describe('where a body comes from', () => {
       .toThrowError('Use --body or --body-file, not both');
   });
 
-  it('an unreadable file says which one', () => {
+  it('an unreadable file says which one, and why', () => {
     expect(() => resolveBodyText({ bodyFile: '/nowhere/nothing.md' }))
-      .toThrowError('Could not read "/nowhere/nothing.md"');
+      .toThrowError(/Could not read "\/nowhere\/nothing\.md": .*ENOENT/);
   });
 
   it('absent everywhere is null, for the options that default instead of requiring', () => {
