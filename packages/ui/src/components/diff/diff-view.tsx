@@ -342,6 +342,8 @@ export function DiffView(props: DiffViewProps) {
           commentActions={commentActions}
           onAskReply={onAskReply}
           onActReply={onActReply}
+          onAskThread={onAskThread}
+          onActThread={onActThread}
           askIsHeard={askIsHeard}
         />
       )}

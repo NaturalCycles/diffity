@@ -61,4 +61,23 @@ describe('asking the agent from a general comment', () => {
 
     expect(onAskReply).toHaveBeenCalledWith('g1', 'why only one P3?', DEFAULT_AUTHOR);
   });
+
+  it('a fresh question goes out as a general thread', () => {
+    const onAskThread = vi.fn();
+    render(
+      <GeneralComments
+        threads={[]}
+        commentActions={{} as CommentActions}
+        onAskThread={onAskThread}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add comment' }));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'is the migration covered?' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Ask' }));
+
+    expect(onAskThread).toHaveBeenCalledWith(
+      GENERAL_THREAD_FILE_PATH, 'new', 0, 0, 'is the migration covered?', DEFAULT_AUTHOR,
+    );
+  });
 });
