@@ -1,4 +1,8 @@
-export type TourStatus = 'building' | 'ready';
+import { memberOf } from './member.js';
+
+export const TOUR_STATUSES = ['building', 'ready'] as const;
+export type TourStatus = (typeof TOUR_STATUSES)[number];
+export const isTourStatus = memberOf(TOUR_STATUSES);
 
 export interface TourStep {
   id: string;

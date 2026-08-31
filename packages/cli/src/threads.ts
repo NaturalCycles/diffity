@@ -1,12 +1,17 @@
 import { randomUUID } from 'node:crypto';
-import type {
-  Comment,
-  CommentAuthor,
-  CommentKind,
-  CommentSide,
-  CommentThread,
-  LiveIntent,
-  ThreadStatus,
+import {
+  isAuthorType,
+  isCommentKind,
+  isCommentSide,
+  isThreadStatus,
+  type AuthorType,
+  type Comment,
+  type CommentAuthor,
+  type CommentKind,
+  type CommentSide,
+  type CommentThread,
+  type LiveIntent,
+  type ThreadStatus,
 } from '@diffity/api';
 import { getDb, queryAll, queryOne } from './db.js';
 import { normaliseIntent } from './live-intent.js';
@@ -19,6 +24,25 @@ export type Thread = CommentThread;
 /** The wire carries only real intents; anything an old row holds is read as a question. */
 function intentOrNull(value: string | null | undefined): LiveIntent | null {
   return value == null ? null : normaliseIntent(value);
+}
+
+// Enum columns are narrowed on the way out rather than trusted: rows may predate validation at
+// the server boundary, or come from a newer schema than this build knows.
+export function normaliseSide(value: string): CommentSide {
+  return isCommentSide(value) ? value : 'new';
+}
+
+function normaliseStatus(value: string): ThreadStatus {
+  return isThreadStatus(value) ? value : 'open';
+}
+
+/** Absent means review: every comment written before kinds existed keeps its meaning. */
+function normaliseKind(value: string | null | undefined): CommentKind {
+  return isCommentKind(value) ? value : 'review';
+}
+
+function normaliseAuthorType(value: string): AuthorType {
+  return isAuthorType(value) ? value : 'user';
 }
 
 interface ThreadRow {
@@ -58,10 +82,10 @@ function rowToThread(row: ThreadRow, comments: ThreadComment[]): Thread {
     id: row.id,
     sessionId: row.session_id,
     filePath: row.file_path,
-    side: row.side as CommentSide,
+    side: normaliseSide(row.side),
     startLine: row.start_line,
     endLine: row.end_line,
-    status: row.status as ThreadStatus,
+    status: normaliseStatus(row.status),
     anchorContent: row.anchor_content,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -77,9 +101,9 @@ function rowToThread(row: ThreadRow, comments: ThreadComment[]): Thread {
 function rowToComment(row: CommentRow): ThreadComment {
   return {
     id: row.id,
-    author: { name: row.author_name, type: row.author_type as 'user' | 'agent' },
+    author: { name: row.author_name, type: normaliseAuthorType(row.author_type) },
     body: row.body,
-    kind: (row.kind as CommentKind | null) ?? 'review',
+    kind: normaliseKind(row.kind),
     createdAt: row.created_at,
     liveRequestedAt: row.live_requested_at ?? null,
     liveIntent: intentOrNull(row.live_intent),
@@ -269,9 +293,9 @@ export function getThreadsForSession(sessionId: string, status?: ThreadStatus): 
     if (row.c_id) {
       thread.comments.push({
         id: row.c_id,
-        author: { name: row.c_author_name!, type: row.c_author_type as 'user' | 'agent' },
+        author: { name: row.c_author_name!, type: normaliseAuthorType(row.c_author_type!) },
         body: row.c_body!,
-        kind: (row.c_kind as CommentKind | null) ?? 'review',
+        kind: normaliseKind(row.c_kind),
         createdAt: row.c_created_at!,
         liveRequestedAt: row.c_live_requested_at ?? null,
         liveIntent: intentOrNull(row.c_live_intent),

@@ -1,6 +1,6 @@
 import { existsSync, statSync } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
-import type { Command } from 'commander';
+import { InvalidArgumentError, type Command } from 'commander';
 import pc from 'picocolors';
 import { isGitRepo, getDiffFiles, resolveRef, getRepoRoot } from '@diffity/git';
 import {
@@ -10,11 +10,12 @@ import {
   addReply,
   updateThreadStatus,
   editComment,
-  type ThreadStatus,
   type Thread,
 } from './threads.js';
 import {
   GENERAL_THREAD_FILE_PATH,
+  isThreadStatus,
+  THREAD_STATUSES,
   type ClaimResponse,
   type GitHubDetails,
   type LiveStatusResponse,
@@ -50,6 +51,16 @@ async function requireSession(explicitId?: string): Promise<Session> {
     process.exit(1);
   }
   return session;
+}
+
+// Rejected where the typo happens: a 0-line thread would otherwise sit quietly in the session
+// until it blocks the whole review submission at the forge boundary.
+export function lineNumber(value: string): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new InvalidArgumentError('Lines are 1-indexed integers.');
+  }
+  return parsed;
 }
 
 function assertFileExists(filePath: string): void {
@@ -193,13 +204,12 @@ Examples:
     .option('--status <status>', 'Filter by status (open, resolved, dismissed)')
     .option('--json', 'Output as JSON')
     .action(async (opts) => {
-      const validStatuses = ['open', 'resolved', 'dismissed'];
-      if (opts.status && !validStatuses.includes(opts.status)) {
-        console.error(pc.red(`Error: Invalid status "${opts.status}". Must be one of: ${validStatuses.join(', ')}`));
+      if (opts.status && !isThreadStatus(opts.status)) {
+        console.error(pc.red(`Error: Invalid status "${opts.status}". Must be one of: ${THREAD_STATUSES.join(', ')}`));
         process.exit(1);
       }
       const session = await requireSession(agent.opts().session);
-      const threads = getThreadsForSession(session.id, opts.status as ThreadStatus | undefined);
+      const threads = getThreadsForSession(session.id, opts.status);
 
       if (opts.json) {
         console.log(JSON.stringify(threads, null, 2));
@@ -220,13 +230,17 @@ Examples:
     .command('comment')
     .description('Create a new comment thread')
     .requiredOption('--file <path>', 'File path (relative to repo root)')
-    .requiredOption('--line <n>', 'Line number (1-indexed)', parseInt)
-    .option('--end-line <n>', 'End line for multi-line comments (1-indexed)', parseInt)
+    .requiredOption('--line <n>', 'Line number (1-indexed)', lineNumber)
+    .option('--end-line <n>', 'End line for multi-line comments (1-indexed)', lineNumber)
     .option('--side <side>', 'Which side of the diff (new or old)', 'new')
     .requiredOption('--body <text>', 'Comment body')
     .action(async (opts) => {
       if (opts.side !== 'new' && opts.side !== 'old') {
         console.error(pc.red(`Error: Invalid side "${opts.side}". Must be "new" or "old"`));
+        process.exit(1);
+      }
+      if (opts.endLine != null && opts.endLine < opts.line) {
+        console.error(pc.red(`Error: Invalid end line "${opts.endLine}". It must be >= --line`));
         process.exit(1);
       }
       const session = await requireSession(agent.opts().session);
@@ -571,12 +585,16 @@ Examples:
     .description('Add a step to a guided tour')
     .requiredOption('--tour <id>', 'Tour ID')
     .requiredOption('--file <path>', 'File path (relative to repo root)')
-    .requiredOption('--line <n>', 'Start line number (1-indexed)', parseInt)
-    .option('--end-line <n>', 'End line number (1-indexed)', parseInt)
+    .requiredOption('--line <n>', 'Start line number (1-indexed)', lineNumber)
+    .option('--end-line <n>', 'End line number (1-indexed)', lineNumber)
     .option('--body <text>', 'Narrative text shown in sidebar', '')
     .option('--annotation <text>', 'Short inline annotation on highlighted code', '')
     .option('--json', 'Output as JSON')
     .action(async (opts) => {
+      if (opts.endLine != null && opts.endLine < opts.line) {
+        console.error(pc.red(`Error: Invalid end line "${opts.endLine}". It must be >= --line`));
+        process.exit(1);
+      }
       const session = await requireSession(agent.opts().session);
       assertFileExists(opts.file);
       const tourId = resolveTourId(opts.tour, session.id);

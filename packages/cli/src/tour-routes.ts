@@ -1,12 +1,16 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
+  parseAddTourStepRequest,
+  parseCreateTourRequest,
+  parseUpdateTourStatusRequest,
+} from '@diffity/api';
+import {
   createTour,
   deleteTour,
   getTour,
   getToursForSession,
   addTourStep,
   updateTourStatus,
-  type TourStatus,
 } from './tours.js';
 import { sendJson, sendError, withJsonBody } from './http-utils.js';
 import { resolveSessionId, sessionRef } from './session.js';
@@ -30,13 +34,8 @@ export function handleTourRoute(
   }
 
   if (pathname === '/api/tours' && req.method === 'POST') {
-    withJsonBody(res, req, 'Failed to create tour', (body) => {
-      const { sessionId, topic, body: tourBody } = body;
-      if (!sessionId || !topic) {
-        sendError(res, 400, 'Missing required fields: sessionId, topic');
-        return;
-      }
-      const tour = createTour(sessionId as string, topic as string, (tourBody as string) || '');
+    withJsonBody(res, req, 'Failed to create tour', parseCreateTourRequest, (body) => {
+      const tour = createTour(body.sessionId, body.topic, body.body ?? '');
       sendJson(res, tour);
     });
     return true;
@@ -44,19 +43,14 @@ export function handleTourRoute(
 
   const tourStepsMatch = pathname.match(/^\/api\/tours\/([^/]+)\/steps$/);
   if (tourStepsMatch && req.method === 'POST') {
-    withJsonBody(res, req, 'Failed to add tour step', (body) => {
-      const { filePath, startLine, endLine, body: stepBody, annotation } = body;
-      if (!filePath || typeof startLine !== 'number' || typeof endLine !== 'number') {
-        sendError(res, 400, 'Missing required fields: filePath, startLine, endLine');
-        return;
-      }
+    withJsonBody(res, req, 'Failed to add tour step', parseAddTourStepRequest, (body) => {
       const step = addTourStep(
         tourStepsMatch[1],
-        filePath as string,
-        startLine,
-        endLine,
-        (stepBody as string) || '',
-        (annotation as string) || '',
+        body.filePath,
+        body.startLine,
+        body.endLine,
+        body.body ?? '',
+        body.annotation ?? '',
       );
       sendJson(res, step);
     });
@@ -88,13 +82,8 @@ export function handleTourRoute(
   }
 
   if (tourMatch && req.method === 'PATCH') {
-    withJsonBody(res, req, 'Failed to update tour', (body) => {
-      const { status } = body;
-      if (!status) {
-        sendError(res, 400, 'Missing status');
-        return;
-      }
-      updateTourStatus(tourMatch![1], status as TourStatus);
+    withJsonBody(res, req, 'Failed to update tour', parseUpdateTourStatusRequest, (body) => {
+      updateTourStatus(tourMatch![1], body.status);
       sendJson(res, { ok: true });
     });
     return true;
