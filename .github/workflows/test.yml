@@ -13,8 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # The engines floor and the version releases build with.
-        node: [22, 24]
+        # The actual engines floor and the version releases build with.
+        node: ['22.13', 24]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

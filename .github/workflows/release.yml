@@ -40,20 +40,27 @@ jobs:
             exit 0
           fi
           echo "publish=no" >> "$GITHUB_OUTPUT"
-          # Already published. A merge that changes what ships must have re-bumped — this is
-          # the parallel-branch gap: two branches bump to the same number, and the second to
-          # land would otherwise ship nothing, silently. Everything the artifact is built from
-          # counts; tests do not.
-          CHANGED=$(git diff --name-only HEAD^ HEAD -- \
+          # Already published, so its tag must exist — a publish that failed between npm and
+          # the tag is finished by hand, against the commit of the run that published.
+          if ! git fetch --no-tags --depth=1 origin tag "v$VERSION"; then
+            echo "::error::$VERSION is on npm but v$VERSION is not tagged — a publish got partway. Finish it against the sha of the run that published: git tag v$VERSION <sha> ; git push origin v$VERSION ; gh release create v$VERSION --generate-notes"
+            exit 1
+          fi
+          # A merge that changes what ships must have re-bumped — this is the parallel-branch
+          # gap: two branches bump to the same number, and the second to land would otherwise
+          # ship nothing, silently. Judged against the published tag rather than the previous
+          # commit, so a run superseded in the queue or a multi-commit push cannot slip a
+          # change past it. Everything the artifact is built from counts; tests do not.
+          CHANGED=$(git diff --name-only "v$VERSION" HEAD -- \
             ':(glob)packages/**' ':(glob)scripts/**' 'skills' \
-            'package.json' 'package-lock.json' 'tsconfig.json' \
-            ':(exclude,glob)packages/*/tests/**' ':(exclude)scripts/lib/utils.test.ts')
+            'package.json' 'package-lock.json' 'tsconfig.json' 'README.md' 'LICENSE' \
+            ':(exclude,glob)packages/*/tests/**' ':(exclude,glob)scripts/**/*.test.ts')
           if [ -n "$CHANGED" ]; then
-            echo "::error::$VERSION is already on npm, but this merge changed shipped code. Re-bump the version (npx tsx scripts/release.ts patch --no-git) and merge again. If a previous run of this same commit already published and only tagging failed, instead create the tag by hand: git tag v$VERSION && git push origin v$VERSION && gh release create v$VERSION --generate-notes"
+            echo "::error::$VERSION is already on npm, but shipped code changed since it was published. Re-bump the version (npx tsx scripts/release.ts patch --no-git) and merge again."
             echo "$CHANGED"
             exit 1
           fi
-          echo "Version $VERSION already published and nothing shipped changed — nothing to do."
+          echo "Version $VERSION already published and everything since is unshipped — nothing to do."
 
       - if: steps.decide.outputs.publish == 'yes'
         run: npm ci
@@ -65,13 +72,14 @@ jobs:
         run: npm publish -w @naturalcycles/diffity --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - if: steps.decide.outputs.publish == 'yes'
-        name: Tag and release
+      - name: Tag and release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.decide.outputs.version }}
         run: |
-          # Idempotent, so a re-run that already got partway does not fail on its own leftovers.
+          # Runs on both paths and is idempotent throughout: a fresh publish creates all three,
+          # a later run heals whichever of them a partial failure left missing. On the
+          # already-published path, decide has fetched the tag, so rev-parse sees it.
           git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null || git tag "v$VERSION"
           git push origin "v$VERSION"
           gh release view "v$VERSION" >/dev/null 2>&1 || gh release create "v$VERSION" --generate-notes --title "v$VERSION"
