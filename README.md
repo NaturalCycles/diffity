@@ -313,6 +313,9 @@ diffity agent tour-delete <id>          # correct a walkthrough instead of addin
 diffity agent tour-delete --all         # or clear the session's finished ones
 ```
 
+Every `--body` also takes `--body-file <path>`, and `--body-file -` reads stdin — a quoted
+heredoc needs no escaping, and the text lands exactly as typed.
+
 Every command follows the running server's own session. `diffity agent --session <id> <command>`
 (canonically between `agent` and the command) addresses another session by id or 8-char prefix.
 

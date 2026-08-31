@@ -71,6 +71,15 @@ Read `body` and decide *how* to do what was asked. Do not do more than was asked
 {{binary}} agent reply <thread-id> --aside --answers <comment-id> --body "<your answer>"
 ```
 
+Every `--body` also takes `--body-file <path>`, and `--body-file -` reads stdin — write an answer
+holding quotes, backticks or newlines with a quoted heredoc, so it lands exactly as typed:
+
+```
+{{binary}} agent reply <thread-id> --aside --answers <comment-id> --body-file - <<'EOF'
+It is deliberate: `split('\n')` never sees the `\r` case.
+EOF
+```
+
 `--aside` keeps it off the pull request. `--answers` closes the request, so the page stops saying you
 are working on it. Both matter; leaving either off leaves the thread lying to the reader.
 

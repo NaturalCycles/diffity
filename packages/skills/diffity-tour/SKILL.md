@@ -26,6 +26,7 @@ When the argument is a **GitHub PR URL** (matching `github.com/owner/repo/pull/N
 ```
 {{binary}} agent tour-start --topic "<text>" [--body "<text>"] --json
 {{binary}} agent tour-step --tour <id> --file <path> --line <n> [--end-line <n>] --body "<text>" [--annotation "<text>"] --json
+{{binary}} agent tour-step --tour <id> ... --body-file <path>   # "-" reads stdin; prefer a quoted heredoc for long narratives
 {{binary}} agent tour-done --tour <id> --json
 {{binary}} list --json
 ```
@@ -143,7 +144,9 @@ The tour UI has a dedicated explanation panel. The intro (from `tour-start --bod
 
 2. **Add steps** in order. For each step:
    ```
-   {{binary}} agent tour-step --tour <id> --file <path> --line <start> --end-line <end> --body "<narrative>" --annotation "<short label>" --json
+   {{binary}} agent tour-step --tour <id> --file <path> --line <start> --end-line <end> --annotation "<short label>" --json --body-file - <<'EOF'
+   <narrative>
+   EOF
    ```
 
    **Writing step content:**

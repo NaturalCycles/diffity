@@ -29,7 +29,6 @@ import { createTour, addTourStep, updateTourStatus, deleteTour, deleteToursForSe
 import { unansweredRequest } from './live-unanswered.js';
 import { describeSince } from './live-events.js';
 import { readAnchor, clampToFile, countWorkingTreeLines } from './anchor.js';
-import { unescapeMarkdown as fromShell } from './unescape.js';
 import { startReviewRun, finishReviewRun } from './review-run.js';
 import { readRepoConfig, DEFAULT_SEVERITIES, resolveInRepo, REPO_CONFIG_FILE } from '@diffity/git';
 import { readFileSync } from 'node:fs';
@@ -51,6 +50,51 @@ async function requireSession(explicitId?: string): Promise<Session> {
     process.exit(1);
   }
   return session;
+}
+
+/**
+ * The text a --body/--body-file pair carries, exactly as written: argv arrives verbatim (an agent
+ * that wants control over every character uses a file or a quoted heredoc on stdin), and file
+ * input sheds the one trailing newline every heredoc and editor save ends with.
+ */
+export function resolveBodyText(
+  opts: { body?: string; bodyFile?: string },
+  read: (path: string | 0) => string = (path) => readFileSync(path, 'utf-8'),
+): string | null {
+  if (opts.bodyFile != null && opts.body != null) {
+    throw new Error('Use --body or --body-file, not both');
+  }
+  if (opts.bodyFile == null) {
+    return opts.body ?? null;
+  }
+  let raw: string;
+  try {
+    raw = read(opts.bodyFile === '-' ? 0 : opts.bodyFile);
+  } catch (err) {
+    const what = opts.bodyFile === '-' ? 'stdin' : `"${opts.bodyFile}"`;
+    throw new Error(`Could not read ${what}: ${err instanceof Error ? err.message : err}`);
+  }
+  return raw.replace(/\r?\n$/, '');
+}
+
+function bodyTextOrExit(opts: { body?: string; bodyFile?: string }, required: boolean): string {
+  try {
+    const body = resolveBodyText(opts);
+    if (body) {
+      return body;
+    }
+    if (!required) {
+      return '';
+    }
+    console.error(pc.red(
+      body === ''
+        ? 'Error: The body is empty'
+        : 'Error: Provide --body <text> or --body-file <path> ("-" reads stdin)',
+    ));
+  } catch (err) {
+    console.error(pc.red(`Error: ${err instanceof Error ? err.message : err}`));
+  }
+  process.exit(1);
 }
 
 // Rejected where the typo happens: a 0-line thread would otherwise sit quietly in the session
@@ -233,8 +277,10 @@ Examples:
     .requiredOption('--line <n>', 'Line number (1-indexed)', lineNumber)
     .option('--end-line <n>', 'End line for multi-line comments (1-indexed)', lineNumber)
     .option('--side <side>', 'Which side of the diff (new or old)', 'new')
-    .requiredOption('--body <text>', 'Comment body')
+    .option('--body <text>', 'Comment body')
+    .option('--body-file <path>', 'Read the body from a file; "-" reads stdin')
     .action(async (opts) => {
+      const body = bodyTextOrExit(opts, true);
       if (opts.side !== 'new' && opts.side !== 'old') {
         console.error(pc.red(`Error: Invalid side "${opts.side}". Must be "new" or "old"`));
         process.exit(1);
@@ -276,7 +322,7 @@ Examples:
         opts.side,
         startLine,
         endLine,
-        fromShell(opts.body),
+        body,
         { name: 'Agent', type: 'agent' },
         // Recorded so the finding can follow its code when a later commit moves it.
         opts.side === 'new' ? readAnchor(opts.file, startLine, endLine) : undefined,
@@ -293,7 +339,7 @@ Examples:
       const session = await requireSession(agent.opts().session);
       const thread = resolveThreadId(id, session.id);
       const author = opts.summary ? { name: 'Agent', type: 'agent' as const } : undefined;
-      updateThreadStatus(thread.id, 'resolved', fromShell(opts.summary ?? ''), author);
+      updateThreadStatus(thread.id, 'resolved', opts.summary ?? '', author);
       console.log(pc.green(`Resolved thread ${thread.id.slice(0, 8)}`));
     });
 
@@ -306,7 +352,7 @@ Examples:
       const session = await requireSession(agent.opts().session);
       const thread = resolveThreadId(id, session.id);
       const author = opts.reason ? { name: 'Agent', type: 'agent' as const } : undefined;
-      updateThreadStatus(thread.id, 'dismissed', fromShell(opts.reason ?? ''), author);
+      updateThreadStatus(thread.id, 'dismissed', opts.reason ?? '', author);
       console.log(pc.green(`Dismissed thread ${thread.id.slice(0, 8)}`));
     });
 
@@ -314,14 +360,16 @@ Examples:
     .command('reply')
     .description('Reply to a comment thread')
     .argument('<thread-id>', 'Thread ID (or 8-char prefix)')
-    .requiredOption('--body <text>', 'Reply body')
+    .option('--body <text>', 'Reply body')
+    .option('--body-file <path>', 'Read the body from a file; "-" reads stdin')
     .option('--aside', 'A note for the reader that never goes to the forge')
     .option('--answers <comment-id>', 'The request this answers, so the page stops waiting on it')
-    .action(async (id: string, opts: { body: string; aside?: boolean; answers?: string }) => {
+    .action(async (id: string, opts: { body?: string; bodyFile?: string; aside?: boolean; answers?: string }) => {
       const session = await requireSession(agent.opts().session);
       const thread = resolveThreadId(id, session.id);
       const stillOpen = unansweredRequest(thread.comments);
-      addReply(thread.id, fromShell(opts.body), { name: 'Agent', type: 'agent' }, opts.aside ? 'aside' : 'review');
+      const body = bodyTextOrExit(opts, true);
+      addReply(thread.id, body, { name: 'Agent', type: 'agent' }, opts.aside ? 'aside' : 'review');
       if (opts.answers && !answerLiveRequest(opts.answers)) {
         console.error(
           pc.yellow(
@@ -455,11 +503,12 @@ Examples:
     .command('amend')
     .description("Rewrite a comment's body — the way an aside improves the finding it is about")
     .argument('<comment-id>', 'Comment to rewrite')
-    .requiredOption('--body <text>', 'The new body')
-    .action(async (commentId: string, opts: { body: string }) => {
+    .option('--body <text>', 'The new body')
+    .option('--body-file <path>', 'Read the body from a file; "-" reads stdin')
+    .action(async (commentId: string, opts: { body?: string; bodyFile?: string }) => {
       const session = await requireSession(agent.opts().session);
       const sent = findSubmittedThreadForComment(commentId, session.id);
-      editComment(commentId, fromShell(opts.body));
+      editComment(commentId, bodyTextOrExit(opts, true));
       if (sent) {
         // The forge is showing the old wording and will keep showing it; saying so is the only
         // honest thing available, since a posted review comment cannot be edited from here.
@@ -476,8 +525,10 @@ Examples:
   agent
     .command('general-comment')
     .description('Create a general comment on the entire diff (not tied to a specific file or line)')
-    .requiredOption('--body <text>', 'Comment body')
+    .option('--body <text>', 'Comment body')
+    .option('--body-file <path>', 'Read the body from a file; "-" reads stdin')
     .action(async (opts) => {
+      const body = bodyTextOrExit(opts, true);
       const session = await requireSession(agent.opts().session);
       const thread = createThread(
         session.id,
@@ -485,7 +536,7 @@ Examples:
         'new',
         0,
         0,
-        fromShell(opts.body),
+        body,
         { name: 'Agent', type: 'agent' },
       );
       console.log(pc.green(`Created general comment ${thread.id.slice(0, 8)}`));
@@ -511,7 +562,7 @@ Examples:
     .option('--note <text>', 'What is being reviewed', '')
     .action(async (opts) => {
       const session = await requireSession(agent.opts().session);
-      startReviewRun(session.id, fromShell(opts.note ?? ''));
+      startReviewRun(session.id, opts.note ?? '');
       console.log(pc.green('Review marked as in progress'));
     });
 
@@ -568,11 +619,12 @@ Examples:
     .command('tour-start')
     .description('Start a new guided tour of the codebase')
     .requiredOption('--topic <text>', 'The question or topic for the tour')
-    .option('--body <text>', 'Introductory text for the tour', '')
+    .option('--body <text>', 'Introductory text for the tour')
+    .option('--body-file <path>', 'Read the body from a file; "-" reads stdin')
     .option('--json', 'Output as JSON')
     .action(async (opts) => {
       const session = await requireSession(agent.opts().session);
-      const tour = createTour(session.id, fromShell(opts.topic), fromShell(opts.body));
+      const tour = createTour(session.id, opts.topic, bodyTextOrExit(opts, false));
       if (opts.json) {
         console.log(JSON.stringify(tour, null, 2));
         return;
@@ -587,7 +639,8 @@ Examples:
     .requiredOption('--file <path>', 'File path (relative to repo root)')
     .requiredOption('--line <n>', 'Start line number (1-indexed)', lineNumber)
     .option('--end-line <n>', 'End line number (1-indexed)', lineNumber)
-    .option('--body <text>', 'Narrative text shown in sidebar', '')
+    .option('--body <text>', 'Narrative text shown in sidebar')
+    .option('--body-file <path>', 'Read the body from a file; "-" reads stdin')
     .option('--annotation <text>', 'Short inline annotation on highlighted code', '')
     .option('--json', 'Output as JSON')
     .action(async (opts) => {
@@ -599,7 +652,7 @@ Examples:
       assertFileExists(opts.file);
       const tourId = resolveTourId(opts.tour, session.id);
       const endLine = opts.endLine ?? opts.line;
-      const step = addTourStep(tourId, opts.file, opts.line, endLine, fromShell(opts.body), fromShell(opts.annotation));
+      const step = addTourStep(tourId, opts.file, opts.line, endLine, bodyTextOrExit(opts, false), opts.annotation);
       if (opts.json) {
         console.log(JSON.stringify(step, null, 2));
         return;
