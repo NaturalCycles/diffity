@@ -28,13 +28,17 @@ export interface GitHubDetails {
   reviews: PrReview[];
 }
 
-export type ReviewEvent = 'COMMENT' | 'APPROVE' | 'REQUEST_CHANGES';
+export const REVIEW_EVENTS = ['COMMENT', 'APPROVE', 'REQUEST_CHANGES'] as const;
+export type ReviewEvent = (typeof REVIEW_EVENTS)[number];
+
+export const PR_COMMENT_SIDES = ['LEFT', 'RIGHT'] as const;
+export type PrCommentSide = (typeof PR_COMMENT_SIDES)[number];
 
 export interface PrComment {
   /** The finding this came from, so a successful review can mark it as sent. */
   threadId?: string;
   filePath: string;
-  side: 'LEFT' | 'RIGHT';
+  side: PrCommentSide;
   startLine: number | null;
   endLine: number;
   body: string;

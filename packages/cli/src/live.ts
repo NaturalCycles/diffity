@@ -1,5 +1,6 @@
 import type { LiveRequest } from '@diffity/api';
 import { getDb, queryOne } from './db.js';
+import { normaliseSide } from './threads.js';
 import { normaliseIntent, type LiveIntent } from './live-intent.js';
 
 export type { LiveRequest } from '@diffity/api';
@@ -63,7 +64,7 @@ export function claimNextLiveRequest(sessionId: string): LiveRequest | null {
     claimed.id,
   );
 
-  return request ? { ...request, intent: normaliseIntent(request.intent) } : null;
+  return request ? { ...request, side: normaliseSide(request.side), intent: normaliseIntent(request.intent) } : null;
 }
 
 /**

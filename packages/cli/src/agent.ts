@@ -10,11 +10,12 @@ import {
   addReply,
   updateThreadStatus,
   editComment,
-  type ThreadStatus,
   type Thread,
 } from './threads.js';
 import {
   GENERAL_THREAD_FILE_PATH,
+  isThreadStatus,
+  THREAD_STATUSES,
   type ClaimResponse,
   type GitHubDetails,
   type LiveStatusResponse,
@@ -193,13 +194,12 @@ Examples:
     .option('--status <status>', 'Filter by status (open, resolved, dismissed)')
     .option('--json', 'Output as JSON')
     .action(async (opts) => {
-      const validStatuses = ['open', 'resolved', 'dismissed'];
-      if (opts.status && !validStatuses.includes(opts.status)) {
-        console.error(pc.red(`Error: Invalid status "${opts.status}". Must be one of: ${validStatuses.join(', ')}`));
+      if (opts.status && !isThreadStatus(opts.status)) {
+        console.error(pc.red(`Error: Invalid status "${opts.status}". Must be one of: ${THREAD_STATUSES.join(', ')}`));
         process.exit(1);
       }
       const session = await requireSession(agent.opts().session);
-      const threads = getThreadsForSession(session.id, opts.status as ThreadStatus | undefined);
+      const threads = getThreadsForSession(session.id, opts.status);
 
       if (opts.json) {
         console.log(JSON.stringify(threads, null, 2));
