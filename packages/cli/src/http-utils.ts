@@ -40,12 +40,12 @@ export function withJsonBody<T>(
         sendError(res, 400, 'Request body must be valid JSON');
         return;
       }
-      const parsed = parseBody(body);
-      if (!parsed.ok) {
-        sendError(res, 400, parsed.error);
-        return;
-      }
       try {
+        const parsed = parseBody(body);
+        if (!parsed.ok) {
+          sendError(res, 400, parsed.error);
+          return;
+        }
         handler(parsed.value);
       } catch (err) {
         sendError(res, 500, `${errorPrefix}: ${err}`);

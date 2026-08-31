@@ -124,7 +124,7 @@ function record(value: unknown, label: string): Record<string, unknown> {
 
 function parseWith<T>(body: unknown, build: (obj: Record<string, unknown>) => T): ParseResult<T> {
   try {
-    return { ok: true, value: build(record(body, 'request body')) };
+    return { ok: true, value: build(record(body, 'Request body')) };
   } catch (error) {
     if (error instanceof FieldError) {
       return { ok: false, error: error.message };
@@ -188,6 +188,15 @@ function optMember<T extends string>(
   return value == null ? undefined : member(value, label, values);
 }
 
+function lineRange(obj: Record<string, unknown>, min: number): { startLine: number; endLine: number } {
+  const startLine = int(obj.startLine, 'startLine', min);
+  const endLine = int(obj.endLine, 'endLine', min);
+  if (endLine < startLine) {
+    throw new FieldError('endLine must not be before startLine');
+  }
+  return { startLine, endLine };
+}
+
 /** Built from the fields it names, so nothing else in the request object reaches storage. */
 function author(value: unknown, label: string): CommentAuthor {
   const obj = record(value, label);
@@ -204,8 +213,7 @@ export function parseCreateThreadRequest(body: unknown): ParseResult<CreateThrea
     filePath: str(obj.filePath, 'filePath'),
     side: member(obj.side, 'side', COMMENT_SIDES),
     // Line 0 is real: a general comment is about the whole diff and sits on no line.
-    startLine: int(obj.startLine, 'startLine', 0),
-    endLine: int(obj.endLine, 'endLine', 0),
+    ...lineRange(obj, 0),
     body: str(obj.body, 'body'),
     author: author(obj.author, 'author'),
     anchorContent: optStr(obj.anchorContent, 'anchorContent'),
@@ -255,8 +263,7 @@ export function parseCreateTourRequest(body: unknown): ParseResult<CreateTourReq
 export function parseAddTourStepRequest(body: unknown): ParseResult<AddTourStepRequest> {
   return parseWith(body, obj => ({
     filePath: str(obj.filePath, 'filePath'),
-    startLine: int(obj.startLine, 'startLine', 0),
-    endLine: int(obj.endLine, 'endLine', 0),
+    ...lineRange(obj, 0),
     body: optStr(obj.body, 'body'),
     annotation: optStr(obj.annotation, 'annotation'),
   }));
@@ -302,6 +309,18 @@ export function parseReviewSubmission(body: unknown): ParseResult<ReviewSubmissi
   }));
 }
 
+function prCommentStartLine(obj: Record<string, unknown>, label: string): number | null {
+  if (obj.startLine == null) {
+    return null;
+  }
+  const startLine = int(obj.startLine, `${label}.startLine`, 1);
+  const endLine = typeof obj.endLine === 'number' ? obj.endLine : startLine;
+  if (endLine < startLine) {
+    throw new FieldError(`${label}.endLine must not be before ${label}.startLine`);
+  }
+  return startLine;
+}
+
 function prComments(value: unknown): PrComment[] {
   if (value == null) {
     return [];
@@ -319,7 +338,7 @@ function prComment(value: unknown, label: string): PrComment {
     filePath: str(obj.filePath, `${label}.filePath`),
     side: member(obj.side, `${label}.side`, PR_COMMENT_SIDES),
     // Null start means a single-line comment; the forge lines themselves start at 1.
-    startLine: obj.startLine == null ? null : int(obj.startLine, `${label}.startLine`, 1),
+    startLine: prCommentStartLine(obj, label),
     endLine: int(obj.endLine, `${label}.endLine`, 1),
     body: str(obj.body, `${label}.body`),
   };

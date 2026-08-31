@@ -229,6 +229,16 @@ Examples:
         console.error(pc.red(`Error: Invalid side "${opts.side}". Must be "new" or "old"`));
         process.exit(1);
       }
+      // Rejected where the typo happens: a 0-line thread would otherwise sit quietly in the
+      // session until it blocks the whole review submission at the forge boundary.
+      if (!Number.isInteger(opts.line) || opts.line < 1) {
+        console.error(pc.red(`Error: Invalid line "${opts.line}". Lines are 1-indexed`));
+        process.exit(1);
+      }
+      if (opts.endLine != null && (!Number.isInteger(opts.endLine) || opts.endLine < opts.line)) {
+        console.error(pc.red(`Error: Invalid end line "${opts.endLine}". It must be an integer >= --line`));
+        process.exit(1);
+      }
       const session = await requireSession(agent.opts().session);
       assertFileExists(opts.file);
       if (session.ref !== '__tree__') {

@@ -73,9 +73,16 @@ describe('a thread request', () => {
   });
 
   it('rejects a body that is not an object', () => {
-    expect(errorOf(parseCreateThreadRequest(null))).toContain('request body must be an object');
-    expect(errorOf(parseCreateThreadRequest([goodThread]))).toContain('request body');
-    expect(errorOf(parseCreateThreadRequest('{}'))).toContain('request body');
+    expect(errorOf(parseCreateThreadRequest(null))).toContain('Request body must be an object');
+    expect(errorOf(parseCreateThreadRequest([goodThread]))).toContain('Request body');
+    expect(errorOf(parseCreateThreadRequest('{}'))).toContain('Request body');
+  });
+
+  it('rejects a range that ends before it starts', () => {
+    expect(errorOf(parseCreateThreadRequest({ ...goodThread, startLine: 5, endLine: 2 })))
+      .toBe('endLine must not be before startLine');
+    expect(errorOf(parseAddTourStepRequest({ filePath: 'a.ts', startLine: 4, endLine: 1 })))
+      .toBe('endLine must not be before startLine');
   });
 
   it('allows line 0, where general comments live', () => {
@@ -166,5 +173,7 @@ describe('a review submission', () => {
       .toContain('comments[0].endLine');
     expect(errorOf(parseReviewSubmission({ event: 'COMMENT', comments: 'none' })))
       .toBe('comments must be an array');
+    expect(errorOf(parseReviewSubmission({ event: 'COMMENT', comments: [{ ...comment, startLine: 9, endLine: 5 }] })))
+      .toBe('comments[0].endLine must not be before comments[0].startLine');
   });
 });
