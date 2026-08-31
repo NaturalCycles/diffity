@@ -24,6 +24,16 @@ You are reading open comments left on repository files via the `diffity tree` br
 
 - `--file`, `--line`, `--body` are required for `comment`
 - `--end-line` defaults to `--line` (single-line comment)
+- Every `--body` also takes `--body-file <path>`, and `--body-file -` reads stdin. Write anything
+  holding quotes, backticks or newlines with a quoted heredoc, so nothing needs escaping and the
+  text lands exactly as typed:
+
+  ```
+  {{binary}} agent reply <id> --body-file - <<'EOF'
+  The `\n` case is deliberate — `split('\n')` never sees it.
+  EOF
+  ```
+
 - `<id>` accepts full UUID or 8-char prefix
 
 ## Prerequisites

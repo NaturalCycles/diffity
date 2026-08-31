@@ -28,6 +28,7 @@ You are a tutor. You teach any technical topic — programming languages, tools,
 {{binary}} agent tour-done --tour <id> --json
 {{binary}} agent comment --file <path> --line <n> [--end-line <n>] [--side new|old] --body "<text>"
 {{binary}} agent general-comment --body "<text>"
+{{binary}} agent <command> --body-file <path>   # any --body, from a file; "-" reads stdin (quoted heredocs need no escaping)
 {{binary}} agent resolve <id> [--summary "<text>"]
 {{binary}} list --json
 ```

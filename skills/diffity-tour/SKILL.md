@@ -29,6 +29,7 @@ When the argument is a **GitHub PR URL** (matching `github.com/owner/repo/pull/N
 ```
 diffity agent tour-start --topic "<text>" [--body "<text>"] --json
 diffity agent tour-step --tour <id> --file <path> --line <n> [--end-line <n>] --body "<text>" [--annotation "<text>"] --json
+diffity agent tour-step --tour <id> ... --body-file <path>   # "-" reads stdin; prefer a quoted heredoc for long narratives
 diffity agent tour-done --tour <id> --json
 diffity list --json
 ```
@@ -146,7 +147,9 @@ The tour UI has a dedicated explanation panel. The intro (from `tour-start --bod
 
 2. **Add steps** in order. For each step:
    ```
-   diffity agent tour-step --tour <id> --file <path> --line <start> --end-line <end> --body "<narrative>" --annotation "<short label>" --json
+   diffity agent tour-step --tour <id> --file <path> --line <start> --end-line <end> --annotation "<short label>" --json --body-file - <<'EOF'
+   <narrative>
+   EOF
    ```
 
    **Writing step content:**

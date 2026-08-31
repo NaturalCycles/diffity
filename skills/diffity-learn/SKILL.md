@@ -31,6 +31,7 @@ diffity agent tour-step --tour <id> --file <path> --line <n> [--end-line <n>] --
 diffity agent tour-done --tour <id> --json
 diffity agent comment --file <path> --line <n> [--end-line <n>] [--side new|old] --body "<text>"
 diffity agent general-comment --body "<text>"
+diffity agent <command> --body-file <path>   # any --body, from a file; "-" reads stdin (quoted heredocs need no escaping)
 diffity agent resolve <id> [--summary "<text>"]
 diffity list --json
 ```
