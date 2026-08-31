@@ -13,6 +13,7 @@ beforeAll(() => {
   fakeBin = mkdtempSync(join(tmpdir(), 'diffity-fake-gh-'));
   writeFileSync(join(fakeBin, 'gh'), [
     '#!/bin/sh',
+    'if [ -n "$FAKE_GH_SLEEP" ]; then sleep "$FAKE_GH_SLEEP"; fi',
     'if [ -n "$FAKE_GH_STDERR" ]; then printf \'%s\\n\' "$FAKE_GH_STDERR" >&2; fi',
     'if [ -n "$FAKE_GH_ECHO_STDIN" ]; then cat; fi',
     'if [ -n "$FAKE_GH_STDOUT" ]; then printf \'%s\\n\' "$FAKE_GH_STDOUT"; fi',
@@ -26,6 +27,7 @@ beforeAll(() => {
 
 afterEach(() => {
   delete process.env.FAKE_GH_ECHO_STDIN;
+  delete process.env.FAKE_GH_SLEEP;
 });
 
 afterAll(() => {
@@ -103,6 +105,16 @@ describe('the async twin', () => {
     process.env.FAKE_GH_ECHO_STDIN = '1';
 
     await expect(ghAsync(['api', 'x', '--input', '-'], { input: '{"a":1}' })).resolves.toBe('{"a":1}');
+  });
+
+  it('a gh that outlives its budget is killed, and the failure says so', async () => {
+    process.env.FAKE_GH_EXIT = '0';
+    process.env.FAKE_GH_STDERR = '';
+    process.env.FAKE_GH_STDOUT = 'too late';
+    process.env.FAKE_GH_SLEEP = '2';
+
+    await expect(ghAsync(['pr', 'diff'], { timeoutMs: 300 }))
+      .rejects.toThrowError('gh pr diff failed: timed out after 0.3s');
   });
 
   it('a gh that dies before draining its stdin fails the call, not the process', async () => {

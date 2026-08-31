@@ -40,8 +40,13 @@ export function gh(args: string[]): string {
   }
 }
 
-function describeGhFailure(args: string[], error: unknown): string {
+function describeGhFailure(args: string[], error: unknown, timeoutMs?: number): string {
   const what = `gh ${args.slice(0, 2).join(' ')}`;
+  // A maxBuffer overflow also kills with a signal; only a plain signal kill is the clock.
+  const killed = error as { killed?: boolean; signal?: string; code?: unknown };
+  if (timeoutMs && killed.killed && killed.signal && killed.code !== 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+    return `${what} failed: timed out after ${timeoutMs / 1000}s`;
+  }
   const stderr = (error as { stderr?: unknown }).stderr;
   const text = typeof stderr === 'string' ? stderr : stderr instanceof Buffer ? stderr.toString('utf-8') : '';
   const lines = text.split('\n');
@@ -52,26 +57,27 @@ function describeGhFailure(args: string[], error: unknown): string {
   return `${what} failed: ${reason}`;
 }
 
+// Long enough for a slow forge, short enough that a stuck gh is killed instead of wedging the
+// callers queued behind it — the mutating routes run one at a time.
+const GH_TIMEOUT_MS = 60_000;
+
 /**
  * The async twin of `gh`, for callers on the server's event loop: a slow forge answer must not
  * stall every poll and heartbeat the server is carrying. Same arguments, same failure shape.
  */
-// Long enough for a slow forge, short enough that a gh that never exits frees the callers
-// queued behind it — the mutating routes run one at a time, so a hang would wedge them all.
-const GH_TIMEOUT_MS = 60_000;
-
 export function ghAsync(
   args: string[],
-  options: { input?: string; maxBuffer?: number } = {},
+  options: { input?: string; maxBuffer?: number; timeoutMs?: number } = {},
 ): Promise<string> {
+  const timeoutMs = options.timeoutMs ?? GH_TIMEOUT_MS;
   return new Promise((resolve, reject) => {
     const child = execFile(
       'gh',
       args,
-      { encoding: 'utf-8', maxBuffer: options.maxBuffer ?? MAX_BUFFER, timeout: GH_TIMEOUT_MS },
+      { encoding: 'utf-8', maxBuffer: options.maxBuffer ?? MAX_BUFFER, timeout: timeoutMs },
       (error, stdout, stderr) => {
         if (error) {
-          reject(new Error(describeGhFailure(args, Object.assign(error, { stderr })), { cause: error }));
+          reject(new Error(describeGhFailure(args, Object.assign(error, { stderr }), timeoutMs), { cause: error }));
           return;
         }
         resolve(stdout.trim());

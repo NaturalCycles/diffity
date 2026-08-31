@@ -311,8 +311,11 @@ export async function createReview(
  */
 async function getPatch(owner: string, repo: string, prNumber: number): Promise<string> {
   try {
+    // A huge pull request streams for a while; the budget is bounded, not tight, because an
+    // empty answer here drops every comment as "not in PR diff".
     return await ghAsync(['pr', 'diff', String(prNumber), '--repo', `${owner}/${repo}`], {
       maxBuffer: 50 * 1024 * 1024,
+      timeoutMs: 300_000,
     });
   } catch {
     return '';
