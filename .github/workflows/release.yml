@@ -1,0 +1,90 @@
+name: release
+
+on:
+  push:
+    branches: [develop]
+
+# Serialized: no two runs publish at once. GitHub keeps only the newest queued run, so a
+# rapid-fire merge's own run can be superseded — the survivor publishes the latest version.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - name: Decide whether this version needs publishing
+        id: decide
+        run: |
+          VERSION=$(node -p "require('./packages/cli/package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          PUBLISHED=$(npm view "@naturalcycles/diffity@$VERSION" version 2>/dev/null || true)
+          if [ "$PUBLISHED" != "$VERSION" ]; then
+            # Re-running an old failed run must not publish an old version over a newer one —
+            # npm would move `latest` back to it.
+            NEWEST=$(npm view "@naturalcycles/diffity" version 2>/dev/null || true)
+            if [ -n "$NEWEST" ] && [ "$(printf '%s\n%s\n' "$NEWEST" "$VERSION" | sort -V | tail -1)" != "$VERSION" ]; then
+              echo "::error::$VERSION is older than the published $NEWEST — refusing. Re-run the newest run instead."
+              exit 1
+            fi
+            echo "publish=yes" >> "$GITHUB_OUTPUT"
+            echo "Version $VERSION is not on npm — publishing."
+            exit 0
+          fi
+          echo "publish=no" >> "$GITHUB_OUTPUT"
+          # Already published, so its tag must exist — a publish that failed between npm and
+          # the tag is finished by hand, against the commit of the run that published.
+          if ! git fetch --no-tags --depth=1 origin tag "v$VERSION"; then
+            echo "::error::$VERSION is on npm but v$VERSION is not tagged — a publish got partway. Finish it against the sha of the run that published: git tag v$VERSION <sha> ; git push origin v$VERSION ; gh release create v$VERSION --generate-notes"
+            exit 1
+          fi
+          # A merge that changes what ships must have re-bumped — this is the parallel-branch
+          # gap: two branches bump to the same number, and the second to land would otherwise
+          # ship nothing, silently. Judged against the published tag rather than the previous
+          # commit, so a run superseded in the queue or a multi-commit push cannot slip a
+          # change past it. Everything the artifact is built from counts; tests do not.
+          CHANGED=$(git diff --name-only "v$VERSION" HEAD -- \
+            ':(glob)packages/**' ':(glob)scripts/**' 'skills' \
+            'package.json' 'package-lock.json' 'tsconfig.json' 'README.md' 'LICENSE' \
+            ':(exclude,glob)packages/*/tests/**' ':(exclude,glob)scripts/**/*.test.ts')
+          if [ -n "$CHANGED" ]; then
+            echo "::error::$VERSION is already on npm, but shipped code changed since it was published. Re-bump the version (npx tsx scripts/release.ts patch --no-git) and merge again."
+            echo "$CHANGED"
+            exit 1
+          fi
+          echo "Version $VERSION already published and everything since is unshipped — nothing to do."
+
+      - if: steps.decide.outputs.publish == 'yes'
+        run: npm ci
+      - if: steps.decide.outputs.publish == 'yes'
+        run: npm run build
+      - if: steps.decide.outputs.publish == 'yes'
+        run: npm test
+      - if: steps.decide.outputs.publish == 'yes'
+        run: npm publish -w @naturalcycles/diffity --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Tag and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.decide.outputs.version }}
+        run: |
+          # Runs on both paths and is idempotent throughout: a fresh publish creates all three,
+          # and a later run heals a missing release — a missing tag stops decide with
+          # instructions instead. On the already-published path, decide has fetched the tag,
+          # so rev-parse sees it.
+          git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null || git tag "v$VERSION"
+          git push origin "v$VERSION"
+          gh release view "v$VERSION" >/dev/null 2>&1 || gh release create "v$VERSION" --generate-notes --title "v$VERSION"
