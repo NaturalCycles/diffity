@@ -376,6 +376,38 @@ export function FileBlock(props: FileBlockProps) {
 
   const filePendingSelection = pendingSelection && pendingSelection.filePath === filePath ? pendingSelection : null;
 
+  function renderPlaceholder() {
+    if (file.isBinary) {
+      return <div className="p-4 text-center text-text-muted italic">Binary file not shown</div>;
+    }
+
+    if (file.hunks.length === 0) {
+      return (
+        <div className="p-4 text-center text-text-muted italic">
+          {file.oldMode && file.newMode
+            ? `File mode changed from ${file.oldMode} to ${file.newMode}`
+            : 'No content changes'}
+        </div>
+      );
+    }
+
+    if (isLargeDiff && !largeDiffExpanded && allFileThreads.length === 0) {
+      return (
+        <div className="flex items-center justify-center gap-3 py-6 px-4 text-sm text-text-muted">
+          <span>Large diff not rendered — {totalLines} lines</span>
+          <button
+            className="text-accent hover:underline cursor-pointer font-medium"
+            onClick={() => setLargeDiffExpanded(true)}
+          >
+            Load diff
+          </button>
+        </div>
+      );
+    }
+
+    return null;
+  }
+
   return (
     <div
       className={`border rounded-lg mx-4 my-3 overflow-clip ${highlighted ? 'animate-flash-highlight-border' : 'border-border'}`}
@@ -458,25 +490,7 @@ export function FileBlock(props: FileBlockProps) {
       </div>
       {!collapsed && (
         <div>
-          {file.isBinary ? (
-            <div className="p-4 text-center text-text-muted italic">Binary file not shown</div>
-          ) : file.hunks.length === 0 ? (
-            <div className="p-4 text-center text-text-muted italic">
-              {file.oldMode && file.newMode
-                ? `File mode changed from ${file.oldMode} to ${file.newMode}`
-                : 'No content changes'}
-            </div>
-          ) : isLargeDiff && !largeDiffExpanded && allFileThreads.length === 0 ? (
-            <div className="flex items-center justify-center gap-3 py-6 px-4 text-sm text-text-muted">
-              <span>Large diff not rendered — {totalLines} lines</span>
-              <button
-                className="text-accent hover:underline cursor-pointer font-medium"
-                onClick={() => setLargeDiffExpanded(true)}
-              >
-                Load diff
-              </button>
-            </div>
-          ) : (
+          {renderPlaceholder() ?? (
             <>
             <OrphanedThreads
               threads={orphanedThreads}

@@ -256,11 +256,57 @@ export function TourPanel(props: TourPanelProps) {
     );
   }
 
-  const lineRange = currentStep
-    ? currentStep.startLine === currentStep.endLine
+  let lineRange = '';
+  if (currentStep) {
+    lineRange = currentStep.startLine === currentStep.endLine
       ? `${currentStep.startLine}`
-      : `${currentStep.startLine}-${currentStep.endLine}`
-    : '';
+      : `${currentStep.startLine}-${currentStep.endLine}`;
+  }
+
+  function renderTourBody() {
+    if (isIntro) {
+      return (
+        <>
+          <h2 className="text-sm font-semibold text-text leading-snug mb-3">{tour.topic}</h2>
+          {tour.body && (
+            <div className="text-xs text-text leading-relaxed">
+              <TourMarkdown content={tour.body} onNavigateToFile={onNavigateToFile} onNavigateToFileLine={onNavigateToFileLine} filePaths={filePathSet} />
+            </div>
+          )}
+        </>
+      );
+    }
+
+    if (!currentStep) {
+      return null;
+    }
+
+    return (
+      <>
+        <div className="flex items-center gap-2.5 mb-3">
+          <span className="text-[10px] font-medium text-text-muted bg-bg-tertiary px-2 py-0.5 rounded-full shrink-0">
+            {currentStepIndex}/{totalSteps - 1}
+          </span>
+          <h3 className="text-xs font-semibold text-text leading-snug">
+            {currentStep.annotation || `Step ${currentStepIndex}`}
+          </h3>
+        </div>
+
+        <div className="text-xs text-text leading-relaxed">
+          <TourMarkdown content={currentStep.body} onNavigateToFile={onNavigateToFile} onNavigateToFileLine={onNavigateToFileLine} onSubHighlight={onSubHighlight} filePaths={filePathSet} />
+        </div>
+
+        <div className="mt-4 pt-2">
+          <button
+            className="text-[10px] text-text-muted font-mono truncate hover:text-accent cursor-pointer transition-colors"
+            onClick={() => onScrollToHighlight?.()}
+          >
+            {currentStep.filePath}:{lineRange}
+          </button>
+        </div>
+      </>
+    );
+  }
 
   return (
     <aside className="border-l border-border bg-bg-secondary flex flex-col overflow-hidden relative" style={{ width, minWidth: MIN_WIDTH }}>
@@ -326,40 +372,7 @@ export function TourPanel(props: TourPanelProps) {
       </div>
 
       <div ref={contentRef} className="flex-1 overflow-y-auto px-4 py-3">
-        {isIntro ? (
-          <>
-            <h2 className="text-sm font-semibold text-text leading-snug mb-3">{tour.topic}</h2>
-            {tour.body && (
-              <div className="text-xs text-text leading-relaxed">
-                <TourMarkdown content={tour.body} onNavigateToFile={onNavigateToFile} onNavigateToFileLine={onNavigateToFileLine} filePaths={filePathSet} />
-              </div>
-            )}
-          </>
-        ) : currentStep ? (
-          <>
-            <div className="flex items-center gap-2.5 mb-3">
-              <span className="text-[10px] font-medium text-text-muted bg-bg-tertiary px-2 py-0.5 rounded-full shrink-0">
-                {currentStepIndex}/{totalSteps - 1}
-              </span>
-              <h3 className="text-xs font-semibold text-text leading-snug">
-                {currentStep.annotation || `Step ${currentStepIndex}`}
-              </h3>
-            </div>
-
-            <div className="text-xs text-text leading-relaxed">
-              <TourMarkdown content={currentStep.body} onNavigateToFile={onNavigateToFile} onNavigateToFileLine={onNavigateToFileLine} onSubHighlight={onSubHighlight} filePaths={filePathSet} />
-            </div>
-
-            <div className="mt-4 pt-2">
-              <button
-                className="text-[10px] text-text-muted font-mono truncate hover:text-accent cursor-pointer transition-colors"
-                onClick={() => onScrollToHighlight?.()}
-              >
-                {currentStep.filePath}:{lineRange}
-              </button>
-            </div>
-          </>
-        ) : null}
+        {renderTourBody()}
       </div>
     </aside>
   );

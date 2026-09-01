@@ -61,10 +61,16 @@ function resolveThreadId(shortId: string, sessionId: string): Thread {
   return thread;
 }
 
+const STATUS_COLOR = {
+  open: pc.yellow,
+  resolved: pc.green,
+  dismissed: pc.dim,
+};
+
 function formatThreadLine(thread: Thread): string {
   const shortId = thread.id.slice(0, 8);
   const isGeneral = thread.filePath === '__general__';
-  const statusColor = thread.status === 'open' ? pc.yellow : thread.status === 'resolved' ? pc.green : thread.status === 'dismissed' ? pc.dim : pc.cyan;
+  const statusColor = STATUS_COLOR[thread.status] ?? pc.cyan;
   const statusLabel = statusColor(`[${thread.status}]`);
   const firstComment = thread.comments[0]?.body || '';
   const truncated = firstComment.length > 80 ? firstComment.slice(0, 77) + '...' : firstComment;
