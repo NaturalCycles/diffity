@@ -67,7 +67,7 @@ import {
 import { findOrCreateSession, resolveSessionId, agentSeenAt, markAgentSeen } from './session.js';
 import { resolveMayChangeCode, type SessionPurpose } from './live-permissions.js';
 import {
-  liveListenerCount,
+
   liveListenerTotal,
   liveWorkingCount,
   pendingLiveCount,
@@ -451,7 +451,8 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           const sid = liveSessionId();
           sendJson(res, {
             enabled: isLoopbackBind(getBindHost()),
-            listening: sid ? liveListenerCount(sid) > 0 : false,
+            // Instance-wide like the queue itself: a parked agent answers whichever session asks.
+            listening: liveListenerTotal() > 0,
             working: sid ? liveWorkingCount(sid) > 0 : false,
             waiting: sid ? pendingLiveCount(sid) : 0,
             mayChangeCode: resolveMayChangeCode(purpose, await authorship()),
@@ -512,7 +513,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           const stopWatching = (): void => clearInterval(viewerWatch);
           req.on('close', stopWatching);
 
-          waitForLiveRequest(sid, waitMs, listenerGone.signal).then(
+          waitForLiveRequest(waitMs, listenerGone.signal).then(
             request => {
               stopWatching();
               // The connection may already be gone; writing to it would throw rather than help.

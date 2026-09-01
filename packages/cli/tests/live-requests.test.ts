@@ -45,13 +45,12 @@ async function finding(body = 'P2: a finding') {
 
 async function drainRequests() {
   const { claimNextLiveRequest, answerLiveRequest } = await import('../src/live.js');
-  const s = await session();
   // Answered, not merely claimed: sessions on one branch share their open threads, and a claim
   // without an answer leaves the session looking like an agent is still working on it.
-  let taken = claimNextLiveRequest(s.id);
+  let taken = claimNextLiveRequest();
   while (taken) {
     answerLiveRequest(taken.commentId);
-    taken = claimNextLiveRequest(s.id);
+    taken = claimNextLiveRequest();
   }
 }
 
@@ -90,7 +89,7 @@ describe('asking the agent for something', () => {
     const reply = addReply(thread.id, 'what do you mean by the marker?', you, 'aside');
     requestLive(reply.id);
 
-    const claimed = claimNextLiveRequest(s.id);
+    const claimed = claimNextLiveRequest();
 
     expect(claimed?.commentId).toBe(reply.id);
     expect(claimed?.threadId).toBe(thread.id);
@@ -107,8 +106,8 @@ describe('asking the agent for something', () => {
     const reply = addReply(thread.id, 'only once please', you, 'aside');
     requestLive(reply.id);
 
-    const first = claimNextLiveRequest(s.id);
-    const second = claimNextLiveRequest(s.id);
+    const first = claimNextLiveRequest();
+    const second = claimNextLiveRequest();
 
     expect(first?.commentId).toBe(reply.id);
     expect(second).toBeNull();
@@ -124,8 +123,8 @@ describe('asking the agent for something', () => {
     requestLive(first.id);
     requestLive(second.id);
 
-    expect(claimNextLiveRequest(s.id)?.body).toBe('asked first');
-    expect(claimNextLiveRequest(s.id)?.body).toBe('asked second');
+    expect(claimNextLiveRequest()?.body).toBe('asked first');
+    expect(claimNextLiveRequest()?.body).toBe('asked second');
   });
 
   it('says how many are still waiting', async () => {
@@ -138,7 +137,7 @@ describe('asking the agent for something', () => {
     }
 
     expect(pendingLiveCount(s.id)).toBe(3);
-    claimNextLiveRequest(s.id);
+    claimNextLiveRequest();
     expect(pendingLiveCount(s.id)).toBe(2);
   });
 
@@ -149,21 +148,27 @@ describe('asking the agent for something', () => {
     const thread = await finding();
     const reply = addReply(thread.id, 'answer me', you, 'aside');
     requestLive(reply.id);
-    claimNextLiveRequest(s.id);
+    claimNextLiveRequest();
 
     answerLiveRequest(reply.id);
 
     expect(getThread(thread.id)?.comments[1].liveAnsweredAt).toBeTruthy();
   });
 
-  it('belongs to its own session', async () => {
+  it('is served across sessions: the instance is one queue', async () => {
     const { addReply } = await import('../src/threads.js');
-    const { requestLive, claimNextLiveRequest } = await import('../src/live.js');
+    const { requestLive, waitForLiveRequest, notifyLiveListeners } = await import('../src/live.js');
+    await drainRequests();
+    // The reader asks on one session while the only agent sits parked on another — the
+    // arrangement that once left both waiting forever.
     const thread = await finding();
-    const reply = addReply(thread.id, 'in the work session', you, 'aside');
-    requestLive(reply.id);
+    const reply = addReply(thread.id, 'asked from the page', you, 'aside');
 
-    expect(claimNextLiveRequest('some-other-session')).toBeNull();
+    const parked = waitForLiveRequest(60_000);
+    requestLive(reply.id);
+    notifyLiveListeners();
+
+    expect((await parked)?.commentId).toBe(reply.id);
   });
 });
 
@@ -176,7 +181,7 @@ describe('a listener that died holding a request', () => {
     const thread = await finding();
     const reply = addReply(thread.id, 'nobody came back', you, 'aside');
     requestLive(reply.id);
-    claimNextLiveRequest(s.id);
+    claimNextLiveRequest();
 
     // What it looks like when the agent was claimed by a process that then went away.
     getDb()
@@ -195,7 +200,7 @@ describe('a listener that died holding a request', () => {
     const s = await session();
     const thread = await finding();
     requestLive(addReply(thread.id, 'just claimed', you, 'aside').id);
-    claimNextLiveRequest(s.id);
+    claimNextLiveRequest();
 
     expect(reclaimStaleLiveRequests(10)).toBe(0);
   });
@@ -212,7 +217,7 @@ describe('asking about a line nobody has commented on', () => {
     );
     requestLive(thread.comments[0].id);
 
-    const claimed = claimNextLiveRequest(s.id);
+    const claimed = claimNextLiveRequest();
 
     expect(claimed?.body).toBe('what does this do?');
     expect(claimed?.findingBody).toBeNull();
@@ -227,7 +232,7 @@ describe('asking about a line nobody has commented on', () => {
     const asked = addReply(thread.id, 'why?', you, 'aside');
     requestLive(asked.id);
 
-    expect(claimNextLiveRequest(s.id)?.findingBody).toBe('P2: the finding');
+    expect(claimNextLiveRequest()?.findingBody).toBe('P2: the finding');
   });
 });
 
@@ -242,7 +247,7 @@ describe('closing a request', () => {
     const thread = await finding();
     const asked = addReply(thread.id, 'answer me by prefix', you, 'aside');
     requestLive(asked.id);
-    claimNextLiveRequest(s.id);
+    claimNextLiveRequest();
 
     expect(answerLiveRequest(asked.id.slice(0, 8))).toBe(true);
     expect(getThread(thread.id)?.comments[1].liveAnsweredAt).toBeTruthy();
@@ -255,43 +260,35 @@ describe('closing a request', () => {
   });
 });
 
-describe('two sessions in one server', () => {
+describe('one queue for the instance', () => {
   // One diffity serves a whole checkout: the file browser is its own session and each ref gets
-  // one, so a listener on one must not be disturbed by — or spoken for by — another.
-  it('does not report a listener on one session as listening on another', async () => {
-    const { findOrCreateSession } = await import('../src/session.js');
-    const { waitForLiveRequest, liveListenerCount } = await import('../src/live.js');
-    const other = findOrCreateSession('__tree__');
-    const s = await session();
+  // one. A reader asking on one session while the only agent sat parked on another once left
+  // both waiting forever, so a parked listener now counts for — and serves — all of them.
+  it('counts a parked listener for the whole instance, and only while it is parked', async () => {
+    const { waitForLiveRequest, liveListenerTotal } = await import('../src/live.js');
+    await drainRequests();
 
-    const parked = waitForLiveRequest(s.id, 400);
+    const parked = waitForLiveRequest(400);
     await new Promise(resolve => setTimeout(resolve, 50));
 
-    expect(liveListenerCount(s.id)).toBe(1);
-    expect(liveListenerCount(other.id)).toBe(0);
-
+    expect(liveListenerTotal()).toBe(1);
     await parked;
+    expect(liveListenerTotal()).toBe(0);
   });
 
-  it('does not end a wait because another session was asked something', async () => {
-    const { findOrCreateSession } = await import('../src/session.js');
-    const { createThread } = await import('../src/threads.js');
-    const { requestLive, notifyLiveListeners, waitForLiveRequest } = await import('../src/live.js');
+  it('does not end a wait when a wake finds nothing claimable', async () => {
+    const { notifyLiveListeners, waitForLiveRequest } = await import('../src/live.js');
     await drainRequests();
-    const other = findOrCreateSession('__tree__');
-    const s = await session();
 
     let settled = false;
-    const parked = waitForLiveRequest(s.id, 600).then(request => {
+    const parked = waitForLiveRequest(600).then(request => {
       settled = true;
       return request;
     });
     await new Promise(resolve => setTimeout(resolve, 50));
 
-    // Something asked, but on the other session.
-    const elsewhere = createThread(other.id, 'a.ts', 'new', 1, 1, 'asked over here', you, undefined, 'aside');
-    requestLive(elsewhere.comments[0].id);
-    notifyLiveListeners(other.id);
+    // Woken with an empty queue: only a claim may end the wait early.
+    notifyLiveListeners();
     await new Promise(resolve => setTimeout(resolve, 100));
 
     expect(settled).toBe(false);
@@ -320,32 +317,32 @@ describe('a listener whose connection goes away', () => {
   // Presence is a parked connection. Nothing noticed the connection closing, so `listening` kept
   // saying yes for as long as the wait had left — up to four minutes of promising an answer.
   it('stops being counted at once, not when its wait runs out', async () => {
-    const { waitForLiveRequest, liveListenerCount } = await import('../src/live.js');
+    const { waitForLiveRequest, liveListenerTotal } = await import('../src/live.js');
     // Sessions on one branch share their open threads, so an earlier case's request would be
     // claimed here and this would never park at all.
     await drainRequests();
     const s = await session();
     const controller = new AbortController();
 
-    const parked = waitForLiveRequest(s.id, 60_000, controller.signal);
+    const parked = waitForLiveRequest(60_000, controller.signal);
     await new Promise(resolve => setTimeout(resolve, 20));
-    expect(liveListenerCount(s.id)).toBe(1);
+    expect(liveListenerTotal()).toBe(1);
 
     controller.abort();
 
     expect(await parked).toBeNull();
-    expect(liveListenerCount(s.id)).toBe(0);
+    expect(liveListenerTotal()).toBe(0);
   });
 
   it('is already gone if the connection closed before it parked', async () => {
-    const { waitForLiveRequest, liveListenerCount } = await import('../src/live.js');
+    const { waitForLiveRequest, liveListenerTotal } = await import('../src/live.js');
     await drainRequests();
     const s = await session();
     const controller = new AbortController();
     controller.abort();
 
-    expect(await waitForLiveRequest(s.id, 60_000, controller.signal)).toBeNull();
-    expect(liveListenerCount(s.id)).toBe(0);
+    expect(await waitForLiveRequest(60_000, controller.signal)).toBeNull();
+    expect(liveListenerTotal()).toBe(0);
   });
 
   it('claims nothing when it arrives already hung up, so the request stays answerable', async () => {
@@ -359,7 +356,7 @@ describe('a listener whose connection goes away', () => {
     const controller = new AbortController();
     controller.abort();
 
-    expect(await waitForLiveRequest(s.id, 60_000, controller.signal)).toBeNull();
+    expect(await waitForLiveRequest(60_000, controller.signal)).toBeNull();
     // A live listener must still find it; claimed-by-nobody costs the reader ten minutes.
     expect(pendingLiveCount(s.id)).toBe(1);
   });
@@ -380,7 +377,7 @@ describe('while an agent is busy with a request', () => {
     // A delta, not an absolute: other cases in this file claim without answering, and every
     // session on this branch shares its threads.
     const before = liveWorkingCount(s.id);
-    claimNextLiveRequest(s.id);
+    claimNextLiveRequest();
 
     expect(liveWorkingCount(s.id)).toBe(before + 1);
   });
@@ -393,7 +390,7 @@ describe('while an agent is busy with a request', () => {
     const thread = await finding();
     const asked = addReply(thread.id, 'answer me', you, 'aside');
     requestLive(asked.id);
-    claimNextLiveRequest(s.id);
+    claimNextLiveRequest();
     const busy = liveWorkingCount(s.id);
 
     answerLiveRequest(asked.id);

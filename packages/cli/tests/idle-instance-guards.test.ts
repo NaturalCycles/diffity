@@ -103,7 +103,7 @@ describe('a server judging whether it is still needed', () => {
 
     const tree = findOrCreateSession('__tree__');
     const abort = new AbortController();
-    const waiting = waitForLiveRequest(tree.id, 5_000, abort.signal);
+    const waiting = waitForLiveRequest(5_000, abort.signal);
 
     expect(liveListenerTotal()).toBe(1);
     expect(

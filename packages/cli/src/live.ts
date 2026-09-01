@@ -27,24 +27,25 @@ export function requestLive(commentId: string, intent: LiveIntent = 'ask'): Live
 }
 
 /**
- * Takes the oldest request nobody has picked up, in one statement: two listeners on one session
- * must not both go and answer the same question.
+ * Takes the oldest request nobody has picked up, in one statement: two listeners must not both
+ * go and answer the same question.
+ *
+ * The whole instance is one queue. The file browser is its own session and every ref gets one,
+ * and a reader asking on one session while the only agent sat parked on another waited forever —
+ * the request names its thread, so whichever agent is parked here can take it.
  */
-export function claimNextLiveRequest(sessionId: string): LiveRequest | null {
+export function claimNextLiveRequest(): LiveRequest | null {
   const claimed = queryOne<{ id: string }>(
     `UPDATE comments SET live_claimed_at = datetime('now')
       WHERE id = (
         SELECT c.id FROM comments c
-          JOIN comment_threads t ON t.id = c.thread_id
-         WHERE t.session_id = ?
-           AND c.live_requested_at IS NOT NULL
+         WHERE c.live_requested_at IS NOT NULL
            AND c.live_claimed_at IS NULL
            AND c.live_answered_at IS NULL
          ORDER BY c.live_requested_at ASC, c.rowid ASC
          LIMIT 1
       )
       RETURNING id`,
-    sessionId,
   );
 
   if (!claimed) {
@@ -128,30 +129,17 @@ export function reclaimStaleLiveRequests(olderThanMinutes: number): number {
  * because the connection closing is what ends the wait — which only became true once something
  * listened for it: before that a dead listener stayed counted until its wait ran out.
  *
- * Kept per session rather than per process, because one server holds a whole checkout — the file
- * browser is its own session and each ref gets one. A single set would have every session claiming
- * an agent that is parked on one of them.
+ * One set for the instance, matching the queue: a parked agent answers whichever session asks.
  */
-const listeners = new Map<string, Set<() => void>>();
+const listeners = new Set<() => void>();
 
-export function liveListenerCount(sessionId: string): number {
-  return listeners.get(sessionId)?.size ?? 0;
-}
-
-/** Every parked listener on this instance, whichever session each one waits on. */
+/** Every parked listener on this instance. */
 export function liveListenerTotal(): number {
-  let total = 0;
-  for (const forSession of listeners.values()) {
-    total += forSession.size;
-  }
-  return total;
+  return listeners.size;
 }
 
-export function notifyLiveListeners(sessionId: string | null): void {
-  if (!sessionId) {
-    return;
-  }
-  for (const wake of [...(listeners.get(sessionId) ?? [])]) {
+export function notifyLiveListeners(): void {
+  for (const wake of [...listeners]) {
     wake();
   }
 }
@@ -165,7 +153,6 @@ export function notifyLiveListeners(sessionId: string | null): void {
  * until its wait ran out, and the page went on saying an agent was there for up to that long.
  */
 export function waitForLiveRequest(
-  sessionId: string,
   waitMs: number,
   signal?: AbortSignal,
 ): Promise<LiveRequest | null> {
@@ -174,7 +161,7 @@ export function waitForLiveRequest(
   if (signal?.aborted) {
     return Promise.resolve(null);
   }
-  const claimed = claimNextLiveRequest(sessionId);
+  const claimed = claimNextLiveRequest();
   if (claimed || waitMs <= 0) {
     return Promise.resolve(claimed);
   }
@@ -186,11 +173,7 @@ export function waitForLiveRequest(
         return;
       }
       settled = true;
-      const forSession = listeners.get(sessionId);
-      forSession?.delete(wake);
-      if (forSession?.size === 0) {
-        listeners.delete(sessionId);
-      }
+      listeners.delete(wake);
       clearTimeout(timer);
       signal?.removeEventListener('abort', giveUp);
       resolve(request);
@@ -198,10 +181,10 @@ export function waitForLiveRequest(
 
     const giveUp = () => finish(null);
 
-    // Only a request this listener could take ends its wait. Waking on anything else would end it
-    // with "nothing asked" and send the agent round the loop for someone else's question.
+    // Only a claim ends the wait early. Waking without one would end it with "nothing asked" and
+    // send the agent round the loop for a question that was never there.
     const wake = () => {
-      const claimed = claimNextLiveRequest(sessionId);
+      const claimed = claimNextLiveRequest();
       if (claimed) {
         finish(claimed);
       }
@@ -210,8 +193,6 @@ export function waitForLiveRequest(
     timer.unref?.();
     signal?.addEventListener('abort', giveUp, { once: true });
 
-    const forSession = listeners.get(sessionId) ?? new Set<() => void>();
-    forSession.add(wake);
-    listeners.set(sessionId, forSession);
+    listeners.add(wake);
   });
 }
