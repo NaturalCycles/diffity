@@ -157,6 +157,8 @@ describe('dirt only blocks the files it can mis-anchor', () => {
   }, 15000);
 
   it('pulls comments while an unrelated scratch file is dirty', async () => {
+    writeFileSync(join(repoDir, 'scratch.mjs'), 'console.log("validated a claim");\n');
+
     const { status, body } = await post('/api/github/pull-comments', { sessionId });
 
     expect(status).toBe(200);
@@ -174,6 +176,7 @@ describe('dirt only blocks the files it can mis-anchor', () => {
   }, 15000);
 
   it('refuses to pull a new thread onto a dirty file', async () => {
+    writeFileSync(join(repoDir, 'a.ts'), 'line one CHANGED\nline two added\nline three\nline four\n');
     process.env.FAKE_GH_EXTRA_COMMENT = '1';
 
     const { status, body } = await post('/api/github/pull-comments', { sessionId });

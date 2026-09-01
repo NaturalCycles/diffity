@@ -48,7 +48,7 @@ import {
   revertHunk,
   getRefCapabilities,
   getHeadHash,
-  dirtyPaths,
+  getDirtyPaths,
   getTree,
   getTreeEntries,
   getTreeFingerprint,
@@ -252,6 +252,22 @@ function serveStatic(res: ServerResponse, filePath: string) {
   const content = readFileSync(filePath);
   res.writeHead(200, { 'Content-Type': mime });
   res.end(content);
+}
+
+/**
+ * Refuses with a 409 naming the files when any of them has uncommitted local changes, answering
+ * whether it did. Only the files a comment anchors to matter: anchors are working-tree line
+ * numbers, so a commented file must still match the PR head, while dirt elsewhere — a scratch
+ * file, an unrelated edit — shifts none of them.
+ */
+function refusedDirtyFiles(res: ServerResponse, filePaths: string[]): boolean {
+  const dirty = new Set(getDirtyPaths());
+  const blocked = [...new Set(filePaths)].filter(filePath => dirty.has(filePath));
+  if (blocked.length === 0) {
+    return false;
+  }
+  sendError(res, 409, `Uncommitted local changes in ${blocked.join(', ')}. Commit or stash them first.`);
+  return true;
 }
 
 function descriptionForRef(ref: string): string {
@@ -732,13 +748,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
               sendError(res, 400, 'A comment review needs a summary or at least one comment');
               return;
             }
-            // Comments anchor to working-tree lines, so a commented file must still match the PR
-            // head. Dirt elsewhere — a scratch file, an unrelated edit — shifts none of them.
-            const dirty = new Set(dirtyPaths());
-            const dirtyCommented = [...new Set(submission.comments.map(comment => comment.filePath))]
-              .filter(filePath => dirty.has(filePath));
-            if (dirtyCommented.length > 0) {
-              sendError(res, 409, `Uncommitted local changes in ${dirtyCommented.join(', ')}. Commit or stash them first.`);
+            if (refusedDirtyFiles(res, submission.comments.map(comment => comment.filePath))) {
               return;
             }
             const result = await createGitHubReview(
@@ -789,17 +799,9 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             ]);
             const localThreads = getThreadsForSession(sid);
 
-            // A pulled thread anchors to working-tree lines, so an incoming thread's file must
-            // still match the PR head. Threads already known anchor nothing, and dirt in files
-            // no thread lands on shifts nothing.
-            const dirty = new Set(dirtyPaths());
-            const dirtyIncoming = [...new Set(
-              remoteThreads
-                .filter(rt => !existingThreadFor(localThreads, rt) && dirty.has(rt.filePath))
-                .map(rt => rt.filePath),
-            )];
-            if (dirtyIncoming.length > 0) {
-              sendError(res, 409, `Uncommitted local changes in ${dirtyIncoming.join(', ')}. Commit or stash them first.`);
+            // Only incoming threads anchor anything; threads already known re-pull freely.
+            const incoming = remoteThreads.filter(rt => !existingThreadFor(localThreads, rt));
+            if (refusedDirtyFiles(res, incoming.map(rt => rt.filePath))) {
               return;
             }
 

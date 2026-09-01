@@ -2,11 +2,14 @@ import { gitUntrimmed } from './exec.js';
 
 /**
  * Every path `git status` reports as changed — staged, unstaged or untracked. A rename or copy
- * contributes both of its endpoints. NUL framing so paths with spaces, quotes or newlines come
- * through verbatim.
+ * contributes both of its endpoints. Untracked directories are expanded to their files, matching
+ * how the working-tree diff enumerates them. NUL framing so paths with spaces, quotes or newlines
+ * come through verbatim.
  */
-export function dirtyPaths(): string[] {
-  const fields = gitUntrimmed(['status', '--porcelain=v1', '-z']).split('\0').filter(Boolean);
+export function getDirtyPaths(): string[] {
+  const fields = gitUntrimmed(['status', '--porcelain=v1', '-z', '--untracked-files=all'])
+    .split('\0')
+    .filter(Boolean);
   const paths: string[] = [];
   for (let i = 0; i < fields.length; i++) {
     const status = fields[i].slice(0, 2);
