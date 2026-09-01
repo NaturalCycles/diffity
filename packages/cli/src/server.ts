@@ -261,6 +261,9 @@ function serveStatic(res: ServerResponse, filePath: string) {
  * file, an unrelated edit — shifts none of them.
  */
 function refusedDirtyFiles(res: ServerResponse, filePaths: string[]): boolean {
+  if (filePaths.length === 0) {
+    return false;
+  }
   const dirty = new Set(getDirtyPaths());
   const blocked = [...new Set(filePaths)].filter(filePath => dirty.has(filePath));
   if (blocked.length === 0) {
