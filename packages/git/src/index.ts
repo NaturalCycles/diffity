@@ -3,7 +3,7 @@ export type { RefCapabilities } from './repo.js';
 export { isGitRepo, getRepoRoot, getRepoName, getCurrentBranch, getRepoInfo, getHeadHash, getDiffityDir, getDiffityDirPath, isDataDirUntracked, getRefCapabilities, isValidGitRef } from './repo.js';
 export { getDiff, getDiffFiles, getDiffStat, getDiffStatForRef, getRenameStatus, getUntrackedFiles, getUntrackedDiff, getFileContent, getFileLineCount, getMergeBase, normalizeRef, resolveBaseRef, resolveThroughUpstream, resolveDiffArgs, resolveRef, revertFile, revertHunk, WORKING_TREE_REFS } from './diff.js';
 export type { RefDiffArgs } from './diff.js';
-export { isDirty } from './status.js';
+export { dirtyPaths } from './status.js';
 export { getRecentCommits } from './commits.js';
 export { readRepoConfig, resolveDataDir, REPO_CONFIG_FILE, DEFAULT_SEVERITIES } from './config.js';
 export type { RepoConfig, ReviewConfig } from './config.js';

@@ -58,6 +58,18 @@ export function git(args: string[]): string {
   return execFileLarge('git', args);
 }
 
+/**
+ * `git` without the trim, for fixed-width output: `status --porcelain -z` starts an entry with
+ * a status column that can be a space, which trimming would eat.
+ */
+export function gitUntrimmed(args: string[]): string {
+  return execFileSync('git', args, {
+    encoding: 'utf-8',
+    stdio: STDIO,
+    maxBuffer: MAX_BUFFER,
+  });
+}
+
 export function gitWithStdin(args: string[], input: string): string {
   return execFileSync('git', args, {
     encoding: 'utf-8',

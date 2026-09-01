@@ -1,6 +1,6 @@
 {
   "name": "@naturalcycles/diffity",
-  "version": "0.10.6",
+  "version": "0.10.7",
   "description": "Agent-agnostic, GitHub-style diff viewer and code review tool with a live agent loop",
   "type": "module",
   "bin": {
