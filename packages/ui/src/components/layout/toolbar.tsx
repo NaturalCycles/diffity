@@ -1,6 +1,6 @@
 import { useState, useCallback, useMemo } from 'react';
 import type { ParsedDiff } from '@diffity/parser';
-import { getFilePath } from '../../lib/diff-utils';
+import { DIFF_LINE_PREFIX, getFilePath } from '../../lib/diff-utils';
 import { UnifiedViewIcon } from '../icons/unified-view-icon';
 import { SplitViewIcon } from '../icons/split-view-icon';
 import { SegmentedToggle } from '../ui/segmented-toggle';
@@ -54,7 +54,7 @@ function extractCodeContext(diff: ParsedDiff | undefined, filePath: string, side
     for (const line of hunk.lines) {
       const lineNum = side === 'old' ? line.oldLineNumber : line.newLineNumber;
       if (lineNum !== null && lineNum >= startLine && lineNum <= endLine) {
-        const prefix = line.type === 'add' ? '+' : line.type === 'delete' ? '-' : ' ';
+        const prefix = DIFF_LINE_PREFIX[line.type];
         lines.push(`${prefix} ${line.content}`);
       }
     }

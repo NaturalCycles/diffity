@@ -430,6 +430,52 @@ export function TreePage(props: TreePageProps) {
   );
   const entries = entriesData?.entries ?? [];
 
+  function renderMainContent() {
+    if (!isFileMode) {
+      if (entries.length > 0) {
+        return <FolderViewer entries={entries} onNavigate={handleNavigate} />;
+      }
+      if (entriesFetching) {
+        return null;
+      }
+      return (
+        <div className='flex items-center justify-center h-32 text-xs text-text-muted'>
+          Empty directory
+        </div>
+      );
+    }
+
+    if (!fileContent) {
+      if (fileFetching) {
+        return null;
+      }
+      return (
+        <div className='flex items-center justify-center h-32 text-xs text-text-muted'>
+          File not found
+        </div>
+      );
+    }
+
+    if (isRenderableFile(navPath) && previewMode === 'preview') {
+      if (isMarkdownFile(navPath)) {
+        return <MarkdownPreview content={fileContent} filePath={navPath} />;
+      }
+      return <SvgPreview content={fileContent} />;
+    }
+
+    return (
+      <FileViewer
+        filePath={navPath}
+        content={fileContent}
+        theme={theme}
+        threads={fileThreads}
+        commentActions={commentActions}
+        sessionId={sessionId}
+        tourHighlight={tourHighlight}
+      />
+    );
+  }
+
   return (
     <div className='flex flex-col h-screen bg-bg text-text'>
       <div className='flex items-center gap-3 px-4 py-1.5 bg-bg-secondary border-b border-border font-sans text-xs'>
@@ -545,37 +591,7 @@ export function TreePage(props: TreePageProps) {
             )}
           </PathComments>
 
-          {isFileMode ? (
-            fileContent ? (
-              isRenderableFile(navPath) && previewMode === 'preview' ? (
-                isMarkdownFile(navPath) ? (
-                  <MarkdownPreview content={fileContent} filePath={navPath} />
-                ) : (
-                  <SvgPreview content={fileContent} />
-                )
-              ) : (
-                <FileViewer
-                  filePath={navPath}
-                  content={fileContent}
-                  theme={theme}
-                  threads={fileThreads}
-                  commentActions={commentActions}
-                  sessionId={sessionId}
-                  tourHighlight={tourHighlight}
-                />
-              )
-            ) : fileFetching ? null : (
-              <div className='flex items-center justify-center h-32 text-xs text-text-muted'>
-                File not found
-              </div>
-            )
-          ) : entries.length > 0 ? (
-            <FolderViewer entries={entries} onNavigate={handleNavigate} />
-          ) : entriesFetching ? null : (
-            <div className='flex items-center justify-center h-32 text-xs text-text-muted'>
-              Empty directory
-            </div>
-          )}
+          {renderMainContent()}
         </main>
 
         {tourData && (

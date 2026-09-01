@@ -93,16 +93,26 @@ export function HunkHeader(props: HunkHeaderProps) {
   }
 
   if (isSmallGap || (!showUp && showDown) || (showUp && !showDown)) {
+    let expandDirection: 'up' | 'down' | 'all' = 'down';
+    let expandIcon = <ArrowDownIcon />;
+    if (isSmallGap) {
+      expandDirection = 'all';
+      expandIcon = <ChevronUpDownIcon />;
+    } else if (showUp) {
+      expandDirection = 'up';
+      expandIcon = <ArrowUpIcon />;
+    }
+
     return (
       <tr className="bg-diff-hunk-bg group/hunk">
         {loadingDirection ? <SpinnerCell /> : (
           <td className={gutterCell}>
             <button
               className={expandBtn}
-              onClick={() => onExpand(isSmallGap ? 'all' : showUp ? 'up' : 'down')}
+              onClick={() => onExpand(expandDirection)}
               title={isSmallGap ? `Expand all ${remainingLines} lines` : `Expand ${Math.min(remainingLines, 20)} lines`}
             >
-              {isSmallGap ? <ChevronUpDownIcon /> : showUp ? <ArrowUpIcon /> : <ArrowDownIcon />}
+              {expandIcon}
             </button>
           </td>
         )}

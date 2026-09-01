@@ -1,9 +1,15 @@
-import type { DiffFile, DiffHunk } from '@diffity/parser';
+import type { DiffFile, DiffHunk, DiffLineType } from '@diffity/parser';
 import type { CommentSide } from '../components/comments/types';
 
 export type ViewMode = 'unified' | 'split';
 
 const WORKING_TREE_REFS = new Set(['work', 'staged', 'unstaged']);
+
+export const DIFF_LINE_PREFIX: Record<DiffLineType, string> = {
+  add: '+',
+  delete: '-',
+  context: ' ',
+};
 
 export function isWorkingTreeRef(ref?: string): boolean {
   return !!ref && WORKING_TREE_REFS.has(ref);
@@ -139,7 +145,7 @@ export function buildHunkPatch(file: DiffFile, hunk: DiffHunk): string {
     hunk.header,
   ];
   for (const line of hunk.lines) {
-    const prefix = line.type === 'add' ? '+' : line.type === 'delete' ? '-' : ' ';
+    const prefix = DIFF_LINE_PREFIX[line.type];
     lines.push(`${prefix}${line.content}`);
     if (line.noNewline) {
       lines.push('\\ No newline at end of file');
@@ -234,7 +240,7 @@ export function buildChangeGroupPatch(file: DiffFile, hunk: DiffHunk, startIndex
   ];
 
   for (const line of allLines) {
-    const prefix = line.type === 'add' ? '+' : line.type === 'delete' ? '-' : ' ';
+    const prefix = DIFF_LINE_PREFIX[line.type];
     patchLines.push(`${prefix}${line.content}`);
     if (line.noNewline) {
       patchLines.push('\\ No newline at end of file');

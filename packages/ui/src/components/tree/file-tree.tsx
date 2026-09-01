@@ -102,15 +102,18 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
     });
   }, []);
 
+  let emptyMessage = 'No files';
+  if (search) {
+    emptyMessage = 'No matching files';
+  } else if (commentedFilesOnly) {
+    emptyMessage = 'No files with open comments';
+  }
+
   return (
     <div className="flex-1 overflow-y-auto py-1">
       {displayTree.length === 0 ? (
         <div className="px-4 py-6 text-center text-xs text-text-muted">
-          {search
-            ? 'No matching files'
-            : commentedFilesOnly
-              ? 'No files with open comments'
-              : 'No files'}
+          {emptyMessage}
         </div>
       ) : (
         displayTree.map(node => (

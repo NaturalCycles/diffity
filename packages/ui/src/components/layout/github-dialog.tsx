@@ -100,6 +100,19 @@ export function GitHubDialog(props: GitHubDialogProps) {
     }
   };
 
+  function getPushHint(): string {
+    if (pushableThreads.length > 0 && multiCommentCount > 0) {
+      return `${multiCommentCount} thread${multiCommentCount !== 1 ? 's' : ''} with replies can't be pushed`;
+    }
+    if (pushableThreads.length > 0) {
+      return 'Single comments, ready to push';
+    }
+    if (localCount > 0) {
+      return 'Threads with replies can\'t be pushed';
+    }
+    return 'No comments to push';
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
       <div
@@ -135,13 +148,7 @@ export function GitHubDialog(props: GitHubDialogProps) {
                   : `${localCount} local comment${localCount !== 1 ? 's' : ''}`}
               </div>
               <div className="text-[11px] text-text-muted mt-0.5">
-                {pushableThreads.length > 0 && multiCommentCount > 0
-                  ? `${multiCommentCount} thread${multiCommentCount !== 1 ? 's' : ''} with replies can't be pushed`
-                  : pushableThreads.length > 0
-                    ? 'Single comments, ready to push'
-                    : localCount > 0
-                      ? 'Threads with replies can\'t be pushed'
-                      : 'No comments to push'}
+                {getPushHint()}
               </div>
             </div>
             {pushableThreads.length > 0 && (
