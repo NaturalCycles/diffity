@@ -155,7 +155,9 @@ export function startInboxServer(store: InboxStore, config: InboxConfig, log: (m
         return;
       }
 
-      const openBase = `http://localhost:${config.port}`;
+      // The host the reader actually used — localhost or 127.0.0.1, already checked — so the links
+      // on the page point back at the same origin and a click on them is not cross-site.
+      const openBase = `http://${req.headers.host}`;
       const url = req.url ?? '/';
 
       if (req.method === 'GET' && (url === '/' || url === '/index.html')) {
@@ -212,13 +214,13 @@ export function startInboxServer(store: InboxStore, config: InboxConfig, log: (m
 
 /** Brings a prepared review up as a live session and redirects the browser to it. */
 async function handleOpen(store: InboxStore, id: string, openDeps: OpenSessionDeps, log: (message: string) => void, res: ServerResponse): Promise<void> {
-  const resolution = resolveOpen(store, id);
-  if (!resolution.ok) {
-    res.writeHead(resolution.status, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end(resolution.message);
-    return;
-  }
   try {
+    const resolution = resolveOpen(store, id);
+    if (!resolution.ok) {
+      res.writeHead(resolution.status, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end(resolution.message);
+      return;
+    }
     log(`opening ${id}`);
     const { url, imported, importError } = await openPreparedSession(resolution.pr.worktreePath!, resolution.pr.bundlePath!, openDeps);
     if (!imported) {
@@ -228,8 +230,10 @@ async function handleOpen(store: InboxStore, id: string, openDeps: OpenSessionDe
     res.end();
   } catch (err) {
     log(`could not open ${id}: ${err instanceof Error ? err.message : err}`);
-    res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end(`Could not open ${id}: ${err instanceof Error ? err.message : err}`);
+    if (!res.headersSent) {
+      res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end(`Could not open ${id}: ${err instanceof Error ? err.message : err}`);
+    }
   }
 }
 
