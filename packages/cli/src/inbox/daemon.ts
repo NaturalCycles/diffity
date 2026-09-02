@@ -1,4 +1,4 @@
-import { createServer, type Server } from 'node:http';
+import { createServer, type Server, type ServerResponse } from 'node:http';
 import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { getViewerLogin, searchReviewRequested, viewPr } from '@diffity/github';
@@ -10,6 +10,9 @@ import { removeWorktree, cloneDir } from './worktree.js';
 import { InboxStore } from './store.js';
 import { runTick, type Forge } from './tick.js';
 import { buildView } from './view.js';
+import { resolveOpen } from './open.js';
+import { openPreparedSession, realOpenSessionDeps, type OpenSessionDeps } from './open-session.js';
+import { inboxPage } from './page.js';
 
 const realForge: Forge = {
   viewerLogin: getViewerLogin,
@@ -32,6 +35,8 @@ export interface DaemonOptions {
   once?: boolean;
   /** The forge to poll; defaults to the real GitHub one. Overridden only by tests. */
   forge?: Forge;
+  /** How a prepared review is brought up as a session; defaults to the real one. Tests override it. */
+  openDeps?: OpenSessionDeps;
 }
 
 /**
@@ -85,7 +90,8 @@ export async function runDaemon(
 
   // Bind the port first: it is the daemon's singleton lock, so a second daemon exits here (via the
   // server's error handler) before it can reclaim and kill the first one's in-flight servers.
-  const server = await bindInboxServer(store, config, log);
+  const openDeps = options.openDeps ?? realOpenSessionDeps(nodePath, entry);
+  const server = await bindInboxServer(store, config, log, openDeps);
   reclaimLeftoverServers(log);
   const timer = setInterval(() => void tick(), config.pollMinutes * 60_000);
   void tick();
@@ -135,17 +141,64 @@ function reclaimLeftoverServers(log: (message: string) => void): void {
   }
 }
 
-export function startInboxServer(store: InboxStore, config: InboxConfig, log: (message: string) => void): Server {
+export function startInboxServer(store: InboxStore, config: InboxConfig, log: (message: string) => void, openDeps: OpenSessionDeps): Server {
   const server = createServer((req, res) => {
-    const openBase = `http://localhost:${config.port}`;
-    if (req.method === 'GET' && (req.url === '/api/inbox' || req.url === '/api/inbox/')) {
-      const view = buildView(store, openBase, new Date().toISOString());
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(view));
-      return;
+    // The whole handler is guarded: an unhandled throw here (a malformed percent-escape, say) would
+    // otherwise have no catch and take the long-running daemon down with it.
+    try {
+      // Loopback binding is not enough on its own: a page on another site can rebind its own
+      // hostname to 127.0.0.1, so a stranger's Host header must not reach the reviewer's PR list.
+      // Judged against the connection's own port, which is the port actually bound.
+      if (!isLocalHost(req.headers.host, req.socket.localPort)) {
+        res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('forbidden');
+        return;
+      }
+
+      // The host the reader actually used — localhost or 127.0.0.1, already checked — so the links
+      // on the page point back at the same origin and a click on them is not cross-site.
+      const openBase = `http://${req.headers.host}`;
+      const url = req.url ?? '/';
+
+      if (req.method === 'GET' && (url === '/' || url === '/index.html')) {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(inboxPage());
+        return;
+      }
+      if (req.method === 'GET' && (url === '/api/inbox' || url === '/api/inbox/')) {
+        const view = buildView(store, openBase, new Date().toISOString());
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(view));
+        return;
+      }
+      if (req.method === 'GET' && url.startsWith('/open/')) {
+        // A state-changing GET, so a cross-site fetch — a drive-by trying to spawn a session — is
+        // refused; a click from the inbox page itself is same-origin, and a direct navigation none.
+        if (req.headers['sec-fetch-site'] === 'cross-site') {
+          res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('forbidden');
+          return;
+        }
+        let id: string;
+        try {
+          id = decodeURIComponent(url.slice('/open/'.length));
+        } catch {
+          res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('bad request');
+          return;
+        }
+        void handleOpen(store, id, openDeps, log, res).catch(err => log(`open failed: ${err instanceof Error ? err.message : err}`));
+        return;
+      }
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'not found' }));
+    } catch (err) {
+      log(`request handler error: ${err instanceof Error ? err.message : err}`);
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+      }
+      res.end('internal error');
     }
-    res.writeHead(404, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'not found' }));
   });
   server.on('error', err => {
     const code = (err as NodeJS.ErrnoException).code;
@@ -159,8 +212,38 @@ export function startInboxServer(store: InboxStore, config: InboxConfig, log: (m
   return server;
 }
 
+/** Brings a prepared review up as a live session and redirects the browser to it. */
+async function handleOpen(store: InboxStore, id: string, openDeps: OpenSessionDeps, log: (message: string) => void, res: ServerResponse): Promise<void> {
+  try {
+    const resolution = resolveOpen(store, id);
+    if (!resolution.ok) {
+      res.writeHead(resolution.status, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end(resolution.message);
+      return;
+    }
+    log(`opening ${id}`);
+    const { url, imported, importError } = await openPreparedSession(resolution.pr.worktreePath!, resolution.pr.bundlePath!, openDeps);
+    if (!imported) {
+      log(`opened ${id} but its findings did not import: ${importError}`);
+    }
+    res.writeHead(302, { Location: url });
+    res.end();
+  } catch (err) {
+    log(`could not open ${id}: ${err instanceof Error ? err.message : err}`);
+    if (!res.headersSent) {
+      res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end(`Could not open ${id}: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+}
+
+/** A request whose Host is this loopback server's own address (localhost or 127.0.0.1, right port). */
+function isLocalHost(host: string | undefined, port: number | undefined): boolean {
+  return port != null && (host === `localhost:${port}` || host === `127.0.0.1:${port}`);
+}
+
 /** Resolves once the port is held; a clash exits through the server's own error handler first. */
-function bindInboxServer(store: InboxStore, config: InboxConfig, log: (message: string) => void): Promise<Server> {
-  const server = startInboxServer(store, config, log);
+function bindInboxServer(store: InboxStore, config: InboxConfig, log: (message: string) => void, openDeps: OpenSessionDeps): Promise<Server> {
+  const server = startInboxServer(store, config, log, openDeps);
   return new Promise(resolve => server.once('listening', () => resolve(server)));
 }

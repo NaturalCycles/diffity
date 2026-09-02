@@ -137,7 +137,8 @@ describe('the inbox JSON server', () => {
     const store = new InboxStore(':memory:');
     store.observe({ ...snapshot(), headSha: 'aaa' }, true, 'now');
     store.markPrepared('o/demo#4', { headSha: 'aaa', bundlePath: '/b.json', worktreePath: '/wt', logPath: '/l', at: 'now' });
-    const server = startInboxServer(store, { ...config(), port: 0 }, () => {});
+    const noOpenDeps = { baseRefOf: () => 'x', ensureServer: () => Promise.resolve(1), importBundle: () => {} };
+    const server = startInboxServer(store, { ...config(), port: 0 }, () => {}, noOpenDeps);
     await new Promise(resolve => server.on('listening', resolve));
     const { port } = server.address() as { port: number };
 
