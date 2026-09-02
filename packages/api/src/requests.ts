@@ -1,5 +1,4 @@
 import {
-  AUTHOR_TYPES,
   COMMENT_KINDS,
   COMMENT_SIDES,
   LIVE_INTENTS,
@@ -17,12 +16,24 @@ import {
   type PrComment,
   type ReviewSubmission,
 } from './github.js';
+import {
+  FieldError,
+  anyStr,
+  author,
+  int,
+  lineRange,
+  member,
+  optBool,
+  optInt,
+  optMember,
+  optStr,
+  parseWith,
+  record,
+  str,
+  type ParseResult,
+} from './parse.js';
 
-/**
- * What a parser answers: the typed request, or what is wrong with the body. Parsing happens at
- * the server boundary, so the message is written for whoever sent the request.
- */
-export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
+export type { ParseResult } from './parse.js';
 
 /** What `POST /api/threads` accepts. */
 export interface CreateThreadRequest {
@@ -108,103 +119,6 @@ export interface OpenInEditorRequest {
 /** What `POST /api/github/pull-comments` accepts. */
 export interface PullCommentsRequest {
   sessionId: string;
-}
-
-// Hand-rolled rather than a schema library: the wire has one small shape per route, and a field
-// reader that throws keeps each parser a flat object literal.
-
-class FieldError extends Error {}
-
-function record(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new FieldError(`${label} must be an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function parseWith<T>(body: unknown, build: (obj: Record<string, unknown>) => T): ParseResult<T> {
-  try {
-    return { ok: true, value: build(record(body, 'Request body')) };
-  } catch (error) {
-    if (error instanceof FieldError) {
-      return { ok: false, error: error.message };
-    }
-    throw error;
-  }
-}
-
-function str(value: unknown, label: string): string {
-  if (typeof value !== 'string' || value === '') {
-    throw new FieldError(`${label} must be a non-empty string`);
-  }
-  return value;
-}
-
-/** For the few fields where empty means something, like the editor path that means the repo root. */
-function anyStr(value: unknown, label: string): string {
-  if (typeof value !== 'string') {
-    throw new FieldError(`${label} must be a string`);
-  }
-  return value;
-}
-
-function optStr(value: unknown, label: string): string | undefined {
-  return value == null ? undefined : anyStr(value, label);
-}
-
-function int(value: unknown, label: string, min: number): number {
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < min) {
-    throw new FieldError(`${label} must be an integer >= ${min}`);
-  }
-  return value;
-}
-
-function optInt(value: unknown, label: string, min: number): number | undefined {
-  return value == null ? undefined : int(value, label, min);
-}
-
-function optBool(value: unknown, label: string): boolean | undefined {
-  if (value == null) {
-    return undefined;
-  }
-  if (typeof value !== 'boolean') {
-    throw new FieldError(`${label} must be a boolean`);
-  }
-  return value;
-}
-
-function member<T extends string>(value: unknown, label: string, values: readonly T[]): T {
-  if (typeof value !== 'string' || !(values as readonly string[]).includes(value)) {
-    throw new FieldError(`${label} must be one of: ${values.join(', ')}`);
-  }
-  return value as T;
-}
-
-function optMember<T extends string>(
-  value: unknown,
-  label: string,
-  values: readonly T[],
-): T | undefined {
-  return value == null ? undefined : member(value, label, values);
-}
-
-function lineRange(obj: Record<string, unknown>, min: number): { startLine: number; endLine: number } {
-  const startLine = int(obj.startLine, 'startLine', min);
-  const endLine = int(obj.endLine, 'endLine', min);
-  if (endLine < startLine) {
-    throw new FieldError('endLine must not be before startLine');
-  }
-  return { startLine, endLine };
-}
-
-/** Built from the fields it names, so nothing else in the request object reaches storage. */
-function author(value: unknown, label: string): CommentAuthor {
-  const obj = record(value, label);
-  return {
-    name: str(obj.name, `${label}.name`),
-    type: member(obj.type, `${label}.type`, AUTHOR_TYPES),
-    avatarUrl: optStr(obj.avatarUrl, `${label}.avatarUrl`),
-  };
 }
 
 export function parseCreateThreadRequest(body: unknown): ParseResult<CreateThreadRequest> {
