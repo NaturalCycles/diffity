@@ -2,7 +2,8 @@ import { existsSync, statSync } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
 import { InvalidArgumentError, type Command } from 'commander';
 import pc from 'picocolors';
-import { isGitRepo, getDiffFiles, resolveRef, getRepoRoot } from '@diffity/git';
+import { isGitRepo, getDiffFiles, resolveRef, getRepoRoot, getHeadHash, getDirtyPaths } from '@diffity/git';
+import { detectRemote } from '@diffity/github';
 import {
   createThread,
   getThreadsForSession,
@@ -15,11 +16,14 @@ import {
 import {
   GENERAL_THREAD_FILE_PATH,
   isThreadStatus,
+  parseReviewBundle,
   THREAD_STATUSES,
   type ClaimResponse,
   type GitHubDetails,
   type LiveStatusResponse,
+  type ReviewBundle,
 } from '@diffity/api';
+import { baseShaOf, buildBundle, exportMismatch, importBundle, importMismatch, scopeWarning } from './bundle.js';
 import { answerLiveRequest } from './live.js';
 import { clampClientWait, CLIENT_WAIT_CAP_SECONDS } from './live-wait.js';
 import { directiveFor } from './live-intent.js';
@@ -31,7 +35,7 @@ import { describeSince } from './live-events.js';
 import { readAnchor, clampToFile, countWorkingTreeLines } from './anchor.js';
 import { startReviewRun, finishReviewRun } from './review-run.js';
 import { readRepoConfig, DEFAULT_SEVERITIES, resolveInRepo, REPO_CONFIG_FILE } from '@diffity/git';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 
 async function requireSession(explicitId?: string): Promise<Session> {
   if (!isGitRepo()) {
@@ -699,4 +703,101 @@ Examples:
       }
       console.log(pc.green('Tour marked as ready'));
     });
+
+  agent
+    .command('export-bundle')
+    .description('Write the session\'s threads and tours as a portable review bundle (JSON)')
+    .option('--out <path>', 'Write to this file instead of stdout')
+    .option('--pr <n>', 'Pull request number to record in the bundle', positiveInteger)
+    .action(async (opts: { out?: string; pr?: number }) => {
+      const session = await requireSession(agent.opts().session);
+      const mismatch = exportMismatch(session, getHeadHash());
+      if (mismatch) {
+        console.error(pc.red(`Error: ${mismatch}`));
+        process.exit(1);
+      }
+      const dirty = getDirtyPaths();
+      if (dirty.length > 0) {
+        console.error(pc.yellow(`Warning: ${dirty.length} uncommitted change(s) in the working tree; the bundle's lines mean this tree, not the commit alone.`));
+      }
+      const bundle = buildBundle(session, {
+        prNumber: opts.pr ?? null,
+        generator: `diffity ${program.version() ?? ''}`.trim(),
+      });
+      const json = JSON.stringify(bundle, null, 2);
+      if (opts.out) {
+        try {
+          writeFileSync(opts.out, json + '\n');
+        } catch (err) {
+          console.error(pc.red(`Error: Could not write "${opts.out}": ${err instanceof Error ? err.message : err}`));
+          process.exit(1);
+        }
+        console.log(pc.green(`Wrote ${bundle.threads.length} thread(s) and ${bundle.tours.length} tour(s) to ${opts.out}`));
+        return;
+      }
+      console.log(json);
+    });
+
+  agent
+    .command('import-bundle')
+    .description('Add a review bundle\'s threads and tours to the session; "-" reads stdin')
+    .argument('<file>', 'Bundle file, or "-" for stdin')
+    .option('--force', 'Import even though HEAD or the repository differs from the bundle\'s')
+    .action(async (file: string, opts: { force?: boolean }) => {
+      const bundle = readBundleOrExit(file);
+      const session = await requireSession(agent.opts().session);
+
+      const mismatch = importMismatch(bundle, getHeadHash(), detectRemote());
+      if (mismatch) {
+        if (!opts.force) {
+          console.error(pc.red(`Error: ${mismatch}`));
+          console.error(pc.dim('Pass --force to import anyway.'));
+          process.exit(1);
+        }
+        console.error(pc.yellow(`Warning: ${mismatch} Importing anyway.`));
+      }
+      const caution = scopeWarning(bundle, session, baseShaOf(session.ref));
+      if (caution) {
+        console.error(pc.yellow(`Warning: ${caution}`));
+      }
+
+      const outcome = importBundle(session, bundle);
+      console.log(pc.green(
+        `Imported ${outcome.threadsCreated} thread(s) and ${outcome.toursCreated} tour(s)`
+        + (outcome.threadsSkipped || outcome.toursSkipped
+          ? pc.dim(` (already present: ${outcome.threadsSkipped} thread(s), ${outcome.toursSkipped} tour(s))`)
+          : ''),
+      ));
+    });
+}
+
+function positiveInteger(value: string): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new InvalidArgumentError('Expected a positive integer.');
+  }
+  return parsed;
+}
+
+function readBundleOrExit(file: string): ReviewBundle {
+  let raw: string;
+  try {
+    raw = readFileSync(file === '-' ? 0 : file, 'utf-8');
+  } catch (err) {
+    console.error(pc.red(`Error: Could not read ${file === '-' ? 'stdin' : `"${file}"`}: ${err instanceof Error ? err.message : err}`));
+    process.exit(1);
+  }
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    console.error(pc.red('Error: The bundle is not valid JSON'));
+    process.exit(1);
+  }
+  const parsed = parseReviewBundle(json);
+  if (!parsed.ok) {
+    console.error(pc.red(`Error: Not a review bundle: ${parsed.error}`));
+    process.exit(1);
+  }
+  return parsed.value;
 }

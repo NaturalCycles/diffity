@@ -2,7 +2,7 @@ import { execFileSync, execSync } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { sep } from 'node:path';
 import { homedir } from 'node:os';
-import { exec } from './exec.js';
+import { exec, git } from './exec.js';
 import { readRepoConfig, resolveDataDir } from './config.js';
 import { WORKING_TREE_REFS } from './diff.js';
 import type { RepoInfo } from './types.js';
@@ -43,6 +43,11 @@ export function getRepoInfo(): RepoInfo {
 
 export function getHeadHash(): string {
   return exec('git rev-parse HEAD');
+}
+
+/** The commit a ref names, so a moving name like `HEAD` or `main` is pinned to what it meant. */
+export function getCommitHash(ref: string): string {
+  return git(['rev-parse', '--verify', `${ref}^{commit}`]);
 }
 
 export function getDiffityDirPath(): string {

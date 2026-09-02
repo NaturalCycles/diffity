@@ -205,11 +205,12 @@ export function createThread(
   author: ThreadAuthor,
   anchorContent?: string,
   kind: CommentKind = 'review',
+  createdAt?: string,
 ): Thread {
   const db = getDb();
   const threadId = randomUUID();
   const commentId = randomUUID();
-  const now = new Date().toISOString();
+  const now = createdAt ?? new Date().toISOString();
 
   const cleanBody = body;
 
@@ -326,10 +327,11 @@ export function addReply(
   body: string,
   author: ThreadAuthor,
   kind: CommentKind = 'review',
+  createdAt?: string,
 ): ThreadComment {
   const db = getDb();
   const commentId = randomUUID();
-  const now = new Date().toISOString();
+  const now = createdAt ?? new Date().toISOString();
   const cleanBody = body;
 
   db.prepare(
