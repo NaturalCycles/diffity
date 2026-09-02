@@ -164,6 +164,9 @@ function agentEnv(dataDir: string): NodeJS.ProcessEnv {
   // The keys behind an SSH remote.
   delete env.SSH_AUTH_SOCK;
   env.GIT_SSH_COMMAND = 'false';
+  // Askpass helpers can hand git a secret without a terminal.
+  delete env.GIT_ASKPASS;
+  delete env.SSH_ASKPASS;
   // An empty gh config directory has no stored auth; a null global config and no system config drop
   // insteadOf rewrites and credential helpers; no terminal prompt means a push cannot ask for one.
   env.GH_CONFIG_DIR = join(dataDir, 'empty-gh');

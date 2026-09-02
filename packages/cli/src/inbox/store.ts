@@ -104,8 +104,11 @@ export class InboxStore {
     // A table from before `attempts` existed gains it here; a fresh one already has it.
     try {
       this.db.exec('ALTER TABLE inbox_prs ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0');
-    } catch {
-      // duplicate column — already present
+    } catch (err) {
+      // "duplicate column" means it is already there; anything else is a real problem.
+      if (!/duplicate column/i.test(err instanceof Error ? err.message : String(err))) {
+        throw err;
+      }
     }
   }
 

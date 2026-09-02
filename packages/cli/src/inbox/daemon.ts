@@ -30,6 +30,8 @@ export interface DaemonHandle {
 export interface DaemonOptions {
   /** A single pass then stop, with no HTTP server bound. */
   once?: boolean;
+  /** The forge to poll; defaults to the real GitHub one. Overridden only by tests. */
+  forge?: Forge;
 }
 
 /**
@@ -51,7 +53,7 @@ export async function runDaemon(
   const inflight: Inflight = {};
   const prepareDeps: PrepareDeps = realPrepareDeps(nodePath, entry, inboxDataDir, inflight);
   const deps = {
-    forge: realForge,
+    forge: options.forge ?? realForge,
     prepare: (snapshot: Parameters<typeof preparePr>[0]) => preparePr(snapshot, config, prepareDeps),
     removeWorktree: (worktree: string, repo: string) => removeWorktree(cloneDir(config.reposDir, repo), worktree),
     log,
@@ -74,8 +76,8 @@ export async function runDaemon(
   };
 
   if (options.once) {
-    // No port to acquire and no other daemon to be, so no reclaim: a single pass must not disturb
-    // a daemon that is already running and may be mid-prepare.
+    // No port to acquire and no other daemon to be, so no reclaim: a single pass must not kill the
+    // servers of a daemon that is already running and may be mid-prepare.
     await tick();
     store.close();
     return { port: null, stop: () => Promise.resolve() };
