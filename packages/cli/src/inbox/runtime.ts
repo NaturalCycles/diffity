@@ -148,16 +148,27 @@ export function runAgent(opts: RunAgentOpts, dataDir: string, inflight: Inflight
   });
 }
 
-/** The agent's environment, with anything that could reach the forge stripped out. */
+/**
+ * The agent's environment, with every way it could reach the forge on the reviewer's behalf taken
+ * away. This is defence in depth, not a sandbox: the command still runs the repository's own code,
+ * so the promise it backs is "the daemon does not hand the agent your credentials", not "the agent
+ * cannot possibly reach GitHub".
+ */
 function agentEnv(dataDir: string): NodeJS.ProcessEnv {
   const env = { ...process.env };
+  // gh's auth tokens, over HTTPS.
   delete env.GH_TOKEN;
   delete env.GITHUB_TOKEN;
   delete env.GH_ENTERPRISE_TOKEN;
-  // An empty gh config directory has no stored auth; a null global git config drops insteadOf
-  // rewrites and credential helpers; no terminal prompt means a push cannot ask for a password.
+  delete env.GITHUB_ENTERPRISE_TOKEN;
+  // The keys behind an SSH remote.
+  delete env.SSH_AUTH_SOCK;
+  env.GIT_SSH_COMMAND = 'false';
+  // An empty gh config directory has no stored auth; a null global config and no system config drop
+  // insteadOf rewrites and credential helpers; no terminal prompt means a push cannot ask for one.
   env.GH_CONFIG_DIR = join(dataDir, 'empty-gh');
   env.GIT_CONFIG_GLOBAL = '/dev/null';
+  env.GIT_CONFIG_NOSYSTEM = '1';
   env.GIT_TERMINAL_PROMPT = '0';
   env.DIFFITY_DATA_DIR = dataDir;
   mkdirSync(env.GH_CONFIG_DIR, { recursive: true });

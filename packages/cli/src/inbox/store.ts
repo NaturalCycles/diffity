@@ -101,6 +101,12 @@ export class InboxStore {
         last_seen_at TEXT NOT NULL
       )
     `);
+    // A table from before `attempts` existed gains it here; a fresh one already has it.
+    try {
+      this.db.exec('ALTER TABLE inbox_prs ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0');
+    } catch {
+      // duplicate column — already present
+    }
   }
 
   close(): void {

@@ -45,7 +45,8 @@ export async function runDaemon(
   log: (message: string) => void,
   options: DaemonOptions = {},
 ): Promise<DaemonHandle> {
-  reclaimLeftoverServers(log);
+  let stopping = false;
+  let ticking = false;
 
   const inflight: Inflight = {};
   const prepareDeps: PrepareDeps = realPrepareDeps(nodePath, entry, inboxDataDir, inflight);
@@ -55,10 +56,9 @@ export async function runDaemon(
     removeWorktree: (worktree: string, repo: string) => removeWorktree(cloneDir(config.reposDir, repo), worktree),
     log,
     now: () => new Date().toISOString(),
+    shouldContinue: () => !stopping,
   };
 
-  let stopping = false;
-  let ticking = false;
   const tick = async () => {
     if (ticking || stopping) {
       return;
@@ -74,12 +74,17 @@ export async function runDaemon(
   };
 
   if (options.once) {
+    // No port to acquire and no other daemon to be, so no reclaim: a single pass must not disturb
+    // a daemon that is already running and may be mid-prepare.
     await tick();
     store.close();
     return { port: null, stop: () => Promise.resolve() };
   }
 
-  const server = startInboxServer(store, config, log);
+  // Bind the port first: it is the daemon's singleton lock, so a second daemon exits here (via the
+  // server's error handler) before it can reclaim and kill the first one's in-flight servers.
+  const server = await bindInboxServer(store, config, log);
+  reclaimLeftoverServers(log);
   const timer = setInterval(() => void tick(), config.pollMinutes * 60_000);
   void tick();
 
@@ -150,4 +155,10 @@ export function startInboxServer(store: InboxStore, config: InboxConfig, log: (m
   // Loopback only: the inbox surfaces the reviewer's pull requests and opens their local sessions.
   server.listen(config.port, '127.0.0.1');
   return server;
+}
+
+/** Resolves once the port is held; a clash exits through the server's own error handler first. */
+function bindInboxServer(store: InboxStore, config: InboxConfig, log: (message: string) => void): Promise<Server> {
+  const server = startInboxServer(store, config, log);
+  return new Promise(resolve => server.once('listening', () => resolve(server)));
 }

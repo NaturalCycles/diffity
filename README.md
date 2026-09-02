@@ -324,7 +324,9 @@ running past the end would otherwise be counted and highlighted with nothing to 
 
 ## The review inbox
 
-`diffity inbox` watches the pull requests awaiting your review and prepares each one ahead of time, so the review is ready the moment you look. It polls GitHub (`gh search prs --review-requested=@me`), and for each pull request worth your attention it cuts a worktree at the PR head, runs a diffity session over the diff, has an agent prepare a review with a walkthrough, and saves the result as a bundle. New commits redo a stale review; a merged, closed, or no-longer-requested PR is retired. **Nothing is ever posted to GitHub** — prepared reviews are local drafts you open and submit yourself.
+`diffity inbox` watches the pull requests awaiting your review and prepares each one ahead of time, so the review is ready the moment you look. It polls GitHub (`gh search prs --review-requested=@me`), and for each pull request worth your attention it cuts a worktree at the PR head, runs a diffity session over the diff, has an agent prepare a review with a walkthrough, and saves the result as a bundle. New commits redo a stale review; a merged, closed, or no-longer-requested PR is retired.
+
+The daemon never posts your prepared reviews to GitHub — they are local drafts you open and submit yourself — and it runs the review agent with your GitHub credentials stripped from its environment. That said, the agent executes the pull request's own repository code (see the warning below), so treat the "never posts" behaviour as the daemon's design, not a sandbox.
 
 ```bash
 diffity inbox              # run the watcher and a small status server

@@ -17,6 +17,8 @@ export interface TickDeps {
   removeWorktree(worktree: string, repo: string): void;
   log(message: string): void;
   now(): string;
+  /** False once the daemon is shutting down, so the drain stops starting new preparations. */
+  shouldContinue?(): boolean;
 }
 
 /**
@@ -70,6 +72,9 @@ export async function runTick(store: InboxStore, deps: TickDeps): Promise<void> 
   }
 
   for (const snapshot of toPrepare) {
+    if (deps.shouldContinue && !deps.shouldContinue()) {
+      break;
+    }
     await prepareOne(store, snapshot, deps);
   }
 }

@@ -38,17 +38,22 @@ describe('runAgent', () => {
     expect(log).toContain('noise');
   });
 
-  it('scrubs the forge credentials from the agent\'s environment', async () => {
+  it('scrubs every way to the forge from the agent\'s environment', async () => {
     process.env.GH_TOKEN = 'secret-token';
+    process.env.SSH_AUTH_SOCK = '/tmp/agent.sock';
     try {
-      const argv = ['node', '-e', 'process.stdout.write(JSON.stringify({gh:process.env.GH_TOKEN??null,cfg:process.env.GIT_CONFIG_GLOBAL,prompt:process.env.GIT_TERMINAL_PROMPT}))'];
+      const argv = ['node', '-e', 'process.stdout.write(JSON.stringify({gh:process.env.GH_TOKEN??null,ssh:process.env.SSH_AUTH_SOCK??null,sshCmd:process.env.GIT_SSH_COMMAND,cfg:process.env.GIT_CONFIG_GLOBAL,nosystem:process.env.GIT_CONFIG_NOSYSTEM,prompt:process.env.GIT_TERMINAL_PROMPT}))'];
       const result = await runAgent(opts(argv), root);
       const env = JSON.parse(result.stdout);
       expect(env.gh).toBeNull();
+      expect(env.ssh).toBeNull();
+      expect(env.sshCmd).toBe('false');
       expect(env.cfg).toBe('/dev/null');
+      expect(env.nosystem).toBe('1');
       expect(env.prompt).toBe('0');
     } finally {
       delete process.env.GH_TOKEN;
+      delete process.env.SSH_AUTH_SOCK;
     }
   });
 
