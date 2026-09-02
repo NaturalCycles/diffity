@@ -18,9 +18,13 @@ export function record(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-export function parseWith<T>(body: unknown, build: (obj: Record<string, unknown>) => T): ParseResult<T> {
+export function parseWith<T>(
+  body: unknown,
+  build: (obj: Record<string, unknown>) => T,
+  rootLabel = 'Request body',
+): ParseResult<T> {
   try {
-    return { ok: true, value: build(record(body, 'Request body')) };
+    return { ok: true, value: build(record(body, rootLabel)) };
   } catch (error) {
     if (error instanceof FieldError) {
       return { ok: false, error: error.message };
@@ -91,11 +95,13 @@ export function list(value: unknown, label: string): unknown[] {
   return value;
 }
 
-export function lineRange(obj: Record<string, unknown>, min: number): { startLine: number; endLine: number } {
-  const startLine = int(obj.startLine, 'startLine', min);
-  const endLine = int(obj.endLine, 'endLine', min);
+/** `label` prefixes the field names when the range sits inside a larger structure. */
+export function lineRange(obj: Record<string, unknown>, min: number, label = ''): { startLine: number; endLine: number } {
+  const prefix = label ? `${label}.` : '';
+  const startLine = int(obj.startLine, `${prefix}startLine`, min);
+  const endLine = int(obj.endLine, `${prefix}endLine`, min);
   if (endLine < startLine) {
-    throw new FieldError('endLine must not be before startLine');
+    throw new FieldError(`${prefix}endLine must not be before ${prefix}startLine`);
   }
   return { startLine, endLine };
 }

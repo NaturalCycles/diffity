@@ -99,7 +99,7 @@ export function parseReviewBundle(value: unknown): ParseResult<ReviewBundle> {
       threads: list(obj.threads, 'threads').map((item, index) => bundleThread(item, `threads[${index}]`)),
       tours: list(obj.tours, 'tours').map((item, index) => bundleTour(item, `tours[${index}]`)),
     };
-  });
+  }, 'The bundle');
 }
 
 function bundleRepo(value: unknown): GitHubRemote | null {
@@ -124,7 +124,7 @@ function bundleThread(value: unknown, label: string): BundleThread {
     filePath: str(obj.filePath, `${label}.filePath`),
     side: member(obj.side, `${label}.side`, COMMENT_SIDES),
     // Line 0 is real: a general comment is about the whole diff and sits on no line.
-    ...lineRange(obj, 0),
+    ...lineRange(obj, 0, label),
     status: member(obj.status, `${label}.status`, THREAD_STATUSES),
     anchorContent: optStr(obj.anchorContent, `${label}.anchorContent`) ?? null,
     comments,
@@ -156,7 +156,7 @@ function bundleTourStep(value: unknown, label: string): BundleTourStep {
   const obj = record(value, label);
   return {
     filePath: str(obj.filePath, `${label}.filePath`),
-    ...lineRange(obj, 0),
+    ...lineRange(obj, 0, label),
     body: optStr(obj.body, `${label}.body`) ?? '',
     annotation: optStr(obj.annotation, `${label}.annotation`) ?? '',
   };

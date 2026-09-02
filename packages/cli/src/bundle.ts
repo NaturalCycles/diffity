@@ -5,8 +5,9 @@ import {
   type GitHubRemote,
   type ReviewBundle,
 } from '@diffity/api';
-import { getCommitHash, getHeadHash, resolveBaseRef } from '@diffity/git';
+import { getCommitHash, resolveBaseRef } from '@diffity/git';
 import { detectRemote } from '@diffity/github';
+import { getDb } from './db.js';
 import type { Session } from './session.js';
 import { addReply, createThread, getThreadsForSession, updateThreadStatus, type Thread } from './threads.js';
 import { addTourStep, createTour, getToursForSession, updateTourStatus, type Tour } from './tours.js';
@@ -16,10 +17,14 @@ export interface BundleOrigin {
   generator: string;
 }
 
+/**
+ * Pinned to the session's own commit rather than HEAD: the threads were last anchored against
+ * that tree, and only reopening the review moves them along with a newer commit.
+ */
 export function buildBundle(session: Session, origin: BundleOrigin): ReviewBundle {
   return {
     formatVersion: BUNDLE_FORMAT_VERSION,
-    headSha: getHeadHash(),
+    headSha: session.headHash,
     ref: session.ref,
     baseSha: baseShaOf(session.ref),
     repo: detectRemote(),
@@ -65,6 +70,17 @@ function baseShaOf(ref: string): string | null {
 }
 
 /**
+ * Why the session must not be exported right now, or null when it may. A session left behind by a
+ * commit still holds its findings at the old lines; reopening the review carries them across.
+ */
+export function exportMismatch(session: Session, head: string): string | null {
+  if (session.headHash !== head) {
+    return `The session was anchored at ${session.headHash.slice(0, 12)}, but HEAD is ${head.slice(0, 12)}. Open the review once so the findings follow the commit, then export.`;
+  }
+  return null;
+}
+
+/**
  * Why the bundle must not be imported here, or null when it may. Anchors are line numbers in the
  * bundle's HEAD: on any other commit they may point at the wrong lines, in another repository at
  * nothing at all.
@@ -83,6 +99,17 @@ function sameRepo(a: GitHubRemote, b: GitHubRemote): boolean {
   return a.owner.toLowerCase() === b.owner.toLowerCase() && a.repo.toLowerCase() === b.repo.toLowerCase();
 }
 
+/**
+ * A caution worth printing before an import that will succeed: a thread on a file outside the
+ * session's diff is stored but never shown, and the two refs decide which files that is.
+ */
+export function scopeWarning(bundle: ReviewBundle, session: Session): string | null {
+  if (bundle.ref === session.ref) {
+    return null;
+  }
+  return `The bundle was exported from a session on "${bundle.ref}"; this session is on "${session.ref}". Findings on files outside this diff will not be shown.`;
+}
+
 export interface ImportOutcome {
   threadsCreated: number;
   threadsSkipped: number;
@@ -92,10 +119,24 @@ export interface ImportOutcome {
 
 /**
  * Adds the bundle's threads and tours to the session, skipping what is already there: a thread at
- * the same position that already carries the bundle's opening comment, a tour on the same topic.
- * Importing twice is therefore the same as importing once.
+ * the same position opening with the same comment, a tour on the same topic. Importing twice is
+ * therefore the same as importing once. All or nothing, so a failed import can be retried without
+ * half a thread — its opener but not its replies — blocking the retry as "already present".
  */
 export function importBundle(session: Session, bundle: ReviewBundle): ImportOutcome {
+  const db = getDb();
+  db.exec('BEGIN');
+  try {
+    const outcome = addBundle(session, bundle);
+    db.exec('COMMIT');
+    return outcome;
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
+function addBundle(session: Session, bundle: ReviewBundle): ImportOutcome {
   const outcome: ImportOutcome = { threadsCreated: 0, threadsSkipped: 0, toursCreated: 0, toursSkipped: 0 };
 
   const existingThreads = getThreadsForSession(session.id);
@@ -115,9 +156,10 @@ export function importBundle(session: Session, bundle: ReviewBundle): ImportOutc
       first.author,
       incoming.anchorContent ?? undefined,
       first.kind,
+      first.createdAt,
     );
     for (const reply of replies) {
-      addReply(thread.id, reply.body, reply.author, reply.kind);
+      addReply(thread.id, reply.body, reply.author, reply.kind, reply.createdAt);
     }
     if (incoming.status !== 'open') {
       updateThreadStatus(thread.id, incoming.status);
@@ -149,7 +191,7 @@ function holdsThread(thread: Thread, incoming: BundleThread): boolean {
     && thread.side === incoming.side
     && thread.startLine === incoming.startLine
     && thread.endLine === incoming.endLine
-    && thread.comments.some(comment => comment.body === incoming.comments[0].body);
+    && thread.comments[0]?.body === incoming.comments[0].body;
 }
 
 function holdsTour(tour: Tour, incoming: BundleTour): boolean {

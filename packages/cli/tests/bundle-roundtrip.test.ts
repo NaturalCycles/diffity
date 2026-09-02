@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import type { ReviewBundle } from '@diffity/api';
 
 let root: string;
 let origCwd: string;
@@ -48,6 +49,13 @@ afterAll(() => {
 
 const agent = { name: 'Agent', type: 'agent' as const };
 const you = { name: 'You', type: 'user' as const };
+
+function emptyBundle(): ReviewBundle {
+  return {
+    formatVersion: 1, headSha, ref: 'work', baseSha: null, repo: null, prNumber: null,
+    createdAt: '2026-09-02T12:00:00.000Z', generator: 'test', threads: [], tours: [],
+  };
+}
 
 async function preparedSession() {
   const { findOrCreateSession } = await import('../src/session.js');
@@ -141,6 +149,86 @@ describe('a review bundle', () => {
     expect(second).toEqual({ threadsCreated: 0, threadsSkipped: 3, toursCreated: 0, toursSkipped: 1 });
     expect(getThreadsForSession(target.id)).toHaveLength(3);
     expect(getToursForSession(target.id)).toHaveLength(1);
+  });
+
+  it('keeps the comments\' own timestamps, so replies read back in their original order', async () => {
+    const { buildBundle, importBundle } = await import('../src/bundle.js');
+    const { findOrCreateSession } = await import('../src/session.js');
+    const { getThreadsForSession } = await import('../src/threads.js');
+    const bundle = buildBundle(await preparedSession(), { prNumber: null, generator: 'test' });
+    const exported = bundle.threads.find(thread => thread.startLine === 2)!.comments.map(comment => comment.createdAt);
+
+    const cloneDir = join(root, `clone-${repoCount++}`);
+    execFileSync('git', ['clone', '--quiet', repoDir, cloneDir], { stdio: 'pipe' });
+    process.chdir(cloneDir);
+    const target = findOrCreateSession('work');
+    importBundle(target, bundle);
+
+    const imported = getThreadsForSession(target.id).find(thread => thread.startLine === 2)!;
+    expect(imported.comments.map(comment => comment.createdAt)).toEqual(exported);
+    expect(imported.createdAt).toBe(exported[0]);
+  });
+
+  it('does not mistake a reply for an opening comment when deciding what is already there', async () => {
+    const { importBundle } = await import('../src/bundle.js');
+    const { getThreadsForSession } = await import('../src/threads.js');
+    const session = await preparedSession();
+    const opensLikeAReply = {
+      ...emptyBundle(),
+      threads: [{
+        filePath: 'a.ts', side: 'new' as const, startLine: 2, endLine: 2, status: 'open' as const, anchorContent: null,
+        comments: [{ author: agent, body: 'Will do', kind: 'review' as const, createdAt: '2026-09-02T12:00:00.000Z' }],
+      }],
+    };
+
+    const outcome = importBundle(session, opensLikeAReply);
+
+    expect(outcome.threadsCreated).toBe(1);
+    expect(getThreadsForSession(session.id).filter(thread => thread.startLine === 2)).toHaveLength(2);
+  });
+
+  it('imports all or nothing, so a failed import can be retried whole', async () => {
+    const { importBundle } = await import('../src/bundle.js');
+    const { findOrCreateSession } = await import('../src/session.js');
+    const { getThreadsForSession } = await import('../src/threads.js');
+    const session = findOrCreateSession('work');
+    const sound = {
+      filePath: 'a.ts', side: 'new' as const, startLine: 1, endLine: 1, status: 'open' as const, anchorContent: null,
+      comments: [{ author: agent, body: 'fine', kind: 'review' as const, createdAt: '2026-09-02T12:00:00.000Z' }],
+    };
+    // Past the parser on purpose: a body the database refuses, as a stand-in for any mid-import failure.
+    const broken = { ...sound, startLine: 3, endLine: 3, comments: [{ ...sound.comments[0], body: null as unknown as string }] };
+
+    expect(() => importBundle(session, { ...emptyBundle(), threads: [sound, broken] })).toThrow();
+    expect(getThreadsForSession(session.id)).toHaveLength(0);
+
+    const retried = importBundle(session, { ...emptyBundle(), threads: [sound] });
+    expect(retried.threadsCreated).toBe(1);
+  });
+
+  it('is not exported once a commit has left the session behind', async () => {
+    const { buildBundle, exportMismatch } = await import('../src/bundle.js');
+    const session = await preparedSession();
+    expect(exportMismatch(session, headSha)).toBeNull();
+
+    writeFileSync(join(repoDir, 'a.ts'), 'const a = 1;\nconst b = 2;\nconst c = 3;\nconst d = 4;\n');
+    git(repoDir, ['commit', '-qam', 'more']);
+    const movedHead = git(repoDir, ['rev-parse', 'HEAD']);
+
+    expect(exportMismatch(session, movedHead))
+      .toBe(`The session was anchored at ${headSha.slice(0, 12)}, but HEAD is ${movedHead.slice(0, 12)}. Open the review once so the findings follow the commit, then export.`);
+    expect(buildBundle(session, { prNumber: null, generator: 'test' }).headSha).toBe(headSha);
+  });
+
+  it('cautions when the bundle and the session review different scopes', async () => {
+    const { buildBundle, scopeWarning } = await import('../src/bundle.js');
+    const { findOrCreateSession } = await import('../src/session.js');
+    const session = await preparedSession();
+    const bundle = buildBundle(session, { prNumber: null, generator: 'test' });
+
+    expect(scopeWarning(bundle, session)).toBeNull();
+    expect(scopeWarning(bundle, findOrCreateSession('main')))
+      .toBe('The bundle was exported from a session on "work"; this session is on "main". Findings on files outside this diff will not be shown.');
   });
 
   it('is refused on another commit or another repository', async () => {

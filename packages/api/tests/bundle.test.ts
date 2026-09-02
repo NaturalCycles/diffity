@@ -89,10 +89,10 @@ describe('parseReviewBundle', () => {
       .toContain('newer than this diffity understands');
   });
 
-  it('rejects anything that is not an object', () => {
-    expect(errorOf('a string')).toContain('must be an object');
-    expect(errorOf(null)).toContain('must be an object');
-    expect(errorOf([])).toContain('must be an object');
+  it('rejects anything that is not an object, in words about a bundle', () => {
+    expect(errorOf('a string')).toBe('The bundle must be an object');
+    expect(errorOf(null)).toBe('The bundle must be an object');
+    expect(errorOf([])).toBe('The bundle must be an object');
   });
 
   it('names the missing head', () => {
@@ -125,12 +125,16 @@ describe('parseReviewBundle', () => {
     expect(errorOf(halfBuilt)).toBe('tours[0].status must be one of: building, ready');
   });
 
-  it('refuses a reversed line range in a tour step', () => {
+  it('names where a reversed line range sits', () => {
     const input = validBundle();
     const step = ((input.tours as Record<string, unknown>[])[0].steps as Record<string, unknown>[])[0];
     step.startLine = 5;
     step.endLine = 2;
-    expect(errorOf(input)).toBe('endLine must not be before startLine');
+    expect(errorOf(input)).toBe('tours[0].steps[0].endLine must not be before tours[0].steps[0].startLine');
+
+    const thread = validBundle();
+    (thread.threads as Record<string, unknown>[])[1].endLine = 'nine';
+    expect(errorOf(thread)).toBe('threads[1].endLine must be an integer >= 0');
   });
 
   it('requires the collections to be arrays', () => {

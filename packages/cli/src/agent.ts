@@ -2,7 +2,7 @@ import { existsSync, statSync } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
 import { InvalidArgumentError, type Command } from 'commander';
 import pc from 'picocolors';
-import { isGitRepo, getDiffFiles, resolveRef, getRepoRoot, getHeadHash } from '@diffity/git';
+import { isGitRepo, getDiffFiles, resolveRef, getRepoRoot, getHeadHash, getDirtyPaths } from '@diffity/git';
 import { detectRemote } from '@diffity/github';
 import {
   createThread,
@@ -23,7 +23,7 @@ import {
   type LiveStatusResponse,
   type ReviewBundle,
 } from '@diffity/api';
-import { buildBundle, importBundle, importMismatch } from './bundle.js';
+import { buildBundle, exportMismatch, importBundle, importMismatch, scopeWarning } from './bundle.js';
 import { answerLiveRequest } from './live.js';
 import { clampClientWait, CLIENT_WAIT_CAP_SECONDS } from './live-wait.js';
 import { directiveFor } from './live-intent.js';
@@ -711,13 +711,27 @@ Examples:
     .option('--pr <n>', 'Pull request number to record in the bundle', positiveInteger)
     .action(async (opts: { out?: string; pr?: number }) => {
       const session = await requireSession(agent.opts().session);
+      const mismatch = exportMismatch(session, getHeadHash());
+      if (mismatch) {
+        console.error(pc.red(`Error: ${mismatch}`));
+        process.exit(1);
+      }
+      const dirty = getDirtyPaths();
+      if (dirty.length > 0) {
+        console.error(pc.yellow(`Warning: ${dirty.length} uncommitted change(s) in the working tree; the bundle's lines mean this tree, not the commit alone.`));
+      }
       const bundle = buildBundle(session, {
         prNumber: opts.pr ?? null,
         generator: `diffity ${program.version() ?? ''}`.trim(),
       });
       const json = JSON.stringify(bundle, null, 2);
       if (opts.out) {
-        writeFileSync(opts.out, json + '\n');
+        try {
+          writeFileSync(opts.out, json + '\n');
+        } catch (err) {
+          console.error(pc.red(`Error: Could not write "${opts.out}": ${err instanceof Error ? err.message : err}`));
+          process.exit(1);
+        }
         console.log(pc.green(`Wrote ${bundle.threads.length} thread(s) and ${bundle.tours.length} tour(s) to ${opts.out}`));
         return;
       }
@@ -734,10 +748,17 @@ Examples:
       const session = await requireSession(agent.opts().session);
 
       const mismatch = importMismatch(bundle, getHeadHash(), detectRemote());
-      if (mismatch && !opts.force) {
-        console.error(pc.red(`Error: ${mismatch}`));
-        console.error(pc.dim('Pass --force to import anyway.'));
-        process.exit(1);
+      if (mismatch) {
+        if (!opts.force) {
+          console.error(pc.red(`Error: ${mismatch}`));
+          console.error(pc.dim('Pass --force to import anyway.'));
+          process.exit(1);
+        }
+        console.error(pc.yellow(`Warning: ${mismatch} Importing anyway.`));
+      }
+      const caution = scopeWarning(bundle, session);
+      if (caution) {
+        console.error(pc.yellow(`Warning: ${caution}`));
       }
 
       const outcome = importBundle(session, bundle);
