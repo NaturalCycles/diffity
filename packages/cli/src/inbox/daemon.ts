@@ -1,4 +1,4 @@
-import { createServer, type Server } from 'node:http';
+import { createServer, type Server, type ServerResponse } from 'node:http';
 import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { getViewerLogin, searchReviewRequested, viewPr } from '@diffity/github';
@@ -10,6 +10,9 @@ import { removeWorktree, cloneDir } from './worktree.js';
 import { InboxStore } from './store.js';
 import { runTick, type Forge } from './tick.js';
 import { buildView } from './view.js';
+import { resolveOpen } from './open.js';
+import { openPreparedSession, realOpenSessionDeps, type OpenSessionDeps } from './open-session.js';
+import { inboxPage } from './page.js';
 
 const realForge: Forge = {
   viewerLogin: getViewerLogin,
@@ -32,6 +35,8 @@ export interface DaemonOptions {
   once?: boolean;
   /** The forge to poll; defaults to the real GitHub one. Overridden only by tests. */
   forge?: Forge;
+  /** How a prepared review is brought up as a session; defaults to the real one. Tests override it. */
+  openDeps?: OpenSessionDeps;
 }
 
 /**
@@ -85,7 +90,8 @@ export async function runDaemon(
 
   // Bind the port first: it is the daemon's singleton lock, so a second daemon exits here (via the
   // server's error handler) before it can reclaim and kill the first one's in-flight servers.
-  const server = await bindInboxServer(store, config, log);
+  const openDeps = options.openDeps ?? realOpenSessionDeps(nodePath, entry);
+  const server = await bindInboxServer(store, config, log, openDeps);
   reclaimLeftoverServers(log);
   const timer = setInterval(() => void tick(), config.pollMinutes * 60_000);
   void tick();
@@ -135,13 +141,24 @@ function reclaimLeftoverServers(log: (message: string) => void): void {
   }
 }
 
-export function startInboxServer(store: InboxStore, config: InboxConfig, log: (message: string) => void): Server {
+export function startInboxServer(store: InboxStore, config: InboxConfig, log: (message: string) => void, openDeps: OpenSessionDeps): Server {
   const server = createServer((req, res) => {
     const openBase = `http://localhost:${config.port}`;
-    if (req.method === 'GET' && (req.url === '/api/inbox' || req.url === '/api/inbox/')) {
+    const url = req.url ?? '/';
+
+    if (req.method === 'GET' && (url === '/' || url === '/index.html')) {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(inboxPage());
+      return;
+    }
+    if (req.method === 'GET' && (url === '/api/inbox' || url === '/api/inbox/')) {
       const view = buildView(store, openBase, new Date().toISOString());
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(view));
+      return;
+    }
+    if (req.method === 'GET' && url.startsWith('/open/')) {
+      void handleOpen(store, decodeURIComponent(url.slice('/open/'.length)), openDeps, log, res);
       return;
     }
     res.writeHead(404, { 'Content-Type': 'application/json' });
@@ -159,8 +176,28 @@ export function startInboxServer(store: InboxStore, config: InboxConfig, log: (m
   return server;
 }
 
+/** Brings a prepared review up as a live session and redirects the browser to it. */
+async function handleOpen(store: InboxStore, id: string, openDeps: OpenSessionDeps, log: (message: string) => void, res: ServerResponse): Promise<void> {
+  const resolution = resolveOpen(store, id);
+  if (!resolution.ok) {
+    res.writeHead(resolution.status, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end(resolution.message);
+    return;
+  }
+  try {
+    log(`opening ${id}`);
+    const { url } = await openPreparedSession(resolution.pr.worktreePath!, resolution.pr.bundlePath!, openDeps);
+    res.writeHead(302, { Location: url });
+    res.end();
+  } catch (err) {
+    log(`could not open ${id}: ${err instanceof Error ? err.message : err}`);
+    res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end(`Could not open ${id}: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
 /** Resolves once the port is held; a clash exits through the server's own error handler first. */
-function bindInboxServer(store: InboxStore, config: InboxConfig, log: (message: string) => void): Promise<Server> {
-  const server = startInboxServer(store, config, log);
+function bindInboxServer(store: InboxStore, config: InboxConfig, log: (message: string) => void, openDeps: OpenSessionDeps): Promise<Server> {
+  const server = startInboxServer(store, config, log, openDeps);
   return new Promise(resolve => server.once('listening', () => resolve(server)));
 }
