@@ -28,6 +28,7 @@ import { registerDoctorCommand } from './commands/doctor.js';
 import { registerTreeCommand } from './commands/tree.js';
 import { registerKillCommand } from './commands/kill.js';
 import { registerSkillsCommand } from './commands/skills.js';
+import { registerInboxCommand } from './commands/inbox.js';
 import { SKILLS_HASH } from './generated/skills-hash.js';
 
 const require = createRequire(import.meta.url);
@@ -388,6 +389,7 @@ registerDoctorCommand(program, pkg.version);
 registerTreeCommand(program, pkg.version);
 registerKillCommand(program);
 registerSkillsCommand(program, SKILLS_HASH);
+registerInboxCommand(program);
 registerAgentCommands(program);
 
 await program.parseAsync();
