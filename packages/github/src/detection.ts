@@ -88,7 +88,7 @@ interface PrData {
 // promise is what is remembered, so concurrent first asks share one subprocess.
 let viewerLogin: Promise<string | null> | undefined;
 
-function getViewerLogin(): Promise<string | null> {
+export function getViewerLogin(): Promise<string | null> {
   viewerLogin ??= ghAsync(['api', 'user', '--jq', '.login']).then(
     login => login || null,
     () => null,
