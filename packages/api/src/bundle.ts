@@ -92,7 +92,7 @@ export function parseReviewBundle(value: unknown): ParseResult<ReviewBundle> {
       formatVersion,
       headSha: str(obj.headSha, 'headSha'),
       ref: str(obj.ref, 'ref'),
-      baseSha: optStr(obj.baseSha, 'baseSha') ?? null,
+      baseSha: obj.baseSha == null ? null : str(obj.baseSha, 'baseSha'),
       repo: bundleRepo(obj.repo),
       prNumber: optInt(obj.prNumber, 'prNumber', 1) ?? null,
       createdAt: timestamp(obj.createdAt, 'createdAt'),

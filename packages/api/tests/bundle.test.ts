@@ -147,9 +147,18 @@ describe('parseReviewBundle', () => {
 
     const vague = validBundle();
     ((vague.threads as Record<string, unknown>[])[0].comments as Record<string, unknown>[])[0].createdAt = 'yesterday';
-    expect(errorOf(vague)).toBe('threads[0].comments[0].createdAt must be an ISO 8601 timestamp');
+    expect(errorOf(vague)).toBe('threads[0].comments[0].createdAt must be an ISO 8601 timestamp with a time zone');
 
-    expect(errorOf({ ...validBundle(), createdAt: 'soon' })).toBe('createdAt must be an ISO 8601 timestamp');
+    // Valid ISO 8601, but it would mean a different instant on every machine that reads it.
+    const zoneless = validBundle();
+    ((zoneless.threads as Record<string, unknown>[])[0].comments as Record<string, unknown>[])[0].createdAt = '2026-09-02T12:00:00';
+    expect(errorOf(zoneless)).toBe('threads[0].comments[0].createdAt must be an ISO 8601 timestamp with a time zone');
+
+    expect(errorOf({ ...validBundle(), createdAt: 'soon' })).toBe('createdAt must be an ISO 8601 timestamp with a time zone');
+  });
+
+  it('takes an absent base as unknown, but not an empty one', () => {
+    expect(errorOf({ ...validBundle(), baseSha: '' })).toBe('baseSha must be a non-empty string');
   });
 
   it('requires the collections to be arrays', () => {

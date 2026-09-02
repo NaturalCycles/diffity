@@ -237,11 +237,16 @@ describe('a review bundle', () => {
     expect(scopeWarning(bundle, byAnotherName, other))
       .toBe(`The bundle was exported from a review against ${headSha.slice(0, 12)}; this session reviews against eeeeeeeeeeee. Findings on files outside this diff will not be shown.`);
 
-    // With no base on one side, only the ref names are left to compare.
+    // With no base on one side, only the ref names are left to compare, and each side is named
+    // by what it has.
     const baseless = { ...bundle, baseSha: null };
     expect(scopeWarning(baseless, session, headSha)).toBeNull();
     expect(scopeWarning(baseless, byAnotherName, null))
       .toBe('The bundle was exported from a review on "work"; this session reviews on "main". Findings on files outside this diff will not be shown.');
+    expect(scopeWarning(baseless, byAnotherName, other))
+      .toBe('The bundle was exported from a review on "work"; this session reviews against eeeeeeeeeeee. Findings on files outside this diff will not be shown.');
+    expect(scopeWarning(bundle, byAnotherName, null))
+      .toBe(`The bundle was exported from a review against ${headSha.slice(0, 12)}; this session reviews on "main". Findings on files outside this diff will not be shown.`);
   });
 
   it('is refused on another commit or another repository', async () => {

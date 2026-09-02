@@ -95,12 +95,16 @@ export function list(value: unknown, label: string): unknown[] {
   return value;
 }
 
-/** Normalised to `toISOString()` form, so stored timestamps sort as time regardless of who wrote them. */
+/**
+ * Normalised to `toISOString()` form, so stored timestamps sort as time regardless of who wrote
+ * them. A zone is required: without one, `Date.parse` answers in the reader's zone, and the same
+ * bundle would import with different times on different machines.
+ */
 export function timestamp(value: unknown, label: string): string {
   const raw = str(value, label);
   const ms = Date.parse(raw);
-  if (Number.isNaN(ms)) {
-    throw new FieldError(`${label} must be an ISO 8601 timestamp`);
+  if (Number.isNaN(ms) || !/(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw)) {
+    throw new FieldError(`${label} must be an ISO 8601 timestamp with a time zone`);
   }
   return new Date(ms).toISOString();
 }
