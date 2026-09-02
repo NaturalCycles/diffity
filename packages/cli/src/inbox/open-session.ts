@@ -3,31 +3,21 @@ import { readFileSync, realpathSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { checkInstanceHealth, findInstanceForRepo } from '../registry.js';
 
-export interface OpenSessionDeps {
-  /** Reads the base ref recorded in the bundle, so the session diffs the same change. */
-  baseRefOf(bundlePath: string): string;
-  /** Ensures a diffity server for the worktree at that ref and returns its port. */
-  ensureServer(worktree: string, ref: string): Promise<number>;
-  /** Adds the prepared review's threads and tours to the running session. */
-  importBundle(worktree: string, bundlePath: string): void;
-}
-
 /**
  * Brings a prepared review up as a live diffity session the reviewer can open: a server over the
  * worktree, diffing against the pull request's base, with the prepared findings imported. Returns
  * the URL to send the browser to. Import failure is not fatal — the diff is still worth opening —
  * but it is surfaced to the caller.
  */
-export async function openPreparedSession(worktree: string, bundlePath: string, deps: OpenSessionDeps): Promise<{ url: string; imported: boolean }> {
+export async function openPreparedSession(worktree: string, bundlePath: string, deps: OpenSessionDeps): Promise<OpenedSession> {
   const ref = deps.baseRefOf(bundlePath);
   const port = await deps.ensureServer(worktree, ref);
-  let imported = true;
   try {
     deps.importBundle(worktree, bundlePath);
-  } catch {
-    imported = false;
+  } catch (err) {
+    return { url: `http://localhost:${port}/`, imported: false, importError: err instanceof Error ? err.message : String(err) };
   }
-  return { url: `http://localhost:${port}/`, imported };
+  return { url: `http://localhost:${port}/`, imported: true };
 }
 
 /** The base commit a bundle was built against; the session diffs the worktree against it. */
@@ -54,8 +44,10 @@ export function realOpenSessionDeps(nodePath: string, entry: string): OpenSessio
   };
 }
 
-async function ensureServer(nodePath: string, entry: string, worktree: string, ref: string, waitMs = 30_000): Promise<number> {
+export async function ensureServer(nodePath: string, entry: string, worktree: string, ref: string, waitMs = 30_000): Promise<number> {
   const hash = repoHash(worktree);
+  // A healthy server already on this worktree is reused as-is. The worktree lives under the inbox's
+  // own directory and is only ever served at the pull request's base, so its ref is the one wanted.
   const existing = findInstanceForRepo(hash);
   if (existing && await checkInstanceHealth(existing.port)) {
     return existing.port;
@@ -77,7 +69,7 @@ async function ensureServer(nodePath: string, entry: string, worktree: string, r
 }
 
 /** The server registers under the hash of its resolved repo root, so resolve symlinks before hashing. */
-function repoHash(worktree: string): string {
+export function repoHash(worktree: string): string {
   let root = worktree;
   try { root = realpathSync(worktree); } catch { /* not yet on disk; hash the path as given */ }
   return createHash('sha256').update(root).digest('hex').slice(0, 12);
@@ -85,4 +77,20 @@ function repoHash(worktree: string): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+export interface OpenSessionDeps {
+  /** Reads the base ref recorded in the bundle, so the session diffs the same change. */
+  baseRefOf(bundlePath: string): string;
+  /** Ensures a diffity server for the worktree at that ref and returns its port. */
+  ensureServer(worktree: string, ref: string): Promise<number>;
+  /** Adds the prepared review's threads and tours to the running session. */
+  importBundle(worktree: string, bundlePath: string): void;
+}
+
+export interface OpenedSession {
+  url: string;
+  imported: boolean;
+  /** Why the import did not happen, when it didn't; the diff is still opened. */
+  importError?: string;
 }

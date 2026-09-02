@@ -143,26 +143,60 @@ function reclaimLeftoverServers(log: (message: string) => void): void {
 
 export function startInboxServer(store: InboxStore, config: InboxConfig, log: (message: string) => void, openDeps: OpenSessionDeps): Server {
   const server = createServer((req, res) => {
-    const openBase = `http://localhost:${config.port}`;
-    const url = req.url ?? '/';
+    // The whole handler is guarded: an unhandled throw here (a malformed percent-escape, say) would
+    // otherwise have no catch and take the long-running daemon down with it.
+    try {
+      // Loopback binding is not enough on its own: a page on another site can rebind its own
+      // hostname to 127.0.0.1, so a stranger's Host header must not reach the reviewer's PR list.
+      // Judged against the connection's own port, which is the port actually bound.
+      if (!isLocalHost(req.headers.host, req.socket.localPort)) {
+        res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('forbidden');
+        return;
+      }
 
-    if (req.method === 'GET' && (url === '/' || url === '/index.html')) {
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      res.end(inboxPage());
-      return;
+      const openBase = `http://localhost:${config.port}`;
+      const url = req.url ?? '/';
+
+      if (req.method === 'GET' && (url === '/' || url === '/index.html')) {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(inboxPage());
+        return;
+      }
+      if (req.method === 'GET' && (url === '/api/inbox' || url === '/api/inbox/')) {
+        const view = buildView(store, openBase, new Date().toISOString());
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(view));
+        return;
+      }
+      if (req.method === 'GET' && url.startsWith('/open/')) {
+        // A state-changing GET, so a cross-site fetch — a drive-by trying to spawn a session — is
+        // refused; a click from the inbox page itself is same-origin, and a direct navigation none.
+        if (req.headers['sec-fetch-site'] === 'cross-site') {
+          res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('forbidden');
+          return;
+        }
+        let id: string;
+        try {
+          id = decodeURIComponent(url.slice('/open/'.length));
+        } catch {
+          res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('bad request');
+          return;
+        }
+        void handleOpen(store, id, openDeps, log, res).catch(err => log(`open failed: ${err instanceof Error ? err.message : err}`));
+        return;
+      }
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'not found' }));
+    } catch (err) {
+      log(`request handler error: ${err instanceof Error ? err.message : err}`);
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+      }
+      res.end('internal error');
     }
-    if (req.method === 'GET' && (url === '/api/inbox' || url === '/api/inbox/')) {
-      const view = buildView(store, openBase, new Date().toISOString());
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(view));
-      return;
-    }
-    if (req.method === 'GET' && url.startsWith('/open/')) {
-      void handleOpen(store, decodeURIComponent(url.slice('/open/'.length)), openDeps, log, res);
-      return;
-    }
-    res.writeHead(404, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'not found' }));
   });
   server.on('error', err => {
     const code = (err as NodeJS.ErrnoException).code;
@@ -186,7 +220,10 @@ async function handleOpen(store: InboxStore, id: string, openDeps: OpenSessionDe
   }
   try {
     log(`opening ${id}`);
-    const { url } = await openPreparedSession(resolution.pr.worktreePath!, resolution.pr.bundlePath!, openDeps);
+    const { url, imported, importError } = await openPreparedSession(resolution.pr.worktreePath!, resolution.pr.bundlePath!, openDeps);
+    if (!imported) {
+      log(`opened ${id} but its findings did not import: ${importError}`);
+    }
     res.writeHead(302, { Location: url });
     res.end();
   } catch (err) {
@@ -194,6 +231,11 @@ async function handleOpen(store: InboxStore, id: string, openDeps: OpenSessionDe
     res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end(`Could not open ${id}: ${err instanceof Error ? err.message : err}`);
   }
+}
+
+/** A request whose Host is this loopback server's own address (localhost or 127.0.0.1, right port). */
+function isLocalHost(host: string | undefined, port: number | undefined): boolean {
+  return port != null && (host === `localhost:${port}` || host === `127.0.0.1:${port}`);
 }
 
 /** Resolves once the port is held; a clash exits through the server's own error handler first. */
