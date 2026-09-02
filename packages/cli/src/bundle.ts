@@ -61,7 +61,7 @@ export function buildBundle(session: Session, origin: BundleOrigin): ReviewBundl
 }
 
 /** Sessions without a diff base — the tree browser, an unborn ref — carry no base. */
-function baseShaOf(ref: string): string | null {
+export function baseShaOf(ref: string): string | null {
   try {
     return getCommitHash(resolveBaseRef(ref));
   } catch {
@@ -101,13 +101,20 @@ function sameRepo(a: GitHubRemote, b: GitHubRemote): boolean {
 
 /**
  * A caution worth printing before an import that will succeed: a thread on a file outside the
- * session's diff is stored but never shown, and the two refs decide which files that is.
+ * session's diff is stored but never shown, and the base decides which files that is. Compared
+ * as commits where both are known — a pull request session's ref is its base branch's tip, which
+ * moves with every merge while the diff stays put — and by ref name only when one side has none.
  */
-export function scopeWarning(bundle: ReviewBundle, session: Session): string | null {
-  if (bundle.ref === session.ref) {
+export function scopeWarning(bundle: ReviewBundle, session: Session, sessionBaseSha: string | null): string | null {
+  const sameScope = bundle.baseSha && sessionBaseSha
+    ? bundle.baseSha === sessionBaseSha
+    : bundle.ref === session.ref;
+  if (sameScope) {
     return null;
   }
-  return `The bundle was exported from a session on "${bundle.ref}"; this session is on "${session.ref}". Findings on files outside this diff will not be shown.`;
+  const exported = bundle.baseSha ? `against ${bundle.baseSha.slice(0, 12)}` : `on "${bundle.ref}"`;
+  const here = sessionBaseSha ? `against ${sessionBaseSha.slice(0, 12)}` : `on "${session.ref}"`;
+  return `The bundle was exported from a review ${exported}; this session reviews ${here}. Findings on files outside this diff will not be shown.`;
 }
 
 export interface ImportOutcome {
@@ -120,18 +127,28 @@ export interface ImportOutcome {
 /**
  * Adds the bundle's threads and tours to the session, skipping what is already there: a thread at
  * the same position opening with the same comment, a tour on the same topic. Importing twice is
- * therefore the same as importing once. All or nothing, so a failed import can be retried without
- * half a thread — its opener but not its replies — blocking the retry as "already present".
+ * therefore the same as importing once. All or nothing: a failure midway would otherwise leave a
+ * thread row without its comments, or with its opener but not its replies — the first a state
+ * nothing else can produce, the second one the retry would skip as "already present".
+ *
+ * The write lock is taken up front: the session's server polls this database every few seconds,
+ * and a deferred transaction that had already read would lose to that poll at its first write.
  */
 export function importBundle(session: Session, bundle: ReviewBundle): ImportOutcome {
   const db = getDb();
-  db.exec('BEGIN');
+  db.exec('BEGIN IMMEDIATE');
   try {
     const outcome = addBundle(session, bundle);
     db.exec('COMMIT');
     return outcome;
   } catch (err) {
-    db.exec('ROLLBACK');
+    // SQLite may already have rolled back on its own (a full disk, an I/O error); the original
+    // error is the one worth surfacing, not "no transaction is active".
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      // nothing left to undo
+    }
     throw err;
   }
 }

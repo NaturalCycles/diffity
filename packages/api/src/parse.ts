@@ -95,7 +95,16 @@ export function list(value: unknown, label: string): unknown[] {
   return value;
 }
 
-/** `label` prefixes the field names when the range sits inside a larger structure. */
+/** Normalised to `toISOString()` form, so stored timestamps sort as time regardless of who wrote them. */
+export function timestamp(value: unknown, label: string): string {
+  const raw = str(value, label);
+  const ms = Date.parse(raw);
+  if (Number.isNaN(ms)) {
+    throw new FieldError(`${label} must be an ISO 8601 timestamp`);
+  }
+  return new Date(ms).toISOString();
+}
+
 export function lineRange(obj: Record<string, unknown>, min: number, label = ''): { startLine: number; endLine: number } {
   const prefix = label ? `${label}.` : '';
   const startLine = int(obj.startLine, `${prefix}startLine`, min);

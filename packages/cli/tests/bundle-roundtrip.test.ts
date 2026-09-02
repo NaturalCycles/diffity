@@ -199,7 +199,7 @@ describe('a review bundle', () => {
     // Past the parser on purpose: a body the database refuses, as a stand-in for any mid-import failure.
     const broken = { ...sound, startLine: 3, endLine: 3, comments: [{ ...sound.comments[0], body: null as unknown as string }] };
 
-    expect(() => importBundle(session, { ...emptyBundle(), threads: [sound, broken] })).toThrow();
+    expect(() => importBundle(session, { ...emptyBundle(), threads: [sound, broken] })).toThrow(/NOT NULL/);
     expect(getThreadsForSession(session.id)).toHaveLength(0);
 
     const retried = importBundle(session, { ...emptyBundle(), threads: [sound] });
@@ -220,15 +220,28 @@ describe('a review bundle', () => {
     expect(buildBundle(session, { prNumber: null, generator: 'test' }).headSha).toBe(headSha);
   });
 
-  it('cautions when the bundle and the session review different scopes', async () => {
-    const { buildBundle, scopeWarning } = await import('../src/bundle.js');
+  it('cautions when the bundle and the session review against different bases, judged as commits', async () => {
+    const { buildBundle, scopeWarning, baseShaOf } = await import('../src/bundle.js');
     const { findOrCreateSession } = await import('../src/session.js');
     const session = await preparedSession();
     const bundle = buildBundle(session, { prNumber: null, generator: 'test' });
+    expect(bundle.baseSha).toBe(headSha);
 
-    expect(scopeWarning(bundle, session)).toBeNull();
-    expect(scopeWarning(bundle, findOrCreateSession('main')))
-      .toBe('The bundle was exported from a session on "work"; this session is on "main". Findings on files outside this diff will not be shown.');
+    // Another name for the same base is the same review: a pull request's base ref is the branch
+    // tip, which moves with every merge while the diff does not.
+    const byAnotherName = findOrCreateSession('main');
+    expect(byAnotherName.ref).not.toBe(session.ref);
+    expect(scopeWarning(bundle, byAnotherName, baseShaOf(byAnotherName.ref))).toBeNull();
+
+    const other = 'e'.repeat(40);
+    expect(scopeWarning(bundle, byAnotherName, other))
+      .toBe(`The bundle was exported from a review against ${headSha.slice(0, 12)}; this session reviews against eeeeeeeeeeee. Findings on files outside this diff will not be shown.`);
+
+    // With no base on one side, only the ref names are left to compare.
+    const baseless = { ...bundle, baseSha: null };
+    expect(scopeWarning(baseless, session, headSha)).toBeNull();
+    expect(scopeWarning(baseless, byAnotherName, null))
+      .toBe('The bundle was exported from a review on "work"; this session reviews on "main". Findings on files outside this diff will not be shown.');
   });
 
   it('is refused on another commit or another repository', async () => {

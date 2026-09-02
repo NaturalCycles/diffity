@@ -21,6 +21,7 @@ import {
   parseWith,
   record,
   str,
+  timestamp,
   type ParseResult,
 } from './parse.js';
 
@@ -94,7 +95,7 @@ export function parseReviewBundle(value: unknown): ParseResult<ReviewBundle> {
       baseSha: optStr(obj.baseSha, 'baseSha') ?? null,
       repo: bundleRepo(obj.repo),
       prNumber: optInt(obj.prNumber, 'prNumber', 1) ?? null,
-      createdAt: str(obj.createdAt, 'createdAt'),
+      createdAt: timestamp(obj.createdAt, 'createdAt'),
       generator: str(obj.generator, 'generator'),
       threads: list(obj.threads, 'threads').map((item, index) => bundleThread(item, `threads[${index}]`)),
       tours: list(obj.tours, 'tours').map((item, index) => bundleTour(item, `tours[${index}]`)),
@@ -137,7 +138,7 @@ function bundleComment(value: unknown, label: string): BundleComment {
     author: author(obj.author, `${label}.author`),
     body: str(obj.body, `${label}.body`),
     kind: member(obj.kind, `${label}.kind`, COMMENT_KINDS),
-    createdAt: str(obj.createdAt, `${label}.createdAt`),
+    createdAt: timestamp(obj.createdAt, `${label}.createdAt`),
   };
 }
 

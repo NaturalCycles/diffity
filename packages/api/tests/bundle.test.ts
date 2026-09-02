@@ -137,6 +137,21 @@ describe('parseReviewBundle', () => {
     expect(errorOf(thread)).toBe('threads[1].endLine must be an integer >= 0');
   });
 
+  it('normalises timestamps to one form and refuses what is not a time', () => {
+    const spaced = validBundle();
+    ((spaced.threads as Record<string, unknown>[])[0].comments as Record<string, unknown>[])[0].createdAt = '2026-09-02 12:00:00Z';
+    const result = parseReviewBundle(spaced);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.threads[0].comments[0].createdAt).toBe('2026-09-02T12:00:00.000Z');
+
+    const vague = validBundle();
+    ((vague.threads as Record<string, unknown>[])[0].comments as Record<string, unknown>[])[0].createdAt = 'yesterday';
+    expect(errorOf(vague)).toBe('threads[0].comments[0].createdAt must be an ISO 8601 timestamp');
+
+    expect(errorOf({ ...validBundle(), createdAt: 'soon' })).toBe('createdAt must be an ISO 8601 timestamp');
+  });
+
   it('requires the collections to be arrays', () => {
     expect(errorOf({ ...validBundle(), threads: 'none' })).toBe('threads must be an array');
     expect(errorOf({ ...validBundle(), tours: {} })).toBe('tours must be an array');

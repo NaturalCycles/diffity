@@ -23,7 +23,7 @@ import {
   type LiveStatusResponse,
   type ReviewBundle,
 } from '@diffity/api';
-import { buildBundle, exportMismatch, importBundle, importMismatch, scopeWarning } from './bundle.js';
+import { baseShaOf, buildBundle, exportMismatch, importBundle, importMismatch, scopeWarning } from './bundle.js';
 import { answerLiveRequest } from './live.js';
 import { clampClientWait, CLIENT_WAIT_CAP_SECONDS } from './live-wait.js';
 import { directiveFor } from './live-intent.js';
@@ -756,7 +756,7 @@ Examples:
         }
         console.error(pc.yellow(`Warning: ${mismatch} Importing anyway.`));
       }
-      const caution = scopeWarning(bundle, session);
+      const caution = scopeWarning(bundle, session, baseShaOf(session.ref));
       if (caution) {
         console.error(pc.yellow(`Warning: ${caution}`));
       }
