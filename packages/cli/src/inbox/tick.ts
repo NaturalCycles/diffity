@@ -97,7 +97,7 @@ async function prepareOne(store: InboxStore, snapshot: PrSnapshot, deps: TickDep
       deps.log(`skipped ${id}: ${result.reason}`);
       return;
     case 'failed':
-      store.setStatus(id, 'failed', result.reason);
+      store.failAttempt(id, result.reason);
       store.setPaths(id, { worktreePath: result.worktree ?? null, logPath: result.logPath ?? null });
       deps.log(`failed to prepare ${id}: ${result.reason}`);
       return;

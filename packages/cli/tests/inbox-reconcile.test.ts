@@ -15,7 +15,7 @@ function existing(over: Partial<InboxPr> = {}): InboxPr {
   return {
     id: 'o/r#1', owner: 'o', repo: 'r', number: 1, title: 'A change', url: 'https://github.com/o/r/pull/1',
     author: 'alice', isDraft: false, headSha: 'aaa', baseRef: 'main', additions: 10, deletions: 2, changedFiles: 3,
-    requested: true, status: 'prepared', statusReason: null, preparedHeadSha: 'aaa', preparedAt: '2026-09-02T09:00:00Z',
+    requested: true, status: 'prepared', statusReason: null, attempts: 0, preparedHeadSha: 'aaa', preparedAt: '2026-09-02T09:00:00Z',
     bundlePath: '/b.json', worktreePath: '/wt', logPath: '/l.log', firstSeenAt: 'x', lastSeenAt: 'y', ...over,
   };
 }
@@ -71,7 +71,19 @@ describe('reconcile', () => {
     expect(reconcile({ existing: existing(), snapshot: null, requested: true, viewerLogin: 'me' })).toBeNull();
   });
 
-  it('does not re-queue while preparation is already under way', () => {
-    expect(reconcile({ existing: existing({ status: 'preparing', preparedHeadSha: null }), snapshot: snapshot(), requested: true, viewerLogin: 'me' })).toBeNull();
+  it('re-queues a preparation a previous run left unfinished', () => {
+    // preparing/queued at reconcile time can only be a crash or Ctrl-C mid-run; pick it up again.
+    expect(reconcile({ existing: existing({ status: 'preparing', preparedHeadSha: null }), snapshot: snapshot(), requested: true, viewerLogin: 'me' }))
+      .toEqual({ status: 'queued', reason: null, prepare: true });
+    expect(reconcile({ existing: existing({ status: 'queued', preparedHeadSha: null }), snapshot: snapshot(), requested: true, viewerLogin: 'me' }))
+      .toEqual({ status: 'queued', reason: null, prepare: true });
+  });
+
+  it('retries a failed preparation until the attempt cap, then leaves it', () => {
+    const failing = existing({ status: 'failed', preparedHeadSha: null, headSha: 'aaa' });
+    expect(reconcile({ existing: failing, snapshot: snapshot({ headSha: 'aaa' }), requested: true, viewerLogin: 'me' })!.prepare).toBe(true);
+    expect(reconcile({ existing: { ...failing, attempts: 3 }, snapshot: snapshot({ headSha: 'aaa' }), requested: true, viewerLogin: 'me' })).toBeNull();
+    // A new head resets the budget.
+    expect(reconcile({ existing: { ...failing, attempts: 3 }, snapshot: snapshot({ headSha: 'ddd' }), requested: true, viewerLogin: 'me' })!.prepare).toBe(true);
   });
 });

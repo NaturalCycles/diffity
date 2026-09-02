@@ -1,6 +1,9 @@
 import type { PrSnapshot } from '@diffity/github';
 import type { InboxPr, InboxStatus } from './store.js';
 
+/** How many times preparation is retried at one head before the pull request is left as failed. */
+export const MAX_PREPARE_ATTEMPTS = 3;
+
 /** What one poll decided about one pull request, for the daemon to carry out. */
 export interface Transition {
   status: InboxStatus;
@@ -36,30 +39,28 @@ export function reconcile(input: ReconcileInput): Transition | null {
   }
 
   if (!requested) {
-    if (snapshot.state === 'MERGED') return retire('done', 'merged');
-    if (snapshot.state === 'CLOSED') return retire('done', 'closed');
+    if (snapshot.state === 'MERGED') return settled('done', 'merged');
+    if (snapshot.state === 'CLOSED') return settled('done', 'closed');
     // Open, but no longer in the review-requested search: the request was withdrawn or already met.
-    return retire('hidden', 'review no longer requested');
+    return settled('hidden', 'review no longer requested');
   }
 
   if (snapshot.isDraft) {
-    return settle('draft', 'draft');
+    return settled('draft', 'draft');
   }
   if (snapshot.isBot) {
-    return settle('skipped', `bot author (${snapshot.author})`);
+    return settled('skipped', `bot author (${snapshot.author})`);
   }
   if (viewerLogin && snapshot.author && snapshot.author === viewerLogin) {
-    return settle('skipped', 'your own pull request');
+    return settled('skipped', 'your own pull request');
   }
 
-  // A prepared (or being-prepared, or already-skipped-by-the-agent) review for the current head is
-  // left alone; a new commit makes it stale and worth redoing.
-  if (existing && existing.preparedHeadSha === snapshot.headSha
-    && (existing.status === 'prepared' || existing.status === 'preparing')) {
-    return null;
-  }
-  if (existing && existing.status === 'prepared' && existing.preparedHeadSha !== snapshot.headSha) {
-    return { status: 'stale', reason: 'the pull request has new commits', prepare: true };
+  // A review already prepared for the current head is left alone; a new commit makes it stale and
+  // worth redoing.
+  if (existing && existing.status === 'prepared') {
+    return existing.preparedHeadSha === snapshot.headSha
+      ? null
+      : { status: 'stale', reason: 'the pull request has new commits', prepare: true };
   }
 
   // A settled skip stays settled until its head moves; re-running the filter on every poll would
@@ -67,17 +68,21 @@ export function reconcile(input: ReconcileInput): Transition | null {
   if (existing && existing.status === 'skipped' && existing.headSha === snapshot.headSha) {
     return null;
   }
-  if (existing && (existing.status === 'preparing' || existing.status === 'queued')) {
+
+  // Failures are retried, but not without bound: a PR whose preparation keeps failing at one head
+  // stops being retried after a few attempts, rather than spending an agent every poll forever.
+  if (existing && existing.status === 'failed' && existing.headSha === snapshot.headSha
+    && existing.attempts >= MAX_PREPARE_ATTEMPTS) {
     return null;
   }
 
+  // `queued`, `preparing` and `stale` are in-flight states: at reconcile time — one tick reconciles
+  // before it prepares, and the tick is non-reentrant — they can only be a run the previous process
+  // did not finish (a Ctrl-C, a crash). Re-queue it rather than leave it stuck forever.
   return { status: 'queued', reason: null, prepare: true };
 }
 
-function settle(status: InboxStatus, reason: string): Transition {
-  return { status, reason, prepare: false };
-}
-
-function retire(status: InboxStatus, reason: string): Transition {
+/** A resolved status that needs no preparation — a skip, a draft, or a retirement. */
+function settled(status: InboxStatus, reason: string): Transition {
   return { status, reason, prepare: false };
 }

@@ -36,19 +36,23 @@ export function registerInboxCommand(program: Command): void {
       const entry = process.argv[1];
       const log = (message: string) => console.log(`${pc.dim(new Date().toLocaleTimeString())} ${message}`);
 
-      const handle = await runDaemon(store, config, process.execPath, entry, log);
-
       if (opts.once) {
-        await handle.stop();
+        await runDaemon(store, config, process.execPath, entry, log, { once: true });
         return;
       }
 
-      console.log(pc.green(`📋 diffity inbox on http://localhost:${handle.port} — polling every ${config.pollMinutes} min. Ctrl-C to stop.`));
+      // Armed before the first tick, which may be the longest one: Ctrl-C during it should stop
+      // cleanly rather than hard-exit and orphan a preparation.
+      let handleStop: (() => Promise<void>) | null = null;
       const shutdown = () => {
-        handle.stop().then(() => process.exit(0));
+        (handleStop ? handleStop() : Promise.resolve()).then(() => process.exit(0));
       };
       process.on('SIGINT', shutdown);
       process.on('SIGTERM', shutdown);
+
+      console.log(pc.green(`📋 diffity inbox on http://localhost:${config.port} — polling every ${config.pollMinutes} min. Ctrl-C to stop.`));
+      const handle = await runDaemon(store, config, process.execPath, entry, log);
+      handleStop = handle.stop;
     });
 
   inbox

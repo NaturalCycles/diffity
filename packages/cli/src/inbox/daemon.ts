@@ -1,27 +1,41 @@
 import { createServer, type Server } from 'node:http';
+import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import { getViewerLogin, searchReviewRequested, viewPr } from '@diffity/github';
 import type { InboxConfig } from './config.js';
+import { inboxDir } from './paths.js';
 import { preparePr, type PrepareDeps } from './prepare.js';
-import { realPrepareDeps } from './runtime.js';
+import { realPrepareDeps, type Inflight } from './runtime.js';
 import { removeWorktree, cloneDir } from './worktree.js';
 import { InboxStore } from './store.js';
 import { runTick, type Forge } from './tick.js';
 import { buildView } from './view.js';
 
-export const realForge: Forge = {
+const realForge: Forge = {
   viewerLogin: getViewerLogin,
   searchReviewRequested,
   viewPr,
 };
 
+/** Each pull request's diffity data lives apart, so a prepared session never mixes with another. */
+export function inboxDataDir(worktree: string): string {
+  return join(inboxDir(), 'data', basename(worktree));
+}
+
 export interface DaemonHandle {
-  port: number;
+  port: number | null;
   stop(): Promise<void>;
 }
 
+export interface DaemonOptions {
+  /** A single pass then stop, with no HTTP server bound. */
+  once?: boolean;
+}
+
 /**
- * Runs the inbox: a poll every `pollMinutes` and a small JSON server the surface reads. The first
- * tick runs at once so a fresh start is not blank for five minutes.
+ * Runs the inbox: a poll every `pollMinutes` and (unless `once`) a small JSON server the surface
+ * reads. Returns before the first tick so the caller can arm its signal handlers first; the first
+ * tick is kicked off immediately after, so a fresh start is not blank for a whole interval.
  */
 export async function runDaemon(
   store: InboxStore,
@@ -29,8 +43,12 @@ export async function runDaemon(
   nodePath: string,
   entry: string,
   log: (message: string) => void,
+  options: DaemonOptions = {},
 ): Promise<DaemonHandle> {
-  const prepareDeps: PrepareDeps = realPrepareDeps(nodePath, entry);
+  reclaimLeftoverServers(log);
+
+  const inflight: Inflight = {};
+  const prepareDeps: PrepareDeps = realPrepareDeps(nodePath, entry, inboxDataDir, inflight);
   const deps = {
     forge: realForge,
     prepare: (snapshot: Parameters<typeof preparePr>[0]) => preparePr(snapshot, config, prepareDeps),
@@ -39,9 +57,10 @@ export async function runDaemon(
     now: () => new Date().toISOString(),
   };
 
+  let stopping = false;
   let ticking = false;
   const tick = async () => {
-    if (ticking) {
+    if (ticking || stopping) {
       return;
     }
     ticking = true;
@@ -54,21 +73,62 @@ export async function runDaemon(
     }
   };
 
-  const server = startInboxServer(store, config);
-  await tick();
-  const timer = setInterval(tick, config.pollMinutes * 60_000);
+  if (options.once) {
+    await tick();
+    store.close();
+    return { port: null, stop: () => Promise.resolve() };
+  }
+
+  const server = startInboxServer(store, config, log);
+  const timer = setInterval(() => void tick(), config.pollMinutes * 60_000);
+  void tick();
 
   return {
     port: config.port,
     stop: () => new Promise<void>(resolve => {
+      stopping = true;
       clearInterval(timer);
-      server.close(() => resolve());
-      store.close();
+      // Kill whatever a prepare has running right now — the detached diffity server and the agent
+      // and its group — so nothing outlives the daemon.
+      inflight.agentKill?.();
+      inflight.serverStop?.();
+      server.close(() => {
+        store.close();
+        resolve();
+      });
     }),
   };
 }
 
-export function startInboxServer(store: InboxStore, config: InboxConfig): Server {
+/**
+ * On startup, kill any diffity servers a previous run left registered under the inbox's data
+ * directories — a crash mid-prepare cannot stop them itself — and clear those registries.
+ */
+function reclaimLeftoverServers(log: (message: string) => void): void {
+  const dataRoot = join(inboxDir(), 'data');
+  if (!existsSync(dataRoot)) {
+    return;
+  }
+  let killed = 0;
+  for (const name of readdirSync(dataRoot)) {
+    const registry = join(dataRoot, name, 'registry.json');
+    if (!existsSync(registry)) {
+      continue;
+    }
+    try {
+      const rows = JSON.parse(readFileSync(registry, 'utf-8')) as { pid: number }[];
+      for (const row of rows) {
+        try { process.kill(row.pid, 'SIGTERM'); killed++; } catch { /* already gone */ }
+      }
+    } catch { /* unreadable registry, nothing to reclaim */ }
+    rmSync(registry, { force: true });
+  }
+  if (killed > 0) {
+    log(`reclaimed ${killed} diffity server(s) left by a previous run`);
+  }
+}
+
+export function startInboxServer(store: InboxStore, config: InboxConfig, log: (message: string) => void): Server {
   const server = createServer((req, res) => {
     const openBase = `http://localhost:${config.port}`;
     if (req.method === 'GET' && (req.url === '/api/inbox' || req.url === '/api/inbox/')) {
@@ -79,6 +139,13 @@ export function startInboxServer(store: InboxStore, config: InboxConfig): Server
     }
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'not found' }));
+  });
+  server.on('error', err => {
+    const code = (err as NodeJS.ErrnoException).code;
+    log(code === 'EADDRINUSE'
+      ? `port ${config.port} is already in use — is another diffity inbox running? Set a different "port" in the config.`
+      : `inbox server error: ${err.message}`);
+    process.exit(1);
   });
   // Loopback only: the inbox surfaces the reviewer's pull requests and opens their local sessions.
   server.listen(config.port, '127.0.0.1');

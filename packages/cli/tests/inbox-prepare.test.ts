@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { preparePr, type PrepareDeps } from '../src/inbox/prepare.js';
+import { worktreePath } from '../src/inbox/worktree.js';
 import { startInboxServer } from '../src/inbox/daemon.js';
 import { InboxStore } from '../src/inbox/store.js';
 import { buildView } from '../src/inbox/view.js';
@@ -40,7 +41,8 @@ beforeEach(() => {
   worktreesDir = join(root, 'inbox', 'worktrees');
 
   // An upstream the base clone fetches from, carrying the pull request's head under refs/pull/4/head.
-  const upstream = join(root, 'upstream');
+  // Pathed as .../o/demo so the clone's origin url passes the repository-identity check.
+  const upstream = join(root, 'remotes', 'o', 'demo');
   execFileSync('git', ['init', '-b', 'main', upstream], { stdio: 'pipe' });
   git(upstream, ['config', 'user.email', 't@t']);
   git(upstream, ['config', 'user.name', 'T']);
@@ -90,6 +92,7 @@ describe('preparePr', () => {
   });
 
   it('removes the worktree when the agent skips', async () => {
+    const dest = worktreePath(worktreesDir, snapshot());
     const result = await preparePr(snapshot(), config(), deps({
       runAgent: () => Promise.resolve({ stdout: 'SKIP: payments PR\n', timedOut: false }),
     }));
@@ -97,7 +100,7 @@ describe('preparePr', () => {
     expect(result.kind).toBe('skipped');
     if (result.kind !== 'skipped') return;
     expect(result.reason).toBe('payments PR');
-    expect(existsSync(result.worktree)).toBe(false);
+    expect(existsSync(dest)).toBe(false);
   });
 
   it('fails cleanly when there is no local clone', async () => {
@@ -109,12 +112,14 @@ describe('preparePr', () => {
   });
 
   it('fails when the agent times out, without a leftover worktree', async () => {
+    const dest = worktreePath(worktreesDir, snapshot());
     const result = await preparePr(snapshot(), config(), deps({
       runAgent: () => Promise.resolve({ stdout: '', timedOut: true }),
     }));
     expect(result.kind).toBe('failed');
     if (result.kind !== 'failed') return;
     expect(result.reason).toContain('did not finish');
+    expect(existsSync(dest)).toBe(false);
   });
 
   it('always stops the diffity server, even on a failure', async () => {
@@ -132,7 +137,7 @@ describe('the inbox JSON server', () => {
     const store = new InboxStore(':memory:');
     store.observe({ ...snapshot(), headSha: 'aaa' }, true, 'now');
     store.markPrepared('o/demo#4', { headSha: 'aaa', bundlePath: '/b.json', worktreePath: '/wt', logPath: '/l', at: 'now' });
-    const server = startInboxServer(store, { ...config(), port: 0 });
+    const server = startInboxServer(store, { ...config(), port: 0 }, () => {});
     await new Promise(resolve => server.on('listening', resolve));
     const { port } = server.address() as { port: number };
 

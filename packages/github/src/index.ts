@@ -7,5 +7,5 @@ export { commentableLines, isAlreadyCommented } from './comment-targets.js';
 export { matchCreatedComments } from './comment-ids.js';
 export type { CreatedComment, SentComment } from './comment-ids.js';
 export { isGitHubPrUrl, parseGitHubPrUrl, checkoutPr, getPrBase, parsePrBase } from './pr-url.js';
-export { searchReviewRequested, viewPr, parseReviewRequested, parsePrSnapshot, PR_STATES } from './inbox.js';
+export { searchReviewRequested, viewPr, parseReviewRequested, parsePrSnapshot } from './inbox.js';
 export type { PrRef, PrSnapshot, PrState } from './inbox.js';

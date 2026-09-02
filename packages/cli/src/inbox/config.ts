@@ -15,7 +15,12 @@ export interface InboxConfig {
    * preparing agent verbatim. Empty means everything asked of the reviewer is prepared.
    */
   filter: string;
-  /** The agent, as argv; it runs in the worktree and reads its prompt on stdin. */
+  /**
+   * The agent, as argv; it runs in the pull request's worktree and reads its prompt on stdin. That
+   * worktree is code the pull request's author controls, so the daemon runs the agent without the
+   * forge's credentials in its environment — but the command itself still executes attacker-chosen
+   * repository scripts, so only point it at an agent you would run on an untrusted checkout.
+   */
   prepare: string[];
   prepareTimeoutMinutes: number;
 }
@@ -26,7 +31,12 @@ export const DEFAULT_INBOX_CONFIG: InboxConfig = {
   reposDir: '~/repos',
   worktreesDir: '~/.diffity/inbox/worktrees',
   filter: '',
-  prepare: ['claude', '-p', '--dangerously-skip-permissions'],
+  // Defence in depth on top of the stripped credentials: the agent is also denied the gh commands
+  // that could reach the pull request even if it tried.
+  prepare: [
+    'claude', '-p', '--dangerously-skip-permissions',
+    '--disallowedTools', 'Bash(gh pr review:*)', 'Bash(gh pr comment:*)', 'Bash(gh pr merge:*)', 'Bash(gh api:*)',
+  ],
   prepareTimeoutMinutes: 30,
 };
 
@@ -61,7 +71,7 @@ export function parseInboxConfig(raw: unknown, source = 'inbox config'): InboxCo
     config.pollMinutes = positive(obj.pollMinutes, 'pollMinutes', source);
   }
   if (obj.port !== undefined) {
-    config.port = positive(obj.port, 'port', source);
+    config.port = port(obj.port, source);
   }
   if (obj.reposDir !== undefined) {
     config.reposDir = text(obj.reposDir, 'reposDir', source);
@@ -90,6 +100,13 @@ export function parseInboxConfig(raw: unknown, source = 'inbox config'): InboxCo
 function positive(value: unknown, key: string, source: string): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
     throw new Error(`${source}: ${key} must be a positive number`);
+  }
+  return value;
+}
+
+function port(value: unknown, source: string): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 65535) {
+    throw new Error(`${source}: port must be an integer between 1 and 65535`);
   }
   return value;
 }

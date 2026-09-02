@@ -84,7 +84,7 @@ describe('runTick', () => {
 
   it('records a skip verdict without preparing again next tick', async () => {
     forge.set(snapshot());
-    prepareResult = () => ({ kind: 'skipped', reason: 'payments PR', worktree: '/wt/1', logPath: '/l/1.log' });
+    prepareResult = () => ({ kind: 'skipped', reason: 'payments PR', logPath: '/l/1.log' });
     await runTick(store, deps());
     expect(store.get('o/r#1')!.status).toBe('skipped');
     expect(store.get('o/r#1')!.statusReason).toBe('payments PR');
@@ -131,14 +131,43 @@ describe('runTick', () => {
     expect(view.ready[0].openUrl).toBe('http://localhost:5390/open/o%2Fr%232');
   });
 
-  it('holds a failed preparation with its reason and log', async () => {
+  it('holds a failed preparation with its reason and log, and stops after the attempt cap', async () => {
     forge.set(snapshot());
     prepareResult = () => ({ kind: 'failed', reason: 'no local clone', worktree: null, logPath: '/l/1.log' });
-    await runTick(store, deps());
+
+    for (let i = 0; i < 5; i++) {
+      prepared = [];
+      await runTick(store, deps());
+    }
 
     const pr = store.get('o/r#1')!;
     expect(pr.status).toBe('failed');
     expect(pr.statusReason).toBe('no local clone');
     expect(pr.logPath).toBe('/l/1.log');
+    // Three attempts at the head, then it stops spending an agent on it.
+    expect(pr.attempts).toBe(3);
+  });
+
+  it('picks up a preparation a previous run left unfinished', async () => {
+    forge.set(snapshot());
+    store.observe(snapshot(), true, 'now');
+    store.setStatus('o/r#1', 'preparing');
+
+    await runTick(store, deps());
+
+    expect(prepared).toEqual(['o/r#1']);
+    expect(store.get('o/r#1')!.status).toBe('prepared');
+  });
+
+  it('leaves a row untouched when its detail view fails this tick', async () => {
+    forge.set(snapshot());
+    await runTick(store, deps());
+    expect(store.get('o/r#1')!.status).toBe('prepared');
+
+    forge.snapshots.set('o/r#1', null);
+    prepared = [];
+    await runTick(store, deps());
+    expect(prepared).toEqual([]);
+    expect(store.get('o/r#1')!.status).toBe('prepared');
   });
 });

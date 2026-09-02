@@ -322,6 +322,31 @@ Every command follows the running server's own session. `diffity agent --session
 A comment's line range is trimmed to the file's length, and you are told when that happens: a range
 running past the end would otherwise be counted and highlighted with nothing to show.
 
+## The review inbox
+
+`diffity inbox` watches the pull requests awaiting your review and prepares each one ahead of time, so the review is ready the moment you look. It polls GitHub (`gh search prs --review-requested=@me`), and for each pull request worth your attention it cuts a worktree at the PR head, runs a diffity session over the diff, has an agent prepare a review with a walkthrough, and saves the result as a bundle. New commits redo a stale review; a merged, closed, or no-longer-requested PR is retired. **Nothing is ever posted to GitHub** — prepared reviews are local drafts you open and submit yourself.
+
+```bash
+diffity inbox              # run the watcher and a small status server
+diffity inbox --once       # run a single poll-and-prepare pass, then exit
+diffity inbox status       # print the current inbox without starting the daemon
+diffity inbox status --json
+```
+
+On first run it writes `~/.diffity/inbox/config.json`:
+
+| Key | Meaning |
+|-----|---------|
+| `pollMinutes` | How often GitHub is polled (default 5). |
+| `port` | The status server's port (default 5390). |
+| `reposDir` | Where your base clones live, one directory per repository name. |
+| `worktreesDir` | Where each pull request gets its worktree. |
+| `filter` | Your own words on what does and doesn't need your attention, handed to the agent — it answers with a skip instead of reviewing when a PR matches (e.g. "Skip payments-focused PRs"). |
+| `prepare` | The review agent, as a command and its arguments. It runs in the PR's worktree and reads its prompt on stdin. |
+| `prepareTimeoutMinutes` | How long one preparation may take before it's abandoned. |
+
+> ⚠️ The `prepare` command runs inside a checkout the pull request's author controls, so it executes their repository scripts. The daemon runs it without the forge's credentials in its environment, but you should still only point `prepare` at an agent you're willing to run on untrusted code.
+
 ## Multiple projects
 
 Diffity supports running multiple projects simultaneously. Each gets its own port automatically:

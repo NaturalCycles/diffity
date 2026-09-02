@@ -36,6 +36,8 @@ export interface InboxPr {
   requested: boolean;
   status: InboxStatus;
   statusReason: string | null;
+  /** How many times preparation has failed at the current head, reset when the head moves. */
+  attempts: number;
   /** The head the prepared review is for; older than headSha means the review is stale. */
   preparedHeadSha: string | null;
   preparedAt: string | null;
@@ -89,6 +91,7 @@ export class InboxStore {
         requested INTEGER NOT NULL,
         status TEXT NOT NULL,
         status_reason TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0,
         prepared_head_sha TEXT,
         prepared_at TEXT,
         bundle_path TEXT,
@@ -129,6 +132,8 @@ export class InboxStore {
         url = excluded.url,
         author = excluded.author,
         is_draft = excluded.is_draft,
+        -- A new head is a new change to review: the failed-attempt count for the old one is spent.
+        attempts = CASE WHEN inbox_prs.head_sha = excluded.head_sha THEN inbox_prs.attempts ELSE 0 END,
         head_sha = excluded.head_sha,
         base_ref = excluded.base_ref,
         additions = excluded.additions,
@@ -146,6 +151,12 @@ export class InboxStore {
 
   setStatus(id: string, status: InboxStatus, reason: string | null = null): void {
     this.db.prepare('UPDATE inbox_prs SET status = ?, status_reason = ? WHERE id = ?').run(status, reason, id);
+  }
+
+  /** Records a failed attempt at the current head; the count gates how many more are worth trying. */
+  failAttempt(id: string, reason: string): void {
+    this.db.prepare('UPDATE inbox_prs SET status = ?, status_reason = ?, attempts = attempts + 1 WHERE id = ?')
+      .run('failed', reason, id);
   }
 
   markPrepared(id: string, prepared: Prepared): void {
@@ -185,6 +196,7 @@ interface Row {
   requested: number;
   status: string;
   status_reason: string | null;
+  attempts: number;
   prepared_head_sha: string | null;
   prepared_at: string | null;
   bundle_path: string | null;
@@ -212,6 +224,7 @@ function rowToPr(row: Row): InboxPr {
     requested: row.requested === 1,
     status: normaliseStatus(row.status),
     statusReason: row.status_reason,
+    attempts: row.attempts,
     preparedHeadSha: row.prepared_head_sha,
     preparedAt: row.prepared_at,
     bundlePath: row.bundle_path,
