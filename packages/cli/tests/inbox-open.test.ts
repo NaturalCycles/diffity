@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { request } from 'node:http';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,7 +9,7 @@ import { resolveDismiss, resolveOpen } from '../src/inbox/open.js';
 import { openPreparedSession, baseRefOf, ensureServer, repoHash, type OpenSessionDeps } from '../src/inbox/open-session.js';
 import { startInboxServer } from '../src/inbox/daemon.js';
 import { InboxStore } from '../src/inbox/store.js';
-import { readRegistry } from '../src/registry.js';
+import { readRegistry, registerInstance } from '../src/registry.js';
 import type { PrSnapshot } from '@diffity/github';
 
 const ENTRY = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'index.js');
@@ -33,6 +33,18 @@ function preparedStore(): InboxStore {
 
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'diffity-open-')); });
 afterEach(() => { rmSync(root, { recursive: true, force: true }); });
+
+/** Whether the child is gone within a few seconds of being told to go. */
+function exited(child: ChildProcess, ms = 3000): Promise<boolean> {
+  return new Promise(resolve => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      resolve(true);
+      return;
+    }
+    const timer = setTimeout(() => resolve(false), ms);
+    child.once('exit', () => { clearTimeout(timer); resolve(true); });
+  });
+}
 
 /** A request with forged headers fetch() will not set, resolving to the status code. */
 function rawStatus(port: number, method: string, path: string, headers: Record<string, string>): Promise<number> {
@@ -225,6 +237,31 @@ describe('the inbox server routes', () => {
     } finally {
       server.close();
       store.close();
+    }
+  });
+
+  it('stops the session the reviewer opened on a dismissed worktree before removing it', async () => {
+    const prev = process.env.DIFFITY_DATA_DIR;
+    process.env.DIFFITY_DATA_DIR = join(root, 'data');
+    const idle = join(root, 'idle.mjs');
+    writeFileSync(idle, 'setInterval(() => {}, 1000);\n');
+    const session = spawn(process.execPath, [idle], { stdio: 'ignore' });
+    const store = preparedStore();
+    const { port, server } = await serve(store);
+    try {
+      registerInstance({
+        pid: session.pid!, port: 1, repoRoot: '/wt', repoHash: repoHash('/wt'), repoName: 'wt',
+        ref: 'basesha', description: '', startedAt: new Date().toISOString(),
+      });
+      const res = await fetch(`http://127.0.0.1:${port}/dismiss/${encodeURIComponent('o/r#4')}`, { method: 'POST' });
+      expect(res.status).toBe(204);
+      expect(await exited(session)).toBe(true);
+      expect(readRegistry().find(e => e.pid === session.pid)).toBeUndefined();
+    } finally {
+      try { session.kill('SIGKILL'); } catch { /* gone */ }
+      server.close();
+      store.close();
+      if (prev === undefined) delete process.env.DIFFITY_DATA_DIR; else process.env.DIFFITY_DATA_DIR = prev;
     }
   });
 

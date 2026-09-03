@@ -7,6 +7,8 @@ import { inboxDir } from './paths.js';
 import { preparePr, type PrepareDeps } from './prepare.js';
 import { realPrepareDeps, type Inflight } from './runtime.js';
 import { removeWorktree, cloneDir } from './worktree.js';
+import { findInstanceForRepo, killInstance } from '../registry.js';
+import { repoHash } from './open-session.js';
 import { InboxStore } from './store.js';
 import { runTick, type Forge } from './tick.js';
 import { buildView } from './view.js';
@@ -60,7 +62,7 @@ export async function runDaemon(
   const deps = {
     forge: options.forge ?? realForge,
     prepare: (snapshot: Parameters<typeof preparePr>[0]) => preparePr(snapshot, config, prepareDeps),
-    removeWorktree: (worktree: string, repo: string) => removeWorktree(cloneDir(config.reposDir, repo), worktree),
+    removeWorktree: (worktree: string, repo: string) => reclaimWorktree(config, worktree, repo),
     log,
     now: () => new Date().toISOString(),
     shouldContinue: () => !stopping,
@@ -264,13 +266,26 @@ function handleDismiss(store: InboxStore, config: InboxConfig, id: string, log: 
   }
   const { pr } = resolution;
   if (pr.worktreePath) {
-    removeWorktree(cloneDir(config.reposDir, pr.repo), pr.worktreePath);
+    reclaimWorktree(config, pr.worktreePath, pr.repo);
     store.setPaths(pr.id, { worktreePath: null });
   }
   store.setStatus(pr.id, 'dismissed', 'dismissed by the reviewer');
   log(`dismissed ${pr.id}`);
   res.writeHead(204);
   res.end();
+}
+
+/**
+ * Removes a pull request's worktree, first stopping any diffity server the reviewer opened on it.
+ * That session lives in the reviewer's own registry and would otherwise keep serving a directory
+ * that no longer exists.
+ */
+export function reclaimWorktree(config: InboxConfig, worktree: string, repo: string): void {
+  const instance = findInstanceForRepo(repoHash(worktree));
+  if (instance) {
+    killInstance(instance);
+  }
+  removeWorktree(cloneDir(config.reposDir, repo), worktree);
 }
 
 /** A request whose Host is this loopback server's own address (localhost or 127.0.0.1, right port). */
