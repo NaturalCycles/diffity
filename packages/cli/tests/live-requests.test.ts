@@ -156,12 +156,15 @@ describe('asking the agent for something', () => {
   });
 
   it('is served across sessions: the instance is one queue', async () => {
-    const { addReply } = await import('../src/threads.js');
+    const { addReply, createThread } = await import('../src/threads.js');
+    const { findOrCreateSession } = await import('../src/session.js');
     const { requestLive, waitForLiveRequest, notifyLiveListeners } = await import('../src/live.js');
     await drainRequests();
     // The reader asks on one session while the only agent sits parked on another — the
     // arrangement that once left both waiting forever.
-    const thread = await finding();
+    const elsewhere = findOrCreateSession('main');
+    expect(elsewhere.id).not.toBe((await session()).id);
+    const thread = createThread(elsewhere.id, 'a.ts', 'new', 1, 1, 'P2: asked over here', agent);
     const reply = addReply(thread.id, 'asked from the page', you, 'aside');
 
     const parked = waitForLiveRequest(60_000);

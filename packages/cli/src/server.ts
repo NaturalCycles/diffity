@@ -67,7 +67,6 @@ import {
 import { findOrCreateSession, resolveSessionId, agentSeenAt, markAgentSeen } from './session.js';
 import { resolveMayChangeCode, type SessionPurpose } from './live-permissions.js';
 import {
-
   liveListenerTotal,
   liveWorkingCount,
   pendingLiveCount,
