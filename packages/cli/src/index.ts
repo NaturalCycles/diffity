@@ -195,19 +195,6 @@ range syntax (main..feature, main...feature) also work.`)
       refs[0] = prBase.oid;
     }
 
-    if (opts.pr !== undefined) {
-      if (parsedPrNumber !== undefined) {
-        console.error(pc.red('Error: Pass either a pull request URL or --pr, not both.'));
-        process.exit(1);
-      }
-      if (refs.length !== 1 || WORKING_TREE_REFS.has(refs[0])) {
-        console.error(pc.red('Error: --pr needs the commit the pull request is based on.'));
-        console.log(`  Example: ${pc.cyan('diffity --pr 123 <base-sha>')}`);
-        process.exit(1);
-      }
-      parsedPrNumber = opts.pr;
-    }
-
     // --base/--compare flags take precedence over positional args
     if (opts.base || opts.compare) {
       if (refs.length > 0) {
@@ -224,6 +211,23 @@ range syntax (main..feature, main...feature) also work.`)
       if (opts.compare) {
         refs.push(opts.compare);
       }
+    }
+
+    if (opts.pr !== undefined) {
+      if (parsedPrNumber !== undefined) {
+        console.error(pc.red('Error: Pass either a pull request URL or --pr, not both.'));
+        process.exit(1);
+      }
+      if (refs.length !== 1 || WORKING_TREE_REFS.has(refs[0])) {
+        console.error(pc.red('Error: --pr needs the commit the pull request is based on.'));
+        console.log(`  Example: ${pc.cyan('diffity --pr 123 <base-sha>')}`);
+        process.exit(1);
+      }
+      if (!detectRemote()) {
+        console.error(pc.red('Error: No GitHub remote detected for this repository.'));
+        process.exit(1);
+      }
+      parsedPrNumber = opts.pr;
     }
 
     for (let i = 0; i < refs.length; i++) {
