@@ -229,6 +229,23 @@ describe('runTick', () => {
     expect(view.other).toEqual([]);
   });
 
+  it('does not prepare a pull request dismissed while the tick was busy with another', async () => {
+    forge.set(snapshot({ number: 1, additions: 10, deletions: 0 }));
+    forge.set(snapshot({ number: 2, additions: 20, deletions: 0 }));
+    const prepare = (snap: PrSnapshot) => {
+      prepared.push(prId(snap));
+      // The reviewer dismisses #2 from the page while #1 is being prepared.
+      if (snap.number === 1) {
+        store.setStatus('o/r#2', 'dismissed', 'dismissed by the reviewer');
+      }
+      return Promise.resolve(prepareResult(snap));
+    };
+    await runTick(store, deps({ prepare }));
+
+    expect(prepared).toEqual(['o/r#1']);
+    expect(store.get('o/r#2')!.status).toBe('dismissed');
+  });
+
   it('takes a dismissed pull request from the top once it has new commits', async () => {
     forge.set(snapshot({ number: 1 }));
     await runTick(store, deps());

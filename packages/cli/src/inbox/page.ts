@@ -92,6 +92,11 @@ export function inboxPage(): string {
     return Math.round(hours / 24) + ' d ago';
   }
 
+  function metaLine(parts) {
+    const text = parts.filter(Boolean).join(' \\u00b7 ');
+    return text ? '<div class="meta">' + text + '</div>' : '';
+  }
+
   function times(r) {
     const parts = [];
     if (r.createdAt) parts.push('opened ' + ago(r.createdAt));
@@ -123,7 +128,7 @@ export function inboxPage(): string {
       '<span class="size">' + sizeLabel(r) + '</span>' +
       '<span class="title"><div><span class="repo">' + esc(r.repo) + '#' + r.number + '</span> ' +
       '<span class="name">' + esc(r.title) + '</span></div>' +
-      '<div class="meta">' + [esc(r.statusReason || ''), times(r)].filter(Boolean).join(' \\u00b7 ') + '</div></span>' +
+      metaLine([esc(r.statusReason || ''), times(r)]) + '</span>' +
       '<span class="badge ' + badgeClass + '">' + esc(badgeText) + '</span>';
     return row;
   }

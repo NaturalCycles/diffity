@@ -84,6 +84,10 @@ export async function runTick(store: InboxStore, deps: TickDeps): Promise<void> 
     if (deps.shouldContinue && !deps.shouldContinue()) {
       break;
     }
+    // The reviewer may have dismissed it from the page while this tick was busy with another.
+    if (store.get(prId(snapshot))?.status === 'dismissed') {
+      continue;
+    }
     if (!refresh && countReady(store) >= deps.maxPrepared) {
       store.setStatus(prId(snapshot), 'queued', `waiting: ${deps.maxPrepared} reviews already prepared`);
       waiting++;
