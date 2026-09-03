@@ -1,5 +1,6 @@
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import type { LiveRequest } from '@diffity/api';
 import { createWriteStream, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { ExportOpts, PrepareDeps, RunAgentOpts, ServerHandle } from './prepare.js';
@@ -215,9 +216,15 @@ export function realAttendantDeps(nodePath: string, entry: string, config: Inbox
         if (timedOut) {
           log(`the answering agent in ${worktree} did not finish within ${config.liveTimeoutMinutes} minutes`);
         }
+        return { timedOut };
       } finally {
         signal.removeEventListener('abort', onAbort);
       }
+    },
+    giveUp: async (worktree, request: LiveRequest, note) => {
+      await promisify(execFile)(nodePath, [
+        entry, '--repo', worktree, 'agent', 'reply', request.threadId, '--aside', '--answers', request.commentId, '--body', note,
+      ]);
     },
     log,
   };

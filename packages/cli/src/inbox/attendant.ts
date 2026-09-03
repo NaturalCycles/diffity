@@ -18,8 +18,10 @@ export interface AttendedPr {
 export interface AttendantDeps {
   /** Parks on the session once — one `agent await` — and says how it ended. Aborting ends it early. */
   awaitRequest(worktree: string, signal: AbortSignal): Promise<AwaitOutcome>;
-  /** Runs the answering agent for one request; resolves when it has finished. */
-  answer(worktree: string, prompt: string, signal: AbortSignal): Promise<void>;
+  /** Runs the answering agent for one request; resolves when it has finished, saying if it was cut short. */
+  answer(worktree: string, prompt: string, signal: AbortSignal): Promise<{ timedOut: boolean }>;
+  /** Closes a request the agent could not answer, with a note in the thread, so it is not asked again. */
+  giveUp(worktree: string, request: LiveRequest, note: string): Promise<void>;
   log(message: string): void;
 }
 
@@ -31,6 +33,8 @@ export interface AttendantDeps {
  */
 export class Attendants {
   private readonly running = new Map<string, AbortController>();
+  /** Requests an agent has already been run for; one that comes back was not closed, and is closed here. */
+  private readonly attempted = new Set<string>();
 
   constructor(private readonly deps: AttendantDeps) {}
 
@@ -75,13 +79,27 @@ export class Attendants {
         case 'failed':
           this.deps.log(`${pr.id}: the agent has left the review: ${outcome.reason}`);
           return;
-        case 'request':
-          this.deps.log(`${pr.id}: the reader asked about ${outcome.request.filePath}:${outcome.request.startLine}`);
+        case 'request': {
+          const { request } = outcome;
+          // A request the agent did not close comes back through the server's stale-claim reclaim;
+          // running the agent again would loop, a full run per cycle. Close it instead.
+          if (this.attempted.has(request.commentId)) {
+            this.deps.log(`${pr.id}: a request came back unanswered; closing it`);
+            void this.deps.giveUp(worktree, request, 'The agent could not answer this; the request is closed so it is not asked again.')
+              .catch(err => this.deps.log(`${pr.id}: could not close the request: ${err instanceof Error ? err.message : err}`));
+            continue;
+          }
+          this.attempted.add(request.commentId);
+          this.deps.log(`${pr.id}: the reader asked about ${request.filePath}:${request.startLine}`);
           // Not awaited: the wait is re-armed at once, and a second question arriving meanwhile
           // queues behind this one on the server rather than finding nobody parked.
-          void this.deps.answer(worktree, composeLivePrompt(pr, worktree, outcome.request), signal)
+          void this.deps.answer(worktree, composeLivePrompt(pr, worktree, request), signal)
+            .then(({ timedOut }) => timedOut
+              ? this.deps.giveUp(worktree, request, 'The agent did not finish answering within the time allowed.')
+              : undefined)
             .catch(err => this.deps.log(`${pr.id}: the agent could not answer: ${err instanceof Error ? err.message : err}`));
           continue;
+        }
       }
     }
   }

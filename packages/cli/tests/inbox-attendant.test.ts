@@ -12,8 +12,9 @@ function request(over: Partial<LiveRequest> = {}): LiveRequest {
 }
 
 /** Deps that hand out a scripted sequence of outcomes and record what was asked of them. */
-function scripted(outcomes: AwaitOutcome[]) {
+function scripted(outcomes: AwaitOutcome[], answerEndsWith: { timedOut: boolean } = { timedOut: false }) {
   const answers: { worktree: string; prompt: string }[] = [];
+  const givenUp: { commentId: string; note: string }[] = [];
   const logs: string[] = [];
   let answerGate: (() => void) | null = null;
   const waits: (() => void)[] = [];
@@ -28,13 +29,14 @@ function scripted(outcomes: AwaitOutcome[]) {
       waits.push(() => resolve({ kind: 'failed', reason: 'stopped' }));
       signal.addEventListener('abort', () => resolve({ kind: 'failed', reason: 'stopped' }), { once: true });
     }),
-    answer: (worktree, prompt) => new Promise<void>(resolve => {
+    answer: (worktree, prompt) => new Promise<{ timedOut: boolean }>(resolve => {
       answers.push({ worktree, prompt });
-      answerGate = resolve;
+      answerGate = () => resolve(answerEndsWith);
     }),
+    giveUp: (_worktree, request, note) => { givenUp.push({ commentId: request.commentId, note }); return Promise.resolve(); },
     log: message => { logs.push(message); },
   };
-  return { deps, answers, logs, finishAnswer: () => answerGate?.(), pendingWaits: () => waits.length };
+  return { deps, answers, givenUp, logs, finishAnswer: () => answerGate?.(), pendingWaits: () => waits.length };
 }
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 10));
@@ -79,6 +81,32 @@ describe('an attendant', () => {
 
     expect(attendants.attending('/wt')).toBe(false);
     expect(script.logs.some(line => line.includes('No diffity is running'))).toBe(true);
+  });
+
+  it('closes a request whose answer timed out, rather than running the agent on it again', async () => {
+    const script = scripted([{ kind: 'request', request: request() }], { timedOut: true });
+    const attendants = new Attendants(script.deps);
+    attendants.ensure('/wt', pr);
+    await tick();
+    script.finishAnswer();
+    await tick();
+
+    expect(script.answers).toHaveLength(1);
+    expect(script.givenUp).toEqual([{ commentId: 'c1', note: 'The agent did not finish answering within the time allowed.' }]);
+    attendants.stopAll();
+  });
+
+  it('closes a request handed over a second time instead of looping on it', async () => {
+    const script = scripted([{ kind: 'request', request: request() }, { kind: 'request', request: request() }]);
+    const attendants = new Attendants(script.deps);
+    attendants.ensure('/wt', pr);
+    await tick();
+
+    expect(script.answers).toHaveLength(1);
+    expect(script.givenUp).toHaveLength(1);
+    expect(script.givenUp[0].commentId).toBe('c1');
+    expect(script.logs.some(line => line.includes('came back unanswered'))).toBe(true);
+    attendants.stopAll();
   });
 
   it('parks one agent per worktree, however often the review is opened', async () => {
