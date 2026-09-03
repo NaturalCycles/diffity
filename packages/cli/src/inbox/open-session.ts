@@ -12,12 +12,21 @@ import { checkInstanceHealth, findInstanceForRepo } from '../registry.js';
 export async function openPreparedSession(worktree: string, bundlePath: string, deps: OpenSessionDeps): Promise<OpenedSession> {
   const ref = deps.baseRefOf(bundlePath);
   const port = await deps.ensureServer(worktree, ref);
+  const url = sessionUrl(port, ref);
   try {
     deps.importBundle(worktree, bundlePath);
   } catch (err) {
-    return { url: `http://localhost:${port}/`, imported: false, importError: err instanceof Error ? err.message : String(err) };
+    return { url, imported: false, importError: err instanceof Error ? err.message : String(err) };
   }
-  return { url: `http://localhost:${port}/`, imported: true };
+  return { url, imported: true };
+}
+
+/**
+ * The diff page at the session's ref. The bare root redirects to the working-tree diff, which is
+ * empty for a clean worktree at the pull request's head.
+ */
+export function sessionUrl(port: number, ref: string): string {
+  return `http://localhost:${port}/diff?ref=${encodeURIComponent(ref)}`;
 }
 
 /** The base commit a bundle was built against; the session diffs the worktree against it. */
