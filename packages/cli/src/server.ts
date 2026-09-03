@@ -48,7 +48,7 @@ import {
   revertHunk,
   getRefCapabilities,
   getHeadHash,
-  isDirty,
+  getDirtyPaths,
   getTree,
   getTreeEntries,
   getTreeFingerprint,
@@ -252,6 +252,25 @@ function serveStatic(res: ServerResponse, filePath: string) {
   const content = readFileSync(filePath);
   res.writeHead(200, { 'Content-Type': mime });
   res.end(content);
+}
+
+/**
+ * Refuses with a 409 naming the files when any of them has uncommitted local changes, answering
+ * whether it did. Only the files a comment anchors to matter: anchors are working-tree line
+ * numbers, so a commented file must still match the PR head, while dirt elsewhere — a scratch
+ * file, an unrelated edit — shifts none of them.
+ */
+function refusedDirtyFiles(res: ServerResponse, filePaths: string[]): boolean {
+  if (filePaths.length === 0) {
+    return false;
+  }
+  const dirty = new Set(getDirtyPaths());
+  const blocked = [...new Set(filePaths)].filter(filePath => dirty.has(filePath));
+  if (blocked.length === 0) {
+    return false;
+  }
+  sendError(res, 409, `Uncommitted local changes in ${blocked.join(', ')}. Commit or stash them first.`);
+  return true;
 }
 
 function descriptionForRef(ref: string): string {
@@ -727,14 +746,13 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             sendError(res, 409, 'Local branch is out of sync with the PR. Push or pull your git changes first.');
             return;
           }
-          if (isDirty()) {
-            sendError(res, 409, 'You have uncommitted local changes. Commit or stash them first.');
-            return;
-          }
           withJsonBody(res, req, 'Failed to create review', parseReviewSubmission, (submission) => oneGhMutationAtATime(async () => {
             // A verdict carries its own meaning; only a plain comment needs something in it.
             if (submission.event === 'COMMENT' && submission.comments.length === 0 && !submission.body.trim()) {
               sendError(res, 400, 'A comment review needs a summary or at least one comment');
+              return;
+            }
+            if (refusedDirtyFiles(res, submission.comments.map(comment => comment.filePath))) {
               return;
             }
             const result = await createGitHubReview(
@@ -777,11 +795,6 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             sendError(res, 409, 'Local branch is out of sync with the PR. Push or pull your git changes first.');
             return;
           }
-          if (isDirty()) {
-            sendError(res, 409, 'You have uncommitted local changes. Commit or stash them first.');
-            return;
-          }
-
           withJsonBody(res, req, 'Failed to pull comments', parsePullCommentsRequest, (body) => oneGhMutationAtATime(async () => {
             const sid = body.sessionId;
             const [remoteThreads, remoteState] = await Promise.all([
@@ -789,6 +802,12 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
               pullGitHubThreadState(githubRemote.owner, githubRemote.repo, details.prNumber),
             ]);
             const localThreads = getThreadsForSession(sid);
+
+            // Only incoming threads anchor anything; threads already known re-pull freely.
+            const incoming = remoteThreads.filter(rt => !existingThreadFor(localThreads, rt));
+            if (refusedDirtyFiles(res, incoming.map(rt => rt.filePath))) {
+              return;
+            }
 
             const settled = remoteState ? threadsResolvedRemotely(localThreads, remoteState) : [];
             for (const threadId of settled) {
