@@ -32,7 +32,7 @@ function preparedStore(): InboxStore {
 }
 
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'diffity-open-')); });
-afterEach(() => { rmSync(root, { recursive: true, force: true }); });
+afterEach(() => { rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
 
 /** Whether the child is gone within a few seconds of being told to go. */
 function exited(child: ChildProcess, ms = 3000): Promise<boolean> {

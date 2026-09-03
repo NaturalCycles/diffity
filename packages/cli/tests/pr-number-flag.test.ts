@@ -48,7 +48,19 @@ describe('--pr on the command line', () => {
     execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:o/r.git'], { cwd: repo, stdio: 'pipe' });
   });
 
-  afterAll(() => { rmSync(root, { recursive: true, force: true }); });
+  afterAll(() => { rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+
+  /** Waits for a server told to stop to be gone, so the directory it writes into can be removed. */
+  function exited(child: ChildProcess, ms = 5000): Promise<void> {
+    return new Promise(resolve => {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        resolve();
+        return;
+      }
+      const timer = setTimeout(resolve, ms);
+      child.once('exit', () => { clearTimeout(timer); resolve(); });
+    });
+  }
 
   const env = () => ({ ...process.env, DIFFITY_DATA_DIR: join(root, 'data') });
 
@@ -109,6 +121,7 @@ describe('--pr on the command line', () => {
       expect(res.headers.get('location')).toBe('/diff?ref=HEAD');
     } finally {
       child.kill('SIGTERM');
+      await exited(child);
     }
   }, 30_000);
 
@@ -118,6 +131,7 @@ describe('--pr on the command line', () => {
       expect(ref).toBe('HEAD');
     } finally {
       child.kill('SIGTERM');
+      await exited(child);
     }
   }, 30_000);
 });
