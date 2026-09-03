@@ -29,7 +29,7 @@ export interface ExportOpts {
 export interface PrepareDeps {
   startServer(worktree: string, diffRef: string): Promise<ServerHandle>;
   runAgent(opts: RunAgentOpts): Promise<{ stdout: string; timedOut: boolean }>;
-  exportBundle(opts: ExportOpts): void;
+  exportBundle(opts: ExportOpts): void | Promise<void>;
   now(): string;
 }
 
@@ -61,7 +61,7 @@ export async function preparePr(snapshot: PrSnapshot, config: InboxConfig, deps:
   let head: string;
   let diffRef: string;
   try {
-    ({ head, diffRef } = prepareWorktree(clone, dest, snapshot, snapshot.baseRef));
+    ({ head, diffRef } = await prepareWorktree(clone, dest, snapshot, snapshot.baseRef));
   } catch (err) {
     return { kind: 'failed', reason: err instanceof Error ? err.message : String(err), worktree: null, logPath: null };
   }
@@ -78,17 +78,17 @@ export async function preparePr(snapshot: PrSnapshot, config: InboxConfig, deps:
     });
 
     if (timedOut) {
-      removeWorktree(clone, dest);
+      await removeWorktree(clone, dest);
       return { kind: 'failed', reason: `the agent did not finish within ${config.prepareTimeoutMinutes} minutes`, worktree: null, logPath };
     }
 
     const verdict = verdictOf(stdout);
     if (verdict.kind === 'skipped') {
-      removeWorktree(clone, dest);
+      await removeWorktree(clone, dest);
       return { kind: 'skipped', reason: verdict.reason, logPath };
     }
     if (verdict.kind === 'none') {
-      removeWorktree(clone, dest);
+      await removeWorktree(clone, dest);
       return { kind: 'failed', reason: 'the agent ended without SKIP or PREPARED', worktree: null, logPath };
     }
 
@@ -96,7 +96,7 @@ export async function preparePr(snapshot: PrSnapshot, config: InboxConfig, deps:
     // between the search and the fetch; recording it keeps the next tick from calling it stale.
     const bundlePath = join(bundlesDir(), `${snapshot.owner}-${snapshot.repo}-${snapshot.number}-${head.slice(0, 12)}.json`);
     try {
-      deps.exportBundle({ worktree: dest, prNumber: snapshot.number, outPath: bundlePath });
+      await deps.exportBundle({ worktree: dest, prNumber: snapshot.number, outPath: bundlePath });
     } catch (err) {
       return { kind: 'failed', reason: `the review was prepared but its bundle could not be written: ${err instanceof Error ? err.message : err}`, worktree: dest, logPath };
     }

@@ -35,7 +35,7 @@ describe('composePrompt', () => {
   const snapshot: PrSnapshot = {
     owner: 'o', repo: 'r', number: 7, title: 'Add a widget', url: 'https://github.com/o/r/pull/7',
     author: 'alice', isBot: false, isDraft: false, state: 'OPEN', headSha: 'abc', baseRef: 'main',
-    additions: 12, deletions: 3, changedFiles: 2, updatedAt: '2026-09-02T10:00:00Z',
+    additions: 12, deletions: 3, changedFiles: 2, createdAt: '2026-09-02T10:00:00Z', updatedAt: '2026-09-02T10:00:00Z',
   };
 
   it('tells the agent the worktree, forbids the forge, and asks for a verdict', () => {
@@ -84,10 +84,11 @@ describe('the forge parsers', () => {
     const ref = { owner: 'o', repo: 'r', number: 1 };
     const ok = parsePrSnapshot(ref, JSON.stringify({
       title: 'T', url: 'https://github.com/o/r/pull/1', author: { login: 'alice', is_bot: false },
-      isDraft: false, state: 'OPEN', headRefOid: 'abc', baseRefName: 'main', additions: 1, deletions: 0, changedFiles: 1, updatedAt: 'now',
+      isDraft: false, state: 'OPEN', headRefOid: 'abc', baseRefName: 'main', additions: 1, deletions: 0, changedFiles: 1, createdAt: 'now', updatedAt: 'now',
     }));
     expect(ok?.headSha).toBe('abc');
     expect(ok?.state).toBe('OPEN');
+    expect(ok?.createdAt).toBe('now');
 
     const bad = parsePrSnapshot(ref, JSON.stringify({ url: 'u', state: 'OPEN' }));
     expect(bad).toBeNull();

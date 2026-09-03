@@ -14,7 +14,7 @@ export interface TickDeps {
   forge: Forge;
   /** Prepares one pull request; the daemon passes the real preparer, a test a fake. */
   prepare(snapshot: PrSnapshot): Promise<PrepareResult>;
-  removeWorktree(worktree: string, repo: string): void;
+  removeWorktree(worktree: string, repo: string): void | Promise<void>;
   log(message: string): void;
   now(): string;
   /** False once the daemon is shutting down, so the drain stops starting new preparations. */
@@ -67,7 +67,7 @@ export async function runTick(store: InboxStore, deps: TickDeps): Promise<void> 
     if (transition) {
       store.setStatus(pr.id, transition.status, transition.reason);
       if (pr.worktreePath) {
-        deps.removeWorktree(pr.worktreePath, pr.repo);
+        await deps.removeWorktree(pr.worktreePath, pr.repo);
         store.setPaths(pr.id, { worktreePath: null });
       }
     }

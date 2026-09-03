@@ -33,6 +33,9 @@ export interface InboxPr {
   additions: number;
   deletions: number;
   changedFiles: number;
+  /** The forge's own timestamps for the pull request; null on a row from before they were kept. */
+  createdAt: string | null;
+  updatedAt: string | null;
   /** Whether the last poll still listed it as awaiting the reviewer. */
   requested: boolean;
   status: InboxStatus;
@@ -104,16 +107,20 @@ export class InboxStore {
         worktree_path TEXT,
         log_path TEXT,
         first_seen_at TEXT NOT NULL,
-        last_seen_at TEXT NOT NULL
+        last_seen_at TEXT NOT NULL,
+        created_at TEXT,
+        updated_at TEXT
       )
     `);
-    // A table from before `attempts` existed gains it here; a fresh one already has it.
-    try {
-      this.db.exec('ALTER TABLE inbox_prs ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0');
-    } catch (err) {
-      // "duplicate column" means it is already there; anything else is a real problem.
-      if (!/duplicate column/i.test(err instanceof Error ? err.message : String(err))) {
-        throw err;
+    // A table from an earlier build gains the columns it lacks; a fresh one already has them.
+    for (const column of ['attempts INTEGER NOT NULL DEFAULT 0', 'created_at TEXT', 'updated_at TEXT']) {
+      try {
+        this.db.exec(`ALTER TABLE inbox_prs ADD COLUMN ${column}`);
+      } catch (err) {
+        // "duplicate column" means it is already there; anything else is a real problem.
+        if (!/duplicate column/i.test(err instanceof Error ? err.message : String(err))) {
+          throw err;
+        }
       }
     }
   }
@@ -140,8 +147,9 @@ export class InboxStore {
     this.db.prepare(`
       INSERT INTO inbox_prs (
         id, owner, repo, number, title, url, author, is_draft, head_sha, base_ref,
-        additions, deletions, changed_files, requested, status, status_reason, first_seen_at, last_seen_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', NULL, ?, ?)
+        additions, deletions, changed_files, requested, status, status_reason, first_seen_at, last_seen_at,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', NULL, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         title = excluded.title,
         url = excluded.url,
@@ -155,11 +163,14 @@ export class InboxStore {
         deletions = excluded.deletions,
         changed_files = excluded.changed_files,
         requested = excluded.requested,
-        last_seen_at = excluded.last_seen_at
+        last_seen_at = excluded.last_seen_at,
+        created_at = excluded.created_at,
+        updated_at = excluded.updated_at
     `).run(
       id, snapshot.owner, snapshot.repo, snapshot.number, snapshot.title, snapshot.url, snapshot.author,
       snapshot.isDraft ? 1 : 0, snapshot.headSha, snapshot.baseRef,
       snapshot.additions, snapshot.deletions, snapshot.changedFiles, requested ? 1 : 0, now, now,
+      snapshot.createdAt || null, snapshot.updatedAt || null,
     );
     return this.get(id)!;
   }
@@ -219,6 +230,8 @@ interface Row {
   log_path: string | null;
   first_seen_at: string;
   last_seen_at: string;
+  created_at: string | null;
+  updated_at: string | null;
 }
 
 function rowToPr(row: Row): InboxPr {
@@ -236,6 +249,8 @@ function rowToPr(row: Row): InboxPr {
     additions: row.additions,
     deletions: row.deletions,
     changedFiles: row.changed_files,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
     requested: row.requested === 1,
     status: normaliseStatus(row.status),
     statusReason: row.status_reason,

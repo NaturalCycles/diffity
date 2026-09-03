@@ -13,6 +13,8 @@ export interface InboxRow {
   changedFiles: number;
   additions: number;
   deletions: number;
+  createdAt: string | null;
+  updatedAt: string | null;
   /** A prepared review whose head has since moved: openable, but out of date. */
   stale: boolean;
   preparedAt: string | null;
@@ -56,6 +58,8 @@ function toRow(pr: InboxPr, openBase: string): InboxRow {
     changedFiles: pr.changedFiles,
     additions: pr.additions,
     deletions: pr.deletions,
+    createdAt: pr.createdAt,
+    updatedAt: pr.updatedAt,
     stale,
     preparedAt: pr.preparedAt,
     openUrl: openable ? `${openBase}/open/${encodeURIComponent(pr.id)}` : null,
