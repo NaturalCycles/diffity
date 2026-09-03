@@ -17,6 +17,8 @@ export interface RunAgentOpts {
   cwd: string;
   logPath: string;
   timeoutMs: number;
+  /** Add to the log rather than start it over — one file for every answer on a review. */
+  appendLog?: boolean;
 }
 
 export interface ExportOpts {

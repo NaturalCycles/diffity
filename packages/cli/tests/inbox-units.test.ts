@@ -23,6 +23,14 @@ describe('parseInboxConfig', () => {
     expect(() => parseInboxConfig([])).toThrow(/must be a JSON object/);
   });
 
+  it('takes live as a boolean and liveTimeoutMinutes as a positive number', () => {
+    expect(parseInboxConfig({}).live).toBe(true);
+    expect(parseInboxConfig({ live: false }).live).toBe(false);
+    expect(parseInboxConfig({ liveTimeoutMinutes: 3 }).liveTimeoutMinutes).toBe(3);
+    expect(() => parseInboxConfig({ live: 'yes' })).toThrow(/live must be true or false/);
+    expect(() => parseInboxConfig({ liveTimeoutMinutes: 0 })).toThrow(/liveTimeoutMinutes must be a positive number/);
+  });
+
   it('takes maxPrepared as a positive integer only', () => {
     expect(parseInboxConfig({}).maxPrepared).toBe(5);
     expect(parseInboxConfig({ maxPrepared: 2 }).maxPrepared).toBe(2);

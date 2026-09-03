@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { resolveDismiss, resolveOpen } from '../src/inbox/open.js';
 import { openPreparedSession, baseRefOf, ensureServer, repoHash, serverArgs, type OpenSessionDeps } from '../src/inbox/open-session.js';
-import { startInboxServer } from '../src/inbox/daemon.js';
+import { startInboxServer, type AttendantHost } from '../src/inbox/daemon.js';
 import { InboxStore } from '../src/inbox/store.js';
 import { readRegistry, registerInstance } from '../src/registry.js';
 import type { PrSnapshot } from '@diffity/github';
@@ -132,9 +132,9 @@ describe('openPreparedSession', () => {
 describe('serverArgs', () => {
   it('names the pull request when it has one, and only then', () => {
     expect(serverArgs('/e.js', '/wt', 'basesha', 14502))
-      .toEqual(['/e.js', '--repo', '/wt', '--no-open', '--quiet', '--pr', '14502', 'basesha']);
+      .toEqual(['/e.js', '--repo', '/wt', '--no-open', '--quiet', '--review', '--pr', '14502', 'basesha']);
     expect(serverArgs('/e.js', '/wt', 'work', undefined))
-      .toEqual(['/e.js', '--repo', '/wt', '--no-open', '--quiet', 'work']);
+      .toEqual(['/e.js', '--repo', '/wt', '--no-open', '--quiet', '--review', 'work']);
   });
 });
 
@@ -215,9 +215,9 @@ describe('the inbox server routes', () => {
     importBundle: () => {},
   };
 
-  async function serve(store: InboxStore, logs: string[] = []) {
-    const config = { pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', prepare: ['x'], prepareTimeoutMinutes: 30, maxPrepared: 5 };
-    const server = startInboxServer(store, config, m => logs.push(m), stubOpen);
+  async function serve(store: InboxStore, logs: string[] = [], attendants: AttendantHost | null = null) {
+    const config = { pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', prepare: ['x'], prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10 };
+    const server = startInboxServer(store, config, m => logs.push(m), stubOpen, attendants);
     await new Promise(resolve => server.on('listening', resolve));
     const { port } = server.address() as { port: number };
     return { port, server };
@@ -239,13 +239,15 @@ describe('the inbox server routes', () => {
     }
   });
 
-  it('redirects /open/<id> to the opened session, and 409s a not-ready one', async () => {
+  it('redirects /open/<id> to the opened session, parks an agent on it, and 409s a not-ready one', async () => {
     const store = preparedStore();
-    const { port, server } = await serve(store);
+    const parked: string[] = [];
+    const { port, server } = await serve(store, [], { ensure: (worktree, pr) => { parked.push(`${pr.id} @ ${worktree}`); }, stopAll: () => {} });
     try {
       const res = await fetch(`http://127.0.0.1:${port}/open/${encodeURIComponent('o/r#4')}`, { redirect: 'manual' });
       expect(res.status).toBe(302);
       expect(res.headers.get('location')).toBe('http://localhost:7788/diff?ref=basesha');
+      expect(parked).toEqual(['o/r#4 @ /wt']);
 
       store.observe({ ...snapshot(), number: 8 }, true, 'now');
       const notReady = await fetch(`http://127.0.0.1:${port}/open/${encodeURIComponent('o/r#8')}`, { redirect: 'manual' });
@@ -353,7 +355,7 @@ describe('the inbox server routes', () => {
       ensureServer: () => Promise.resolve(7788),
       importBundle: () => { throw new Error('head moved'); },
     };
-    const config = { pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', prepare: ['x'], prepareTimeoutMinutes: 30, maxPrepared: 5 };
+    const config = { pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', prepare: ['x'], prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10 };
     const server = startInboxServer(store, config, m => logs.push(m), failingOpen);
     await new Promise(resolve => server.on('listening', resolve));
     const { port } = server.address() as { port: number };
