@@ -220,7 +220,7 @@ async function handleOpen(store: InboxStore, id: string, openDeps: OpenSessionDe
       return;
     }
     log(`opening ${id}`);
-    const { url, imported, importError } = await openPreparedSession(resolution.pr.worktreePath!, resolution.pr.bundlePath!, openDeps);
+    const { url, imported, importError } = await openPreparedSession(resolution.pr.worktreePath!, resolution.pr.bundlePath!, resolution.pr.number, openDeps);
     if (!imported) {
       log(`opened ${id} but its findings did not import: ${importError}`);
     }

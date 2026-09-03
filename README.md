@@ -218,6 +218,14 @@ This checks out the PR and opens the diff against **the commit the pull request 
 
 Above the diff you get the pull request's description and every review already on it, so you are not re-deriving intent from the code or repeating a point someone else has made.
 
+When the checkout cannot name its pull request — a detached worktree at the PR head, which is what the review inbox prepares — pass the number and the commit the pull request is based on:
+
+```bash
+diffity --pr 123 <base-sha>
+```
+
+The diff is pinned to that base, and the description, the reviews and the submit dialog appear as they do for a URL.
+
 ### Submitting a review
 
 The forge dialog is a composer, not a push button:
