@@ -105,6 +105,12 @@ describe('resolveAgentSession', () => {
     expect(getCurrentSession()?.id).toBe(decoy.id);
 
     stub = createServer((req, res) => {
+      // A server is trusted only once its info route names the repository it serves.
+      if (req.url === '/api/info' && req.method === 'GET') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ name: 'repo', root: repoDir }));
+        return;
+      }
       if (req.url === '/api/sessions/ensure' && req.method === 'POST') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(other));
@@ -133,7 +139,7 @@ describe('resolveAgentSession', () => {
     stub = createServer((req, res) => {
       if (req.url === '/api/info' && req.method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ name: 'repo', sessionId: named.id }));
+        res.end(JSON.stringify({ name: 'repo', root: repoDir, sessionId: named.id }));
         return;
       }
       // An old server answers an unknown route with the page and a 200.

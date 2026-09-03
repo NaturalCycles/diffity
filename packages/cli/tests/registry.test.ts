@@ -115,4 +115,65 @@ describe('the registry lock', () => {
     expect(wall).toBeGreaterThanOrEqual(2500);
     expect((cpu.user + cpu.system) / 1000).toBeLessThan(wall / 2);
   });
+
+describe('findServingInstance', () => {
+  async function serveInfo(root: string): Promise<{ port: number; close(): void }> {
+    const { createServer } = await import('node:http');
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ name: 'x', branch: 'main', root }));
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', () => resolve()));
+    const { port } = server.address() as { port: number };
+    return { port, close: () => server.close() };
+  }
+
+  it('trusts an alive entry whose server names that root', async () => {
+    const { registerInstance, findServingInstance, deregisterInstance } = await import('../src/registry.js');
+    const info = await serveInfo('/tmp/repo');
+    registerInstance(entry({ port: info.port, repoHash: 'serving1' }));
+    try {
+      expect((await findServingInstance('serving1', '/tmp/repo'))?.port).toBe(info.port);
+    } finally {
+      info.close();
+      deregisterInstance(process.pid);
+    }
+  });
+
+  it('drops an entry whose port another server has taken', async () => {
+    const { registerInstance, findServingInstance, readRegistry } = await import('../src/registry.js');
+    const info = await serveInfo('/tmp/somebody-else');
+    registerInstance(entry({ port: info.port, repoHash: 'serving2' }));
+    try {
+      expect(await findServingInstance('serving2', '/tmp/repo')).toBeNull();
+      expect(readRegistry().find(e => e.repoHash === 'serving2')).toBeUndefined();
+    } finally {
+      info.close();
+    }
+  });
+
+  it('keeps an alive entry whose server did not answer, and does not reuse it', async () => {
+    const { registerInstance, findServingInstance, readRegistry, deregisterInstance } = await import('../src/registry.js');
+    const { createServer } = await import('node:http');
+    // A port that was listening and is not any more: the server is busy or bound elsewhere, not gone.
+    const closed = createServer(() => {});
+    await new Promise<void>(resolve => closed.listen(0, '127.0.0.1', () => resolve()));
+    const { port } = closed.address() as { port: number };
+    await new Promise<void>(resolve => closed.close(() => resolve()));
+    registerInstance(entry({ port, repoHash: 'serving4' }));
+    try {
+      expect(await findServingInstance('serving4', '/tmp/repo')).toBeNull();
+      expect(readRegistry().find(e => e.repoHash === 'serving4')).toBeDefined();
+    } finally {
+      deregisterInstance(process.pid);
+    }
+  });
+
+  it('drops an entry whose process is gone', async () => {
+    const { registerInstance, findServingInstance, readRegistry } = await import('../src/registry.js');
+    registerInstance(entry({ pid: deadPid(), port: 1, repoHash: 'serving3' }));
+    expect(await findServingInstance('serving3', '/tmp/repo')).toBeNull();
+    expect(readRegistry().find(e => e.repoHash === 'serving3')).toBeUndefined();
+  });
+});
 });
