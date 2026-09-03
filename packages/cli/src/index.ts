@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import open from 'open';
 import pc from 'picocolors';
 import { isGitRepo, isValidGitRef, getRepoRoot, getRepoName, normalizeRef, getDiffityDirPath, isDataDirUntracked, WORKING_TREE_REFS } from '@diffity/git';
+import { pullRequestNumber } from './pr-number.js';
 import type { PrBase } from '@diffity/github';
 import {
   isGitHubPrUrl,
@@ -76,6 +77,7 @@ program
   .option('--new', 'Stop existing instance and start fresh')
   .option('--work', 'You are working on this branch, so the agent may change code')
   .option('--review', 'You are reviewing it, so the agent may not — even if you wrote it')
+  .option('--pr <number>', 'The pull request this diff reviews, when the checkout cannot name it (a detached worktree at its head)', pullRequestNumber)
   .addHelpText('after', `
 Common usage:
   $ diffity                              See all uncommitted changes
@@ -87,6 +89,7 @@ Common usage:
   $ diffity staged                       Only staged changes
   $ diffity unstaged                     Only unstaged changes
   $ diffity https://github.com/owner/repo/pull/123   Review a GitHub PR
+  $ diffity --pr 123 <base-sha>          Review a PR from a detached checkout at its head
   $ diffity --dark --unified             Dark mode, unified view
   $ diffity --new                        Force restart existing instance
 
@@ -190,6 +193,19 @@ range syntax (main..feature, main...feature) also work.`)
 
       parsedPrNumber = parsed.number;
       refs[0] = prBase.oid;
+    }
+
+    if (opts.pr !== undefined) {
+      if (parsedPrNumber !== undefined) {
+        console.error(pc.red('Error: Pass either a pull request URL or --pr, not both.'));
+        process.exit(1);
+      }
+      if (refs.length !== 1 || WORKING_TREE_REFS.has(refs[0])) {
+        console.error(pc.red('Error: --pr needs the commit the pull request is based on.'));
+        console.log(`  Example: ${pc.cyan('diffity --pr 123 <base-sha>')}`);
+        process.exit(1);
+      }
+      parsedPrNumber = opts.pr;
     }
 
     // --base/--compare flags take precedence over positional args
@@ -332,7 +348,8 @@ range syntax (main..feature, main...feature) also work.`)
         diffArgs,
         description,
         effectiveRef,
-        pinnedRef: prBase?.oid,
+        // A session that names its pull request shows that pull request: /diff always comes back to its base.
+        pinnedRef: prBase?.oid ?? (opts.pr !== undefined ? effectiveRef : undefined),
         prNumber: parsedPrNumber,
         version: pkg.version,
         registryInfo: { repoRoot, repoHash, repoName },

@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { resolveDismiss, resolveOpen } from '../src/inbox/open.js';
-import { openPreparedSession, baseRefOf, ensureServer, repoHash, type OpenSessionDeps } from '../src/inbox/open-session.js';
+import { openPreparedSession, baseRefOf, ensureServer, repoHash, serverArgs, type OpenSessionDeps } from '../src/inbox/open-session.js';
 import { startInboxServer } from '../src/inbox/daemon.js';
 import { InboxStore } from '../src/inbox/store.js';
 import { readRegistry, registerInstance } from '../src/registry.js';
@@ -107,14 +107,14 @@ describe('openPreparedSession', () => {
     const calls: string[] = [];
     const deps: OpenSessionDeps = {
       baseRefOf: () => 'basesha',
-      ensureServer: (wt, ref) => { calls.push(`ensure ${wt} ${ref}`); return Promise.resolve(5599); },
+      ensureServer: (wt, ref, pr) => { calls.push(`ensure ${wt} ${ref} #${pr}`); return Promise.resolve(5599); },
       importBundle: (wt, bundle) => { calls.push(`import ${wt} ${bundle}`); },
     };
 
-    const result = await openPreparedSession('/wt', '/b.json', deps);
+    const result = await openPreparedSession('/wt', '/b.json', 4, deps);
 
     expect(result).toEqual({ url: 'http://localhost:5599/diff?ref=basesha', imported: true });
-    expect(calls).toEqual(['ensure /wt basesha', 'import /wt /b.json']);
+    expect(calls).toEqual(['ensure /wt basesha #4', 'import /wt /b.json']);
   });
 
   it('still opens the diff when the import fails, flagging it', async () => {
@@ -123,8 +123,17 @@ describe('openPreparedSession', () => {
       ensureServer: () => Promise.resolve(5599),
       importBundle: () => { throw new Error('head moved'); },
     };
-    const result = await openPreparedSession('/wt', '/b.json', deps);
+    const result = await openPreparedSession('/wt', '/b.json', 4, deps);
     expect(result).toEqual({ url: 'http://localhost:5599/diff?ref=basesha', imported: false, importError: 'head moved' });
+  });
+});
+
+describe('serverArgs', () => {
+  it('names the pull request when it has one, and only then', () => {
+    expect(serverArgs('/e.js', '/wt', 'basesha', 14502))
+      .toEqual(['/e.js', '--repo', '/wt', '--no-open', '--quiet', '--pr', '14502', 'basesha']);
+    expect(serverArgs('/e.js', '/wt', 'work', undefined))
+      .toEqual(['/e.js', '--repo', '/wt', '--no-open', '--quiet', 'work']);
   });
 });
 
@@ -142,7 +151,7 @@ describe('the real ensureServer', () => {
 
     let port = 0;
     try {
-      port = await ensureServer(process.execPath, ENTRY, repo, 'work', 20_000);
+      port = await ensureServer(process.execPath, ENTRY, repo, 'work', undefined, 20_000);
       // The entry the server registered must carry the hash open-session looks it up by.
       const entry = readRegistry().find(e => e.port === port);
       expect(entry).toBeDefined();
@@ -160,7 +169,7 @@ describe('the real ensureServer', () => {
     const idle = join(root, 'idle.mjs');
     writeFileSync(idle, 'setInterval(() => {}, 1000);\n');
     try {
-      await expect(ensureServer(process.execPath, idle, join(root, 'wt'), 'work', 800)).rejects.toThrow(/did not start/);
+      await expect(ensureServer(process.execPath, idle, join(root, 'wt'), 'work', undefined, 800)).rejects.toThrow(/did not start/);
     } finally {
       if (prev === undefined) delete process.env.DIFFITY_DATA_DIR; else process.env.DIFFITY_DATA_DIR = prev;
     }

@@ -5,13 +5,13 @@ import { checkInstanceHealth, findInstanceForRepo } from '../registry.js';
 
 /**
  * Brings a prepared review up as a live diffity session the reviewer can open: a server over the
- * worktree, diffing against the pull request's base, with the prepared findings imported. Returns
- * the URL to send the browser to. Import failure is not fatal — the diff is still worth opening —
- * but it is surfaced to the caller.
+ * worktree, diffing against the pull request's base and told which pull request it shows, with the
+ * prepared findings imported. Returns the URL to send the browser to. Import failure is not fatal —
+ * the diff is still worth opening — but it is surfaced to the caller.
  */
-export async function openPreparedSession(worktree: string, bundlePath: string, deps: OpenSessionDeps): Promise<OpenedSession> {
+export async function openPreparedSession(worktree: string, bundlePath: string, prNumber: number, deps: OpenSessionDeps): Promise<OpenedSession> {
   const ref = deps.baseRefOf(bundlePath);
-  const port = await deps.ensureServer(worktree, ref);
+  const port = await deps.ensureServer(worktree, ref, prNumber);
   const url = sessionUrl(port, ref);
   try {
     deps.importBundle(worktree, bundlePath);
@@ -46,14 +46,14 @@ export function baseRefOf(bundlePath: string): string {
 export function realOpenSessionDeps(nodePath: string, entry: string): OpenSessionDeps {
   return {
     baseRefOf,
-    ensureServer: (worktree, ref) => ensureServer(nodePath, entry, worktree, ref),
+    ensureServer: (worktree, ref, prNumber) => ensureServer(nodePath, entry, worktree, ref, prNumber),
     importBundle: (worktree, bundlePath) => {
       execFileSync(nodePath, [entry, '--repo', worktree, 'agent', 'import-bundle', bundlePath], { stdio: 'pipe' });
     },
   };
 }
 
-export async function ensureServer(nodePath: string, entry: string, worktree: string, ref: string, waitMs = 30_000): Promise<number> {
+export async function ensureServer(nodePath: string, entry: string, worktree: string, ref: string, prNumber: number | undefined, waitMs = 30_000): Promise<number> {
   const hash = repoHash(worktree);
   // A healthy server already on this worktree is reused as-is. The worktree lives under the inbox's
   // own directory and is only ever served at the pull request's base, so its ref is the one wanted.
@@ -62,7 +62,7 @@ export async function ensureServer(nodePath: string, entry: string, worktree: st
     return existing.port;
   }
 
-  const child = spawn(nodePath, [entry, '--repo', worktree, '--no-open', '--quiet', ref], { detached: true, stdio: 'ignore' });
+  const child = spawn(nodePath, serverArgs(entry, worktree, ref, prNumber), { detached: true, stdio: 'ignore' });
   child.unref();
 
   const deadline = Date.now() + waitMs;
@@ -75,6 +75,15 @@ export async function ensureServer(nodePath: string, entry: string, worktree: st
   }
   try { if (child.pid) process.kill(child.pid, 'SIGTERM'); } catch { /* already gone */ }
   throw new Error(`diffity did not start for ${worktree} within ${waitMs / 1000}s`);
+}
+
+/**
+ * The argv that brings a worktree up as a session at the ref. A detached worktree cannot name its
+ * pull request, so the number goes along: it is what puts the description, the reviews and the
+ * submit dialog on the page.
+ */
+export function serverArgs(entry: string, worktree: string, ref: string, prNumber: number | undefined): string[] {
+  return [entry, '--repo', worktree, '--no-open', '--quiet', ...(prNumber !== undefined ? ['--pr', String(prNumber)] : []), ref];
 }
 
 /** The server registers under the hash of its resolved repo root, so resolve symlinks before hashing. */
@@ -91,8 +100,8 @@ function sleep(ms: number): Promise<void> {
 export interface OpenSessionDeps {
   /** Reads the base ref recorded in the bundle, so the session diffs the same change. */
   baseRefOf(bundlePath: string): string;
-  /** Ensures a diffity server for the worktree at that ref and returns its port. */
-  ensureServer(worktree: string, ref: string): Promise<number>;
+  /** Ensures a diffity server for the worktree at that ref, told its pull request, and returns its port. */
+  ensureServer(worktree: string, ref: string, prNumber: number): Promise<number>;
   /** Adds the prepared review's threads and tours to the running session. */
   importBundle(worktree: string, bundlePath: string): void;
 }
