@@ -27,7 +27,7 @@ import { baseShaOf, buildBundle, exportMismatch, importBundle, importMismatch, s
 import { answerLiveRequest } from './live.js';
 import { clampClientWait, CLIENT_WAIT_CAP_SECONDS } from './live-wait.js';
 import { directiveFor } from './live-intent.js';
-import { AGENT_HEADER, SERVER_TIMEOUT_MS, findRunningInstance, resolveAgentSession } from './agent-session.js';
+import { AGENT_HEADER, SERVER_TIMEOUT_MS, findServingInstanceForCwd, resolveAgentSession } from './agent-session.js';
 import type { Session } from './session.js';
 import { createTour, addTourStep, updateTourStatus, deleteTour, deleteToursForSession, getTour } from './tours.js';
 import { unansweredRequest } from './live-unanswered.js';
@@ -399,7 +399,7 @@ Examples:
     .option('--timeout <seconds>', `How long to wait before giving up (each poll caps at ${CLIENT_WAIT_CAP_SECONDS}s and returns; call again to keep waiting)`, '900')
     .action(async (opts: { timeout: string }) => {
       const session = await requireSession(agent.opts().session);
-      const instance = findRunningInstance();
+      const instance = await findServingInstanceForCwd();
       if (!instance) {
         console.error(pc.red('No diffity is running for this repository — start one first'));
         process.exitCode = 1;
@@ -481,7 +481,7 @@ Examples:
     .option('--json', 'Output as JSON')
     .action(async (opts: { json?: boolean }) => {
       await requireSession(agent.opts().session);
-      const instance = findRunningInstance();
+      const instance = await findServingInstanceForCwd();
       const status = instance ? await fetchLiveStatus(instance.port) : null;
 
       if (opts.json) {

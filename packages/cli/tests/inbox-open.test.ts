@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { request } from 'node:http';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
@@ -149,14 +150,31 @@ describe('the real ensureServer', () => {
     execFileSync('git', ['add', '.'], { cwd: repo, stdio: 'pipe' });
     execFileSync('git', ['commit', '-m', 'init'], { cwd: repo, stdio: 'pipe' });
 
+    // Another server — alive, answering — has taken the port a registered entry for this repo still
+    // names, which is how one pull request's page came to show another's code.
+    const impostor = createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ name: 'other', branch: 'main', root: join(root, 'somebody-else') }));
+    });
+    await new Promise<void>(resolve => impostor.listen(0, '127.0.0.1', () => resolve()));
+    const impostorPort = (impostor.address() as { port: number }).port;
+    registerInstance({
+      pid: process.pid, port: impostorPort, repoRoot: realpathSync(repo), repoHash: repoHash(repo), repoName: 'repo',
+      ref: 'work', description: '', startedAt: new Date().toISOString(),
+    });
+
     let port = 0;
     try {
       port = await ensureServer(process.execPath, ENTRY, repo, 'work', undefined, 20_000);
-      // The entry the server registered must carry the hash open-session looks it up by.
+      expect(port).not.toBe(impostorPort);
+      // The entry the server registered must carry the hash open-session looks it up by, and the
+      // impostor's row is gone.
       const entry = readRegistry().find(e => e.port === port);
       expect(entry).toBeDefined();
       expect(entry!.repoHash).toBe(repoHash(repo));
+      expect(readRegistry().find(e => e.port === impostorPort)).toBeUndefined();
     } finally {
+      impostor.close();
       const entry = readRegistry().find(e => e.port === port);
       if (entry) { try { process.kill(entry.pid, 'SIGKILL'); } catch { /* gone */ } }
       if (prev === undefined) delete process.env.DIFFITY_DATA_DIR; else process.env.DIFFITY_DATA_DIR = prev;

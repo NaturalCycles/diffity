@@ -79,4 +79,29 @@ describe('getSessionById', () => {
     expect(after.id).not.toBe(before.id);
     expect(getSessionById(before.id)?.id).toBe(after.id);
   });
+
+  it('does not take a session from a server that turns out to serve another repository', async () => {
+    const { createHash } = await import('node:crypto');
+    const { createServer } = await import('node:http');
+    const { registerInstance, readRegistry } = await import('../src/registry.js');
+    const { resolveAgentSession } = await import('../src/agent-session.js');
+    const { getRepoRoot } = await import('@diffity/git');
+
+    const impostor = createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ id: 'not-yours', ref: 'work', headHash: 'x', root: '/somewhere/else' }));
+    });
+    await new Promise<void>(resolve => impostor.listen(0, '127.0.0.1', () => resolve()));
+    const port = (impostor.address() as { port: number }).port;
+    const repoRoot = getRepoRoot()!;
+    const repoHash = createHash('sha256').update(repoRoot).digest('hex').slice(0, 12);
+    registerInstance({ pid: process.pid, port, repoRoot, repoHash, repoName: 'repo', ref: 'work', description: '', startedAt: new Date().toISOString() });
+    try {
+      const session = await resolveAgentSession();
+      expect(session?.id).not.toBe('not-yours');
+      expect(readRegistry().find(e => e.port === port)).toBeUndefined();
+    } finally {
+      impostor.close();
+    }
+  });
 });

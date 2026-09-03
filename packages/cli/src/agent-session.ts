@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { AGENT_TRAFFIC_HEADER, type ReviewSession } from '@diffity/api';
 import { getRepoRoot } from '@diffity/git';
-import { findInstanceForRepo, type RegistryEntry } from './registry.js';
+import { findServingInstance, type RegistryEntry } from './registry.js';
 import { getCurrentSession, getSessionById } from './session.js';
 
 /** How the server tells the agent's own traffic from a page somebody is looking at. */
@@ -10,12 +10,13 @@ export const AGENT_HEADER: Record<string, string> = { [AGENT_TRAFFIC_HEADER]: '1
 /** The registry's own health probe allows the same; a wedged server must not hang every command. */
 export const SERVER_TIMEOUT_MS = 2000;
 
-export function findRunningInstance(): RegistryEntry | null {
+/** The server registered for this repository, once it has confirmed it is serving this repository. */
+export function findServingInstanceForCwd(): Promise<RegistryEntry | null> {
   const repoRoot = getRepoRoot();
   if (!repoRoot) {
-    return null;
+    return Promise.resolve(null);
   }
-  return findInstanceForRepo(createHash('sha256').update(repoRoot).digest('hex').slice(0, 12));
+  return findServingInstance(createHash('sha256').update(repoRoot).digest('hex').slice(0, 12), repoRoot);
 }
 
 /**
@@ -84,7 +85,7 @@ export async function resolveAgentSession(explicitId?: string): Promise<ReviewSe
     return getSessionById(explicitId);
   }
 
-  const instance = findRunningInstance();
+  const instance = await findServingInstanceForCwd();
   if (instance) {
     const fromServer = (await fetchServerSession(instance.port)) ?? (await fetchLegacySession(instance.port));
     if (fromServer) {

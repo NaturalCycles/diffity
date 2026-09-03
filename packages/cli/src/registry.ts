@@ -252,6 +252,51 @@ export function checkInstanceHealth(port: number): Promise<boolean> {
   });
 }
 
+/**
+ * Whether the server on a port is the one an entry describes: it answers /api/info naming that
+ * repository root. Ports are reused, and a registry that knows only its own data directory can hand
+ * a freed port to another server — so an entry is trusted only once the server on its port has said
+ * whose it is.
+ */
+export function instanceServes(port: number, repoRoot: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const req = get(`http://localhost:${port}/api/info`, { headers: { [AGENT_TRAFFIC_HEADER]: '1' } }, (res) => {
+      let body = '';
+      res.setEncoding('utf-8');
+      res.on('data', (chunk: string) => { body += chunk; });
+      res.on('end', () => {
+        try {
+          resolve(res.statusCode === 200 && (JSON.parse(body) as { root?: unknown }).root === repoRoot);
+        } catch {
+          resolve(false);
+        }
+      });
+    });
+    req.on('error', () => resolve(false));
+    req.setTimeout(2000, () => {
+      req.destroy();
+      resolve(false);
+    });
+  });
+}
+
+/**
+ * The registered server for a repository, if it is still that server: alive, and serving that root.
+ * A stale entry — a dead pid, or a port another server has taken since — is dropped from the
+ * registry, so nothing else trusts it either.
+ */
+export async function findServingInstance(repoHash: string, repoRoot: string): Promise<RegistryEntry | null> {
+  const entry = findInstanceForRepo(repoHash);
+  if (!entry) {
+    return null;
+  }
+  if (entryIsAlive(entry) && await instanceServes(entry.port, repoRoot)) {
+    return entry;
+  }
+  deregisterInstance(entry.pid);
+  return null;
+}
+
 export function killInstance(entry: RegistryEntry): void {
   // A reused pid is somebody else's process; deregistering is all there is left to do.
   if (entryIsAlive(entry)) {

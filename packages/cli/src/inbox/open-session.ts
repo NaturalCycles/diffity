@@ -2,7 +2,7 @@ import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { readFileSync, realpathSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { checkInstanceHealth, findInstanceForRepo } from '../registry.js';
+import { checkInstanceHealth, findServingInstance, readRegistry } from '../registry.js';
 
 /**
  * Brings a prepared review up as a live diffity session the reviewer can open: a server over the
@@ -55,11 +55,11 @@ export function realOpenSessionDeps(nodePath: string, entry: string): OpenSessio
 }
 
 export async function ensureServer(nodePath: string, entry: string, worktree: string, ref: string, prNumber: number | undefined, waitMs = 30_000): Promise<number> {
-  const hash = repoHash(worktree);
-  // A healthy server already on this worktree is reused as-is. The worktree lives under the inbox's
-  // own directory and is only ever served at the pull request's base, so its ref is the one wanted.
-  const existing = findInstanceForRepo(hash);
-  if (existing && await checkInstanceHealth(existing.port)) {
+  // A server already registered for this worktree is reused only once it has confirmed it is the
+  // one registered: alive, and serving this worktree. The worktree lives under the inbox's own
+  // directory and is only ever served at the pull request's base, so a genuine one is the one wanted.
+  const existing = await findServingInstance(repoHash(worktree), resolvedRoot(worktree));
+  if (existing) {
     return existing.port;
   }
 
@@ -69,9 +69,11 @@ export async function ensureServer(nodePath: string, entry: string, worktree: st
   const deadline = Date.now() + waitMs;
   while (Date.now() < deadline) {
     await sleep(400);
-    const entryRow = findInstanceForRepo(hash);
-    if (entryRow && await checkInstanceHealth(entryRow.port)) {
-      return entryRow.port;
+    // The child's own registration, by pid: a row for the same worktree left by an earlier server
+    // must not stand in for it.
+    const own = readRegistry().find(row => row.pid === child.pid);
+    if (own && await checkInstanceHealth(own.port)) {
+      return own.port;
     }
   }
   try { if (child.pid) process.kill(child.pid, 'SIGTERM'); } catch { /* already gone */ }
@@ -89,9 +91,16 @@ export function serverArgs(entry: string, worktree: string, ref: string, prNumbe
 
 /** The server registers under the hash of its resolved repo root, so resolve symlinks before hashing. */
 export function repoHash(worktree: string): string {
-  let root = worktree;
-  try { root = realpathSync(worktree); } catch { /* not yet on disk; hash the path as given */ }
-  return createHash('sha256').update(root).digest('hex').slice(0, 12);
+  return createHash('sha256').update(resolvedRoot(worktree)).digest('hex').slice(0, 12);
+}
+
+/** The path as the server will report it; a worktree not yet on disk is taken as given. */
+function resolvedRoot(worktree: string): string {
+  try {
+    return realpathSync(worktree);
+  } catch {
+    return worktree;
+  }
 }
 
 function sleep(ms: number): Promise<void> {
