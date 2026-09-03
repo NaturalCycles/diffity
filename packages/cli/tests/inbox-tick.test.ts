@@ -9,7 +9,7 @@ function snapshot(over: Partial<PrSnapshot> = {}): PrSnapshot {
   return {
     owner: 'o', repo: 'r', number: 1, title: 'A change', url: 'https://github.com/o/r/pull/1',
     author: 'alice', isBot: false, isDraft: false, state: 'OPEN', headSha: 'aaa', baseRef: 'main',
-    additions: 10, deletions: 2, changedFiles: 3, updatedAt: '2026-09-02T10:00:00Z', ...over,
+    additions: 10, deletions: 2, changedFiles: 3, createdAt: '2026-09-02T10:00:00Z', updatedAt: '2026-09-02T10:00:00Z', ...over,
   };
 }
 
@@ -213,14 +213,13 @@ describe('runTick', () => {
     expect(store.get('o/r#2')!.status).toBe('queued');
   });
 
-  it('never re-queues a dismissed pull request, and its slot goes to the next in line', async () => {
+  it('leaves a dismissed pull request alone at that head, and its slot goes to the next in line', async () => {
     forge.set(snapshot({ number: 1, additions: 10, deletions: 0 }));
     forge.set(snapshot({ number: 2, additions: 400, deletions: 0 }));
     await runTick(store, deps({ maxPrepared: 1 }));
     store.setStatus('o/r#1', 'dismissed', 'dismissed by the reviewer');
 
     prepared = [];
-    forge.snapshots.set('o/r#1', snapshot({ number: 1, additions: 10, deletions: 0, headSha: 'bbb' }));
     await runTick(store, deps({ maxPrepared: 1 }));
     expect(store.get('o/r#1')!.status).toBe('dismissed');
     expect(prepared).toEqual(['o/r#2']);
@@ -228,6 +227,44 @@ describe('runTick', () => {
     const view = buildView(store, 'http://localhost:5390', '2026-09-02T12:00:00.000Z');
     expect(view.ready.map(row => row.number)).toEqual([2]);
     expect(view.other).toEqual([]);
+  });
+
+  it('does not prepare a pull request dismissed while the tick was busy with another', async () => {
+    forge.set(snapshot({ number: 1, additions: 10, deletions: 0 }));
+    forge.set(snapshot({ number: 2, additions: 20, deletions: 0 }));
+    const prepare = (snap: PrSnapshot) => {
+      prepared.push(prId(snap));
+      // The reviewer dismisses #2 from the page while #1 is being prepared.
+      if (snap.number === 1) {
+        store.setStatus('o/r#2', 'dismissed', 'dismissed by the reviewer');
+      }
+      return Promise.resolve(prepareResult(snap));
+    };
+    await runTick(store, deps({ prepare }));
+
+    expect(prepared).toEqual(['o/r#1']);
+    expect(store.get('o/r#2')!.status).toBe('dismissed');
+  });
+
+  it('takes a dismissed pull request from the top once it has new commits', async () => {
+    forge.set(snapshot({ number: 1 }));
+    await runTick(store, deps());
+    store.setStatus('o/r#1', 'dismissed', 'dismissed by the reviewer');
+
+    prepared = [];
+    forge.snapshots.set('o/r#1', snapshot({ number: 1, headSha: 'bbb' }));
+    await runTick(store, deps());
+    expect(prepared).toEqual(['o/r#1']);
+    expect(store.get('o/r#1')!.status).toBe('prepared');
+    expect(store.get('o/r#1')!.preparedHeadSha).toBe('bbb');
+  });
+
+  it('carries the forge\'s timestamps onto the rows', async () => {
+    forge.set(snapshot({ number: 1, createdAt: '2026-09-01T08:00:00Z', updatedAt: '2026-09-02T10:00:00Z' }));
+    await runTick(store, deps());
+    const [row] = buildView(store, 'http://localhost:5390', '2026-09-02T12:00:00.000Z').ready;
+    expect(row.createdAt).toBe('2026-09-01T08:00:00Z');
+    expect(row.updatedAt).toBe('2026-09-02T10:00:00Z');
   });
 
   it('offers a dismiss link for every row but one being prepared', async () => {

@@ -13,7 +13,7 @@ function snapshot(): PrSnapshot {
   return {
     owner: 'o', repo: 'r', number: 1, title: 'T', url: 'https://github.com/o/r/pull/1',
     author: 'alice', isBot: false, isDraft: false, state: 'OPEN', headSha: 'aaa', baseRef: 'main',
-    additions: 1, deletions: 0, changedFiles: 1, updatedAt: 'now',
+    additions: 1, deletions: 0, changedFiles: 1, createdAt: 'now', updatedAt: 'now',
   };
 }
 
@@ -44,6 +44,28 @@ describe('InboxStore migration', () => {
     expect(pr.attempts).toBe(0);
     store.failAttempt(pr.id, 'boom');
     expect(store.get(pr.id)!.attempts).toBe(1);
+    store.close();
+  });
+
+  it('adds the forge timestamps to a table created before they were kept', () => {
+    const seed = new DatabaseSync(path);
+    seed.exec(`CREATE TABLE inbox_prs (
+      id TEXT PRIMARY KEY, owner TEXT NOT NULL, repo TEXT NOT NULL, number INTEGER NOT NULL,
+      title TEXT NOT NULL, url TEXT NOT NULL, author TEXT NOT NULL, is_draft INTEGER NOT NULL,
+      head_sha TEXT NOT NULL, base_ref TEXT NOT NULL, additions INTEGER NOT NULL, deletions INTEGER NOT NULL,
+      changed_files INTEGER NOT NULL, requested INTEGER NOT NULL, status TEXT NOT NULL, status_reason TEXT,
+      attempts INTEGER NOT NULL DEFAULT 0, prepared_head_sha TEXT, prepared_at TEXT, bundle_path TEXT,
+      worktree_path TEXT, log_path TEXT, first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL)`);
+    seed.exec(`INSERT INTO inbox_prs (id, owner, repo, number, title, url, author, is_draft, head_sha, base_ref,
+      additions, deletions, changed_files, requested, status, first_seen_at, last_seen_at)
+      VALUES ('o/r#1', 'o', 'r', 1, 'T', 'u', 'alice', 0, 'aaa', 'main', 1, 0, 1, 1, 'queued', 'x', 'y')`);
+    seed.close();
+
+    const store = new InboxStore(path);
+    expect(store.get('o/r#1')!.createdAt).toBeNull();
+    const pr = store.observe({ ...snapshot(), createdAt: '2026-09-01T08:00:00Z', updatedAt: '2026-09-02T10:00:00Z' }, true, 'now');
+    expect(pr.createdAt).toBe('2026-09-01T08:00:00Z');
+    expect(pr.updatedAt).toBe('2026-09-02T10:00:00Z');
     store.close();
   });
 

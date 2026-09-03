@@ -82,6 +82,28 @@ export function inboxPage(): string {
 
   function sizeLabel(r) { return '+' + r.additions + ' \\u2212' + r.deletions; }
 
+  function ago(iso) {
+    const seconds = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+    if (seconds < 90) return 'just now';
+    const minutes = seconds / 60;
+    if (minutes < 90) return Math.round(minutes) + ' min ago';
+    const hours = minutes / 60;
+    if (hours < 36) return Math.round(hours) + ' h ago';
+    return Math.round(hours / 24) + ' d ago';
+  }
+
+  function metaLine(parts) {
+    const text = parts.filter(Boolean).join(' \\u00b7 ');
+    return text ? '<div class="meta">' + text + '</div>' : '';
+  }
+
+  function times(r) {
+    const parts = [];
+    if (r.createdAt) parts.push('opened ' + ago(r.createdAt));
+    if (r.updatedAt) parts.push('updated ' + ago(r.updatedAt));
+    return parts.join(' \\u00b7 ');
+  }
+
   function readyRow(r) {
     const row = document.createElement('a');
     row.className = 'row open';
@@ -93,7 +115,7 @@ export function inboxPage(): string {
       '<span class="size">' + sizeLabel(r) + '</span>' +
       '<span class="title"><div><span class="repo">' + esc(r.repo) + '#' + r.number + '</span> ' +
       '<span class="name">' + esc(r.title) + '</span></div>' +
-      '<div class="meta">by ' + esc(r.author) + ' \\u00b7 ' + r.changedFiles + ' file(s)</div></span>' +
+      '<div class="meta">by ' + esc(r.author) + ' \\u00b7 ' + r.changedFiles + ' file(s)' + (times(r) ? ' \\u00b7 ' + times(r) : '') + '</div></span>' +
       (r.stale ? '<span class="badge stale">stale</span>' : '') +
       '<span class="open-hint">open \\u2197</span>';
     return row;
@@ -106,7 +128,7 @@ export function inboxPage(): string {
       '<span class="size">' + sizeLabel(r) + '</span>' +
       '<span class="title"><div><span class="repo">' + esc(r.repo) + '#' + r.number + '</span> ' +
       '<span class="name">' + esc(r.title) + '</span></div>' +
-      (r.statusReason ? '<div class="meta">' + esc(r.statusReason) + '</div>' : '') + '</span>' +
+      metaLine([esc(r.statusReason || ''), times(r)]) + '</span>' +
       '<span class="badge ' + badgeClass + '">' + esc(badgeText) + '</span>';
     return row;
   }
@@ -118,19 +140,19 @@ export function inboxPage(): string {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'dismiss';
-    button.title = 'Dismiss: you will not review this one, and it will not come back';
+    button.title = 'Dismiss this version of the pull request; new commits bring it back';
     button.textContent = '\\u00d7';
-    button.onclick = () => dismiss(r);
+    button.onclick = () => dismiss(r, wrap);
     wrap.append(row, button);
     return wrap;
   }
 
-  async function dismiss(r) {
-    if (!confirm('Dismiss ' + r.repo + '#' + r.number + '? It leaves the inbox for good.')) return;
+  async function dismiss(r, entry) {
+    if (!confirm('Dismiss ' + r.repo + '#' + r.number + '? It comes back if the pull request gets new commits.')) return;
+    entry.remove();
     const res = await fetch(r.dismissUrl, { method: 'POST' });
     if (!res.ok) {
       el('status').textContent = 'could not dismiss ' + r.repo + '#' + r.number + ': ' + await res.text();
-      return;
     }
     refresh();
   }

@@ -1,4 +1,5 @@
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { readFileSync, realpathSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { checkInstanceHealth, findInstanceForRepo } from '../registry.js';
@@ -14,7 +15,7 @@ export async function openPreparedSession(worktree: string, bundlePath: string, 
   const port = await deps.ensureServer(worktree, ref, prNumber);
   const url = sessionUrl(port, ref);
   try {
-    deps.importBundle(worktree, bundlePath);
+    await deps.importBundle(worktree, bundlePath);
   } catch (err) {
     return { url, imported: false, importError: err instanceof Error ? err.message : String(err) };
   }
@@ -47,8 +48,8 @@ export function realOpenSessionDeps(nodePath: string, entry: string): OpenSessio
   return {
     baseRefOf,
     ensureServer: (worktree, ref, prNumber) => ensureServer(nodePath, entry, worktree, ref, prNumber),
-    importBundle: (worktree, bundlePath) => {
-      execFileSync(nodePath, [entry, '--repo', worktree, 'agent', 'import-bundle', bundlePath], { stdio: 'pipe' });
+    importBundle: async (worktree, bundlePath) => {
+      await promisify(execFile)(nodePath, [entry, '--repo', worktree, 'agent', 'import-bundle', bundlePath]);
     },
   };
 }
@@ -103,7 +104,7 @@ export interface OpenSessionDeps {
   /** Ensures a diffity server for the worktree at that ref, told its pull request, and returns its port. */
   ensureServer(worktree: string, ref: string, prNumber: number): Promise<number>;
   /** Adds the prepared review's threads and tours to the running session. */
-  importBundle(worktree: string, bundlePath: string): void;
+  importBundle(worktree: string, bundlePath: string): void | Promise<void>;
 }
 
 export interface OpenedSession {

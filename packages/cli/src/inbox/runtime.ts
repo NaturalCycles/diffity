@@ -1,4 +1,5 @@
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { createWriteStream, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { ExportOpts, PrepareDeps, RunAgentOpts, ServerHandle } from './prepare.js';
@@ -188,11 +189,11 @@ function killGroup(pid: number | undefined, signal: NodeJS.Signals): void {
   }
 }
 
-function exportBundle(nodePath: string, entry: string, opts: ExportOpts, dataDir: string): void {
+async function exportBundle(nodePath: string, entry: string, opts: ExportOpts, dataDir: string): Promise<void> {
   mkdirSync(dirname(opts.outPath), { recursive: true });
-  execFileSync(
+  await promisify(execFile)(
     nodePath,
     [entry, '--repo', opts.worktree, 'agent', 'export-bundle', '--pr', String(opts.prNumber), '--out', opts.outPath],
-    { stdio: 'pipe', env: { ...process.env, DIFFITY_DATA_DIR: dataDir } },
+    { env: { ...process.env, DIFFITY_DATA_DIR: dataDir } },
   );
 }

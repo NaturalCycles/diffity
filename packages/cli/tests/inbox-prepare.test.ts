@@ -24,7 +24,7 @@ function snapshot(): PrSnapshot {
   return {
     owner: 'o', repo: 'demo', number: 4, title: 'A change', url: 'https://github.com/o/demo/pull/4',
     author: 'alice', isBot: false, isDraft: false, state: 'OPEN', headSha: head, baseRef: 'main',
-    additions: 1, deletions: 0, changedFiles: 1, updatedAt: 'now',
+    additions: 1, deletions: 0, changedFiles: 1, createdAt: 'now', updatedAt: 'now',
   };
 }
 

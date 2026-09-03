@@ -23,6 +23,7 @@ export interface PrSnapshot extends PrRef {
   additions: number;
   deletions: number;
   changedFiles: number;
+  createdAt: string;
   updatedAt: string;
 }
 
@@ -64,7 +65,7 @@ export async function viewPr(ref: PrRef): Promise<PrSnapshot | null> {
     const json = await ghAsync([
       'pr', 'view', String(ref.number),
       '--repo', `${ref.owner}/${ref.repo}`,
-      '--json', 'number,title,url,author,isDraft,state,headRefOid,baseRefName,additions,deletions,changedFiles,updatedAt',
+      '--json', 'number,title,url,author,isDraft,state,headRefOid,baseRefName,additions,deletions,changedFiles,createdAt,updatedAt',
     ]);
     return parsePrSnapshot(ref, json);
   } catch {
@@ -92,6 +93,7 @@ export function parsePrSnapshot(ref: PrRef, json: string): PrSnapshot | null {
     additions: Number(data.additions ?? 0),
     deletions: Number(data.deletions ?? 0),
     changedFiles: Number(data.changedFiles ?? 0),
+    createdAt: String(data.createdAt ?? ''),
     updatedAt: String(data.updatedAt ?? ''),
   };
 }

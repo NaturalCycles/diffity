@@ -20,7 +20,7 @@ function snapshot(): PrSnapshot {
   return {
     owner: 'o', repo: 'r', number: 4, title: 'A change', url: 'https://github.com/o/r/pull/4',
     author: 'alice', isBot: false, isDraft: false, state: 'OPEN', headSha: 'aaa', baseRef: 'main',
-    additions: 3, deletions: 1, changedFiles: 2, updatedAt: 'now',
+    additions: 3, deletions: 1, changedFiles: 2, createdAt: 'now', updatedAt: 'now',
   };
 }
 
@@ -32,7 +32,7 @@ function preparedStore(): InboxStore {
 }
 
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'diffity-open-')); });
-afterEach(() => { rmSync(root, { recursive: true, force: true }); });
+afterEach(() => { rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
 
 /** Whether the child is gone within a few seconds of being told to go. */
 function exited(child: ChildProcess, ms = 3000): Promise<boolean> {

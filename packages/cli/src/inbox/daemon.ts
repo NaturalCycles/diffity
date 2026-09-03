@@ -265,14 +265,16 @@ function handleDismiss(store: InboxStore, config: InboxConfig, id: string, log: 
     return;
   }
   const { pr } = resolution;
-  if (pr.worktreePath) {
-    reclaimWorktree(config, pr.worktreePath, pr.repo);
-    store.setPaths(pr.id, { worktreePath: null });
-  }
   store.setStatus(pr.id, 'dismissed', 'dismissed by the reviewer');
+  store.setPaths(pr.id, { worktreePath: null });
   log(`dismissed ${pr.id}`);
+  // The row is gone as far as the page is concerned; the directory can go at its own pace.
   res.writeHead(204);
   res.end();
+  if (pr.worktreePath) {
+    void reclaimWorktree(config, pr.worktreePath, pr.repo)
+      .catch(err => log(`could not remove ${pr.worktreePath}: ${err instanceof Error ? err.message : err}`));
+  }
 }
 
 /**
@@ -280,12 +282,12 @@ function handleDismiss(store: InboxStore, config: InboxConfig, id: string, log: 
  * That session lives in the reviewer's own registry and would otherwise keep serving a directory
  * that no longer exists.
  */
-export function reclaimWorktree(config: InboxConfig, worktree: string, repo: string): void {
+export async function reclaimWorktree(config: InboxConfig, worktree: string, repo: string): Promise<void> {
   const instance = findInstanceForRepo(repoHash(worktree));
   if (instance) {
     killInstance(instance);
   }
-  removeWorktree(cloneDir(config.reposDir, repo), worktree);
+  await removeWorktree(cloneDir(config.reposDir, repo), worktree);
 }
 
 /** A request whose Host is this loopback server's own address (localhost or 127.0.0.1, right port). */
