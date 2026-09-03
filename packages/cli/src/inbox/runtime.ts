@@ -1,8 +1,12 @@
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import type { LiveRequest } from '@diffity/api';
 import { createWriteStream, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { ExportOpts, PrepareDeps, RunAgentOpts, ServerHandle } from './prepare.js';
+import type { InboxConfig } from './config.js';
+import { parseAwaitOutcome, type AttendantDeps } from './attendant.js';
+import { diffityDir } from '../registry.js';
 
 /**
  * What a prepare currently has running, so the daemon can stop it on shutdown. Set as a server or
@@ -106,7 +110,7 @@ function stopServer(pid: number | undefined): void {
  */
 export function runAgent(opts: RunAgentOpts, dataDir: string, inflight: Inflight = {}): Promise<{ stdout: string; timedOut: boolean }> {
   mkdirSync(dirname(opts.logPath), { recursive: true });
-  const log = createWriteStream(opts.logPath, { flags: 'w' });
+  const log = createWriteStream(opts.logPath, { flags: opts.appendLog ? 'a' : 'w' });
   const [command, ...args] = opts.argv;
 
   return new Promise((resolve, reject) => {
@@ -177,6 +181,53 @@ function agentEnv(dataDir: string): NodeJS.ProcessEnv {
   env.DIFFITY_DATA_DIR = dataDir;
   mkdirSync(env.GH_CONFIG_DIR, { recursive: true });
   return env;
+}
+
+/**
+ * The real side effects behind an attendant. The wait is this CLI's own `agent await` over the
+ * worktree; the answer is the configured agent command with the forge's credentials stripped, as
+ * for preparation, but in the reviewer's own diffity data directory — the opened session lives
+ * there, and the reply has to land in it.
+ */
+export function realAttendantDeps(nodePath: string, entry: string, config: InboxConfig, logPathFor: (worktree: string) => string, log: (message: string) => void): AttendantDeps {
+  return {
+    awaitRequest: (worktree, signal) => new Promise(resolve => {
+      const child = spawn(nodePath, [entry, '--repo', worktree, 'agent', 'await', '--timeout', '240'], { stdio: ['ignore', 'pipe', 'pipe'] });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.setEncoding('utf-8');
+      child.stderr.setEncoding('utf-8');
+      child.stdout.on('data', chunk => { stdout += chunk; });
+      child.stderr.on('data', chunk => { stderr += chunk; });
+      const onAbort = () => { try { child.kill('SIGTERM'); } catch { /* gone */ } };
+      signal.addEventListener('abort', onAbort, { once: true });
+      child.on('error', err => { signal.removeEventListener('abort', onAbort); resolve({ kind: 'failed', reason: err.message }); });
+      child.on('close', code => { signal.removeEventListener('abort', onAbort); resolve(parseAwaitOutcome(code, stdout, stderr)); });
+    }),
+    answer: async (worktree, prompt, signal) => {
+      const inflight: Inflight = {};
+      const onAbort = () => inflight.agentKill?.();
+      signal.addEventListener('abort', onAbort, { once: true });
+      try {
+        const { timedOut } = await runAgent({
+          argv: config.prepare, prompt, cwd: worktree, logPath: logPathFor(worktree),
+          timeoutMs: config.liveTimeoutMinutes * 60_000, appendLog: true,
+        }, diffityDir(), inflight);
+        if (timedOut) {
+          log(`the answering agent in ${worktree} did not finish within ${config.liveTimeoutMinutes} minutes`);
+        }
+        return { timedOut };
+      } finally {
+        signal.removeEventListener('abort', onAbort);
+      }
+    },
+    giveUp: async (worktree, request: LiveRequest, note) => {
+      await promisify(execFile)(nodePath, [
+        entry, '--repo', worktree, 'agent', 'reply', request.threadId, '--aside', '--answers', request.commentId, '--body', note,
+      ]);
+    },
+    log,
+  };
 }
 
 function killGroup(pid: number | undefined, signal: NodeJS.Signals): void {

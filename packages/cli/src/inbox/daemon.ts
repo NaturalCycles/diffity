@@ -4,8 +4,9 @@ import { basename, join } from 'node:path';
 import { getViewerLogin, searchReviewRequested, viewPr } from '@diffity/github';
 import type { InboxConfig } from './config.js';
 import { inboxDir } from './paths.js';
-import { preparePr, type PrepareDeps } from './prepare.js';
-import { realPrepareDeps, type Inflight } from './runtime.js';
+import { logsDir, preparePr, type PrepareDeps } from './prepare.js';
+import { realAttendantDeps, realPrepareDeps, type Inflight } from './runtime.js';
+import { Attendants, type AttendedPr } from './attendant.js';
 import { removeWorktree, cloneDir } from './worktree.js';
 import { findInstanceForRepo, killInstance } from '../registry.js';
 import { repoHash } from './open-session.js';
@@ -39,6 +40,14 @@ export interface DaemonOptions {
   forge?: Forge;
   /** How a prepared review is brought up as a session; defaults to the real one. Tests override it. */
   openDeps?: OpenSessionDeps;
+  /** Who parks on an opened review; defaults to the real attendants. Tests override it. */
+  attendants?: AttendantHost;
+}
+
+/** What the open route asks of the attendants: park on this worktree, unless already there. */
+export interface AttendantHost {
+  ensure(worktree: string, pr: AttendedPr): void;
+  stopAll(): void;
 }
 
 /**
@@ -94,7 +103,10 @@ export async function runDaemon(
   // Bind the port first: it is the daemon's singleton lock, so a second daemon exits here (via the
   // server's error handler) before it can reclaim and kill the first one's in-flight servers.
   const openDeps = options.openDeps ?? realOpenSessionDeps(nodePath, entry);
-  const server = await bindInboxServer(store, config, log, openDeps);
+  const attendants: AttendantHost = options.attendants ?? new Attendants(
+    realAttendantDeps(nodePath, entry, config, worktree => join(logsDir(), `${basename(worktree)}.live.log`), log),
+  );
+  const server = await bindInboxServer(store, config, log, openDeps, config.live ? attendants : null);
   reclaimLeftoverServers(log);
   const timer = setInterval(() => void tick(), config.pollMinutes * 60_000);
   void tick();
@@ -108,6 +120,7 @@ export async function runDaemon(
       // and its group — so nothing outlives the daemon.
       inflight.agentKill?.();
       inflight.serverStop?.();
+      attendants.stopAll();
       server.close(() => {
         store.close();
         resolve();
@@ -144,7 +157,7 @@ function reclaimLeftoverServers(log: (message: string) => void): void {
   }
 }
 
-export function startInboxServer(store: InboxStore, config: InboxConfig, log: (message: string) => void, openDeps: OpenSessionDeps): Server {
+export function startInboxServer(store: InboxStore, config: InboxConfig, log: (message: string) => void, openDeps: OpenSessionDeps, attendants: AttendantHost | null = null): Server {
   const server = createServer((req, res) => {
     // The whole handler is guarded: an unhandled throw here (a malformed percent-escape, say) would
     // otherwise have no catch and take the long-running daemon down with it.
@@ -177,7 +190,7 @@ export function startInboxServer(store: InboxStore, config: InboxConfig, log: (m
       if (req.method === 'GET' && url.startsWith('/open/')) {
         const id = stateChangingId(req, res, '/open/');
         if (id !== null) {
-          void handleOpen(store, id, openDeps, log, res).catch(err => log(`open failed: ${err instanceof Error ? err.message : err}`));
+          void handleOpen(store, id, openDeps, attendants, log, res).catch(err => log(`open failed: ${err instanceof Error ? err.message : err}`));
         }
         return;
       }
@@ -210,8 +223,8 @@ export function startInboxServer(store: InboxStore, config: InboxConfig, log: (m
   return server;
 }
 
-/** Brings a prepared review up as a live session and redirects the browser to it. */
-async function handleOpen(store: InboxStore, id: string, openDeps: OpenSessionDeps, log: (message: string) => void, res: ServerResponse): Promise<void> {
+/** Brings a prepared review up as a live session, parks an agent on it, and redirects the browser to it. */
+async function handleOpen(store: InboxStore, id: string, openDeps: OpenSessionDeps, attendants: AttendantHost | null, log: (message: string) => void, res: ServerResponse): Promise<void> {
   try {
     const resolution = resolveOpen(store, id);
     if (!resolution.ok) {
@@ -224,6 +237,8 @@ async function handleOpen(store: InboxStore, id: string, openDeps: OpenSessionDe
     if (!imported) {
       log(`opened ${id} but its findings did not import: ${importError}`);
     }
+    const { pr } = resolution;
+    attendants?.ensure(pr.worktreePath!, { id: pr.id, url: pr.url, title: pr.title, author: pr.author });
     res.writeHead(302, { Location: url });
     res.end();
   } catch (err) {
@@ -296,7 +311,7 @@ function isLocalHost(host: string | undefined, port: number | undefined): boolea
 }
 
 /** Resolves once the port is held; a clash exits through the server's own error handler first. */
-function bindInboxServer(store: InboxStore, config: InboxConfig, log: (message: string) => void, openDeps: OpenSessionDeps): Promise<Server> {
-  const server = startInboxServer(store, config, log, openDeps);
+function bindInboxServer(store: InboxStore, config: InboxConfig, log: (message: string) => void, openDeps: OpenSessionDeps, attendants: AttendantHost | null): Promise<Server> {
+  const server = startInboxServer(store, config, log, openDeps, attendants);
   return new Promise(resolve => server.once('listening', () => resolve(server)));
 }

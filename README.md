@@ -355,6 +355,8 @@ On first run it writes `~/.diffity/inbox/config.json`:
 | `prepare` | The review agent, as a command and its arguments. It runs in the PR's worktree and reads its prompt on stdin. |
 | `prepareTimeoutMinutes` | How long one preparation may take before it's abandoned. |
 | `maxPrepared` | How many prepared reviews may wait for you at once (default 5). Each preparation is an agent run; the rest of the queue waits until a prepared review is posted or dismissed. |
+| `live` | Whether opening a prepared review also parks a live agent on it (default true). Questions asked in the page — the Ask button on a finding — each run the `prepare` command once to answer; the agent may answer and amend findings, never edit code, and never reaches GitHub. |
+| `liveTimeoutMinutes` | How long one answer may take before the agent is stopped (default 10). |
 
 > ⚠️ The `prepare` command runs inside a checkout the pull request's author controls, so it executes their repository scripts. The daemon runs it without the forge's credentials in its environment, but you should still only point `prepare` at an agent you're willing to run on untrusted code.
 

@@ -31,7 +31,7 @@ function snapshot(): PrSnapshot {
 function config(): InboxConfig {
   return {
     pollMinutes: 5, port: 0, reposDir, worktreesDir, filter: '',
-    prepare: ['unused'], prepareTimeoutMinutes: 30, maxPrepared: 5,
+    prepare: ['unused'], prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10,
   };
 }
 

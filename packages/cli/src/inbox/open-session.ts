@@ -88,10 +88,11 @@ export async function ensureServer(nodePath: string, entry: string, worktree: st
 /**
  * The argv that brings a worktree up as a session at the ref. A detached worktree cannot name its
  * pull request, so the number goes along: it is what puts the description, the reviews and the
- * submit dialog on the page.
+ * submit dialog on the page. `--review` because it is somebody else's change: an agent parked on it
+ * may answer and amend, never edit.
  */
 export function serverArgs(entry: string, worktree: string, ref: string, prNumber: number | undefined): string[] {
-  return [entry, '--repo', worktree, '--no-open', '--quiet', ...(prNumber !== undefined ? ['--pr', String(prNumber)] : []), ref];
+  return [entry, '--repo', worktree, '--no-open', '--quiet', '--review', ...(prNumber !== undefined ? ['--pr', String(prNumber)] : []), ref];
 }
 
 /** The server registers under the hash of its resolved repo root, so resolve symlinks before hashing. */

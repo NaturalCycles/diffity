@@ -28,6 +28,13 @@ export interface InboxConfig {
    * run, so the queue beyond this waits for a prepared review to be posted or dismissed.
    */
   maxPrepared: number;
+  /**
+   * Whether opening a prepared review also parks a live agent on it, answering what the reader asks
+   * in the page — one run of the `prepare` command per question.
+   */
+  live: boolean;
+  /** How long one answer may take before the agent is stopped. */
+  liveTimeoutMinutes: number;
 }
 
 export const DEFAULT_INBOX_CONFIG: InboxConfig = {
@@ -44,6 +51,8 @@ export const DEFAULT_INBOX_CONFIG: InboxConfig = {
   ],
   prepareTimeoutMinutes: 30,
   maxPrepared: 5,
+  live: true,
+  liveTimeoutMinutes: 10,
 };
 
 /**
@@ -102,6 +111,15 @@ export function parseInboxConfig(raw: unknown, source = 'inbox config'): InboxCo
   }
   if (obj.maxPrepared !== undefined) {
     config.maxPrepared = positiveInteger(obj.maxPrepared, 'maxPrepared', source);
+  }
+  if (obj.live !== undefined) {
+    if (typeof obj.live !== 'boolean') {
+      throw new Error(`${source}: live must be true or false`);
+    }
+    config.live = obj.live;
+  }
+  if (obj.liveTimeoutMinutes !== undefined) {
+    config.liveTimeoutMinutes = positive(obj.liveTimeoutMinutes, 'liveTimeoutMinutes', source);
   }
   return config;
 }
