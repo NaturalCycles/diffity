@@ -1,4 +1,4 @@
-import { createServer, type Server, type ServerResponse } from 'node:http';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { getViewerLogin, searchReviewRequested, viewPr } from '@diffity/github';
@@ -10,7 +10,7 @@ import { removeWorktree, cloneDir } from './worktree.js';
 import { InboxStore } from './store.js';
 import { runTick, type Forge } from './tick.js';
 import { buildView } from './view.js';
-import { resolveOpen } from './open.js';
+import { resolveDismiss, resolveOpen } from './open.js';
 import { openPreparedSession, realOpenSessionDeps, type OpenSessionDeps } from './open-session.js';
 import { inboxPage } from './page.js';
 
@@ -64,6 +64,7 @@ export async function runDaemon(
     log,
     now: () => new Date().toISOString(),
     shouldContinue: () => !stopping,
+    maxPrepared: config.maxPrepared,
   };
 
   const tick = async () => {
@@ -172,22 +173,17 @@ export function startInboxServer(store: InboxStore, config: InboxConfig, log: (m
         return;
       }
       if (req.method === 'GET' && url.startsWith('/open/')) {
-        // A state-changing GET, so a cross-site fetch — a drive-by trying to spawn a session — is
-        // refused; a click from the inbox page itself is same-origin, and a direct navigation none.
-        if (req.headers['sec-fetch-site'] === 'cross-site') {
-          res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
-          res.end('forbidden');
-          return;
+        const id = stateChangingId(req, res, '/open/');
+        if (id !== null) {
+          void handleOpen(store, id, openDeps, log, res).catch(err => log(`open failed: ${err instanceof Error ? err.message : err}`));
         }
-        let id: string;
-        try {
-          id = decodeURIComponent(url.slice('/open/'.length));
-        } catch {
-          res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
-          res.end('bad request');
-          return;
+        return;
+      }
+      if (req.method === 'POST' && url.startsWith('/dismiss/')) {
+        const id = stateChangingId(req, res, '/dismiss/');
+        if (id !== null) {
+          handleDismiss(store, config, id, log, res);
         }
-        void handleOpen(store, id, openDeps, log, res).catch(err => log(`open failed: ${err instanceof Error ? err.message : err}`));
         return;
       }
       res.writeHead(404, { 'Content-Type': 'application/json' });
@@ -235,6 +231,46 @@ async function handleOpen(store: InboxStore, id: string, openDeps: OpenSessionDe
       res.end(`Could not open ${id}: ${err instanceof Error ? err.message : err}`);
     }
   }
+}
+
+/**
+ * The id a state-changing route was asked about, or null once the request has been answered: a
+ * cross-site fetch — a drive-by trying to spawn a session or dismiss a review — is refused, and a
+ * malformed escape is a bad request. A click from the inbox page is same-origin, a direct
+ * navigation has no site.
+ */
+function stateChangingId(req: IncomingMessage, res: ServerResponse, prefix: string): string | null {
+  if (req.headers['sec-fetch-site'] === 'cross-site') {
+    res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('forbidden');
+    return null;
+  }
+  try {
+    return decodeURIComponent((req.url ?? '').slice(prefix.length));
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('bad request');
+    return null;
+  }
+}
+
+/** Marks a pull request as one the reviewer will not review, and reclaims its worktree. */
+function handleDismiss(store: InboxStore, config: InboxConfig, id: string, log: (message: string) => void, res: ServerResponse): void {
+  const resolution = resolveDismiss(store, id);
+  if (!resolution.ok) {
+    res.writeHead(resolution.status, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end(resolution.message);
+    return;
+  }
+  const { pr } = resolution;
+  if (pr.worktreePath) {
+    removeWorktree(cloneDir(config.reposDir, pr.repo), pr.worktreePath);
+    store.setPaths(pr.id, { worktreePath: null });
+  }
+  store.setStatus(pr.id, 'dismissed', 'dismissed by the reviewer');
+  log(`dismissed ${pr.id}`);
+  res.writeHead(204);
+  res.end();
 }
 
 /** A request whose Host is this loopback server's own address (localhost or 127.0.0.1, right port). */

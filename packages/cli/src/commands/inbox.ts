@@ -79,7 +79,7 @@ export function registerInboxCommand(program: Command): void {
       section('Ready to review', view.ready.map(row =>
         `  ${sizeBadge(row)} ${pc.bold(`${row.repo}#${row.number}`)} ${row.title}${row.stale ? pc.yellow('  (stale — new commits)') : ''}`,
       ));
-      section('Preparing', view.working.map(row =>
+      section('Queue', view.working.map(row =>
         `  ${pc.dim(row.status.padEnd(9))} ${row.repo}#${row.number} ${row.title}`,
       ));
       section('Other', view.other.map(row =>

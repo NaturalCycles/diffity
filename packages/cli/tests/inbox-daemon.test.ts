@@ -37,7 +37,7 @@ function seedRegistry(pid: number): void {
 function config(port: number) {
   return {
     pollMinutes: 5, port, reposDir: join(root, 'repos'), worktreesDir: join(root, 'inbox', 'worktrees'),
-    filter: '', prepare: ['unused'], prepareTimeoutMinutes: 30,
+    filter: '', prepare: ['unused'], prepareTimeoutMinutes: 30, maxPrepared: 5,
   };
 }
 
