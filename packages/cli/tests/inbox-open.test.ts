@@ -88,7 +88,7 @@ describe('openPreparedSession', () => {
 
     const result = await openPreparedSession('/wt', '/b.json', deps);
 
-    expect(result).toEqual({ url: 'http://localhost:5599/', imported: true });
+    expect(result).toEqual({ url: 'http://localhost:5599/diff?ref=basesha', imported: true });
     expect(calls).toEqual(['ensure /wt basesha', 'import /wt /b.json']);
   });
 
@@ -99,7 +99,7 @@ describe('openPreparedSession', () => {
       importBundle: () => { throw new Error('head moved'); },
     };
     const result = await openPreparedSession('/wt', '/b.json', deps);
-    expect(result).toEqual({ url: 'http://localhost:5599/', imported: false, importError: 'head moved' });
+    expect(result).toEqual({ url: 'http://localhost:5599/diff?ref=basesha', imported: false, importError: 'head moved' });
   });
 });
 
@@ -179,7 +179,7 @@ describe('the inbox server routes', () => {
     try {
       const res = await fetch(`http://127.0.0.1:${port}/open/${encodeURIComponent('o/r#4')}`, { redirect: 'manual' });
       expect(res.status).toBe(302);
-      expect(res.headers.get('location')).toBe('http://localhost:7788/');
+      expect(res.headers.get('location')).toBe('http://localhost:7788/diff?ref=basesha');
 
       store.observe({ ...snapshot(), number: 8 }, true, 'now');
       const notReady = await fetch(`http://127.0.0.1:${port}/open/${encodeURIComponent('o/r#8')}`, { redirect: 'manual' });
