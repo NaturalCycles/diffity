@@ -129,14 +129,15 @@ function assertFileExists(filePath: string): void {
   }
 }
 
-function resolveThreadId(shortId: string, sessionId: string): Thread {
+/**
+ * Any thread on this instance, whichever session holds it: the live queue is instance-wide, so the
+ * request an agent took may sit on a session other than the one it is parked on, and the reply has
+ * to be allowed to follow it there. Tours stay with their session.
+ */
+function resolveThreadId(shortId: string): Thread {
   const thread = getThread(shortId);
   if (!thread) {
     console.error(pc.red(`Error: Thread not found: ${shortId}`));
-    process.exit(1);
-  }
-  if (thread.sessionId !== sessionId) {
-    console.error(pc.red(`Error: Thread ${shortId} does not belong to current session`));
     process.exit(1);
   }
   return thread;
@@ -340,8 +341,8 @@ Examples:
     .argument('<thread-id>', 'Thread ID (or 8-char prefix)')
     .option('--summary <text>', 'What was done to resolve it')
     .action(async (id: string, opts) => {
-      const session = await requireSession(agent.opts().session);
-      const thread = resolveThreadId(id, session.id);
+      await requireSession(agent.opts().session);
+      const thread = resolveThreadId(id);
       const author = opts.summary ? { name: 'Agent', type: 'agent' as const } : undefined;
       updateThreadStatus(thread.id, 'resolved', opts.summary ?? '', author);
       console.log(pc.green(`Resolved thread ${thread.id.slice(0, 8)}`));
@@ -353,8 +354,8 @@ Examples:
     .argument('<thread-id>', 'Thread ID (or 8-char prefix)')
     .option('--reason <text>', 'Why the thread is being dismissed')
     .action(async (id: string, opts) => {
-      const session = await requireSession(agent.opts().session);
-      const thread = resolveThreadId(id, session.id);
+      await requireSession(agent.opts().session);
+      const thread = resolveThreadId(id);
       const author = opts.reason ? { name: 'Agent', type: 'agent' as const } : undefined;
       updateThreadStatus(thread.id, 'dismissed', opts.reason ?? '', author);
       console.log(pc.green(`Dismissed thread ${thread.id.slice(0, 8)}`));
@@ -369,8 +370,8 @@ Examples:
     .option('--aside', 'A note for the reader that never goes to the forge')
     .option('--answers <comment-id>', 'The request this answers, so the page stops waiting on it')
     .action(async (id: string, opts: { body?: string; bodyFile?: string; aside?: boolean; answers?: string }) => {
-      const session = await requireSession(agent.opts().session);
-      const thread = resolveThreadId(id, session.id);
+      await requireSession(agent.opts().session);
+      const thread = resolveThreadId(id);
       const stillOpen = unansweredRequest(thread.comments);
       const body = bodyTextOrExit(opts, true);
       addReply(thread.id, body, { name: 'Agent', type: 'agent' }, opts.aside ? 'aside' : 'review');

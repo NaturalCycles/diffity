@@ -58,7 +58,7 @@ export function handleReviewRoute(req: IncomingMessage, res: ServerResponse, pat
       if (body.live === true && kind === 'aside') {
         const stamp = requestLive(thread.comments[0].id, body.intent ?? 'ask');
         thread.comments[0].liveRequestedAt = stamp.requestedAt;
-        notifyLiveListeners(stamp.sessionId);
+        notifyLiveListeners();
       }
       sendJson(res, thread);
     });
@@ -76,7 +76,7 @@ export function handleReviewRoute(req: IncomingMessage, res: ServerResponse, pat
       if (body.live === true && kind === 'aside') {
         const stamp = requestLive(comment.id, body.intent ?? 'ask');
         requestedAt = stamp.requestedAt;
-        notifyLiveListeners(stamp.sessionId);
+        notifyLiveListeners();
       }
       sendJson(res, { ...comment, liveRequestedAt: requestedAt } satisfies Comment);
     });
