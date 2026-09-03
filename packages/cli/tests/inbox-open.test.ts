@@ -181,6 +181,20 @@ describe('the real ensureServer', () => {
     }
   }, 30_000);
 
+  it('fails as soon as the server it started has exited', async () => {
+    const prev = process.env.DIFFITY_DATA_DIR;
+    process.env.DIFFITY_DATA_DIR = join(root, 'dead-data');
+    const dying = join(root, 'dying.mjs');
+    writeFileSync(dying, 'process.exit(2);\n');
+    const started = Date.now();
+    try {
+      await expect(ensureServer(process.execPath, dying, join(root, 'wt'), 'work', undefined, 20_000)).rejects.toThrow(/exit code 2/);
+      expect(Date.now() - started).toBeLessThan(10_000);
+    } finally {
+      if (prev === undefined) delete process.env.DIFFITY_DATA_DIR; else process.env.DIFFITY_DATA_DIR = prev;
+    }
+  }, 15_000);
+
   it('throws when nothing registers before the deadline', async () => {
     const prev = process.env.DIFFITY_DATA_DIR;
     process.env.DIFFITY_DATA_DIR = join(root, 'empty-data');

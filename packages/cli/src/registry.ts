@@ -253,12 +253,12 @@ export function checkInstanceHealth(port: number): Promise<boolean> {
 }
 
 /**
- * Whether the server on a port is the one an entry describes: it answers /api/info naming that
- * repository root. Ports are reused, and a registry that knows only its own data directory can hand
- * a freed port to another server — so an entry is trusted only once the server on its port has said
- * whose it is.
+ * What the server on a port says about itself: `serves` when /api/info names that repository root,
+ * `other` when it names a different one, `silent` when nothing usable came back in time. Ports are
+ * reused, and a registry that knows only its own data directory can hand a freed port to another
+ * server — so an entry is trusted only once the server on its port has said whose it is.
  */
-export function instanceServes(port: number, repoRoot: string): Promise<boolean> {
+export function instanceServes(port: number, repoRoot: string): Promise<'serves' | 'other' | 'silent'> {
   return new Promise((resolve) => {
     const req = get(`http://localhost:${port}/api/info`, { headers: { [AGENT_TRAFFIC_HEADER]: '1' } }, (res) => {
       let body = '';
@@ -266,35 +266,41 @@ export function instanceServes(port: number, repoRoot: string): Promise<boolean>
       res.on('data', (chunk: string) => { body += chunk; });
       res.on('end', () => {
         try {
-          resolve(res.statusCode === 200 && (JSON.parse(body) as { root?: unknown }).root === repoRoot);
+          const root = (JSON.parse(body) as { root?: unknown }).root;
+          resolve(res.statusCode !== 200 || typeof root !== 'string' ? 'silent' : root === repoRoot ? 'serves' : 'other');
         } catch {
-          resolve(false);
+          resolve('silent');
         }
       });
     });
-    req.on('error', () => resolve(false));
+    req.on('error', () => resolve('silent'));
     req.setTimeout(2000, () => {
       req.destroy();
-      resolve(false);
+      resolve('silent');
     });
   });
 }
 
 /**
  * The registered server for a repository, if it is still that server: alive, and serving that root.
- * A stale entry — a dead pid, or a port another server has taken since — is dropped from the
- * registry, so nothing else trusts it either.
+ * An entry that is certainly stale — its process gone, or its port answered for another repository —
+ * is dropped from the registry so nothing else trusts it. One that is alive but did not answer is a
+ * server that is busy, not gone: it is left registered and simply not reused this time.
  */
 export async function findServingInstance(repoHash: string, repoRoot: string): Promise<RegistryEntry | null> {
   const entry = findInstanceForRepo(repoHash);
   if (!entry) {
     return null;
   }
-  if (entryIsAlive(entry) && await instanceServes(entry.port, repoRoot)) {
-    return entry;
+  if (!entryIsAlive(entry)) {
+    deregisterInstance(entry.pid);
+    return null;
   }
-  deregisterInstance(entry.pid);
-  return null;
+  const answer = await instanceServes(entry.port, repoRoot);
+  if (answer === 'other') {
+    deregisterInstance(entry.pid);
+  }
+  return answer === 'serves' ? entry : null;
 }
 
 export function killInstance(entry: RegistryEntry): void {

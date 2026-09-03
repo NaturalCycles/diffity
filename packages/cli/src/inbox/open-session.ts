@@ -65,10 +65,15 @@ export async function ensureServer(nodePath: string, entry: string, worktree: st
 
   const child = spawn(nodePath, serverArgs(entry, worktree, ref, prNumber), { detached: true, stdio: 'ignore' });
   child.unref();
+  let exited: string | null = null;
+  child.once('exit', (code, signal) => { exited = signal ? `signal ${signal}` : `exit code ${code}`; });
 
   const deadline = Date.now() + waitMs;
   while (Date.now() < deadline) {
     await sleep(400);
+    if (exited) {
+      throw new Error(`diffity ended with ${exited} before registering for ${worktree}`);
+    }
     // The child's own registration, by pid: a row for the same worktree left by an earlier server
     // must not stand in for it.
     const own = readRegistry().find(row => row.pid === child.pid);
