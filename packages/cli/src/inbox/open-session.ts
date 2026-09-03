@@ -25,7 +25,7 @@ export async function openPreparedSession(worktree: string, bundlePath: string, 
  * The diff page at the session's ref. The bare root redirects to the working-tree diff, which is
  * empty for a clean worktree at the pull request's head.
  */
-export function sessionUrl(port: number, ref: string): string {
+function sessionUrl(port: number, ref: string): string {
   return `http://localhost:${port}/diff?ref=${encodeURIComponent(ref)}`;
 }
 
