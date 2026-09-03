@@ -48,7 +48,8 @@ describe('a thread on another session of the same instance', () => {
     const thread = createThread(elsewhere.id, 'a.ts', 'new', 1, 1, 'P2: asked over here', { name: 'Agent', type: 'agent' });
 
     const replied = cli(['reply', thread.id, '--body', 'answered from where the agent sits']);
-    expect(replied.stderr).toBe('');
+    // Node 22 prints an ExperimentalWarning for node:sqlite on stderr; only a refusal matters here.
+    expect(replied.stderr).not.toContain('Error');
     expect(replied.status).toBe(0);
     expect(replied.stdout).toContain('Replied to thread');
     expect(getThread(thread.id)!.comments.map(comment => comment.body)).toEqual(['P2: asked over here', 'answered from where the agent sits']);
