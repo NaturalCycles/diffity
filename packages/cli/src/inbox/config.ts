@@ -23,6 +23,11 @@ export interface InboxConfig {
    */
   prepare: string[];
   prepareTimeoutMinutes: number;
+  /**
+   * How many prepared reviews may wait for the reviewer at once. Each preparation spends an agent
+   * run, so the queue beyond this waits for a prepared review to be posted or dismissed.
+   */
+  maxPrepared: number;
 }
 
 export const DEFAULT_INBOX_CONFIG: InboxConfig = {
@@ -38,6 +43,7 @@ export const DEFAULT_INBOX_CONFIG: InboxConfig = {
     '--disallowedTools', 'Bash(gh pr review:*)', 'Bash(gh pr comment:*)', 'Bash(gh pr merge:*)', 'Bash(gh api:*)',
   ],
   prepareTimeoutMinutes: 30,
+  maxPrepared: 5,
 };
 
 /**
@@ -94,12 +100,22 @@ export function parseInboxConfig(raw: unknown, source = 'inbox config'): InboxCo
   if (obj.prepareTimeoutMinutes !== undefined) {
     config.prepareTimeoutMinutes = positive(obj.prepareTimeoutMinutes, 'prepareTimeoutMinutes', source);
   }
+  if (obj.maxPrepared !== undefined) {
+    config.maxPrepared = positiveInteger(obj.maxPrepared, 'maxPrepared', source);
+  }
   return config;
 }
 
 function positive(value: unknown, key: string, source: string): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
     throw new Error(`${source}: ${key} must be a positive number`);
+  }
+  return value;
+}
+
+function positiveInteger(value: unknown, key: string, source: string): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+    throw new Error(`${source}: ${key} must be a positive integer`);
   }
   return value;
 }

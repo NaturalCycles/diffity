@@ -324,7 +324,7 @@ running past the end would otherwise be counted and highlighted with nothing to 
 
 ## The review inbox
 
-`diffity inbox` watches the pull requests awaiting your review and prepares each one ahead of time, so the review is ready the moment you look. It polls GitHub (`gh search prs --review-requested=@me`), and for each pull request worth your attention it cuts a worktree at the PR head, runs a diffity session over the diff, has an agent prepare a review with a walkthrough, and saves the result as a bundle. New commits redo a stale review; a merged, closed, or no-longer-requested PR is retired.
+`diffity inbox` watches the pull requests awaiting your review and prepares each one ahead of time, so the review is ready the moment you look. It polls GitHub (`gh search prs --review-requested=@me`), and for each pull request worth your attention it cuts a worktree at the PR head, runs a diffity session over the diff, has an agent prepare a review with a walkthrough, and saves the result as a bundle. New commits redo a stale review; a merged, closed, or no-longer-requested PR is retired. At most `maxPrepared` reviews are kept prepared at a time — the rest wait in the queue, smallest first — and a prepared review leaves the inbox once you have posted it (GitHub withdraws the request) or dismissed it from the page.
 
 The daemon never posts your prepared reviews to GitHub — they are local drafts you open and submit yourself — and it runs the review agent with your GitHub credentials stripped from its environment. That said, the agent executes the pull request's own repository code (see the warning below), so treat the "never posts" behaviour as the daemon's design, not a sandbox.
 
@@ -346,6 +346,7 @@ On first run it writes `~/.diffity/inbox/config.json`:
 | `filter` | Your own words on what does and doesn't need your attention, handed to the agent — it answers with a skip instead of reviewing when a PR matches (e.g. "Skip payments-focused PRs"). |
 | `prepare` | The review agent, as a command and its arguments. It runs in the PR's worktree and reads its prompt on stdin. |
 | `prepareTimeoutMinutes` | How long one preparation may take before it's abandoned. |
+| `maxPrepared` | How many prepared reviews may wait for you at once (default 5). Each preparation is an agent run; the rest of the queue waits until a prepared review is posted or dismissed. |
 
 > ⚠️ The `prepare` command runs inside a checkout the pull request's author controls, so it executes their repository scripts. The daemon runs it without the forge's credentials in its environment, but you should still only point `prepare` at an agent you're willing to run on untrusted code.
 

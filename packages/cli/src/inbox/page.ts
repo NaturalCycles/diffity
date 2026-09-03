@@ -32,6 +32,11 @@ export function inboxPage(): string {
     margin: 0 0 8px; font-weight: 600; }
   .row { display: flex; align-items: center; gap: 12px; background: var(--panel);
     border: 1px solid var(--line); border-radius: 10px; padding: 11px 14px; margin-bottom: 8px; }
+  .entry { display: flex; align-items: stretch; gap: 8px; margin-bottom: 8px; }
+  .entry .row { flex: 1; margin-bottom: 0; }
+  .dismiss { flex: none; width: 38px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
+    color: var(--muted); font-size: 16px; cursor: pointer; }
+  .dismiss:hover { color: var(--bad); border-color: var(--bad); }
   .row.open { cursor: pointer; }
   .row.open:hover { border-color: var(--accent); }
   .size { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px;
@@ -62,7 +67,7 @@ export function inboxPage(): string {
     <div id="ready"></div>
   </section>
   <section id="working-section" hidden>
-    <h2>Preparing</h2>
+    <h2>Queue</h2>
     <div id="working"></div>
   </section>
   <section id="other-section" hidden>
@@ -106,6 +111,30 @@ export function inboxPage(): string {
     return row;
   }
 
+  function withDismiss(row, r) {
+    if (!r.dismissUrl) return row;
+    const wrap = document.createElement('div');
+    wrap.className = 'entry';
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'dismiss';
+    button.title = 'Dismiss: you will not review this one, and it will not come back';
+    button.textContent = '\\u00d7';
+    button.onclick = () => dismiss(r);
+    wrap.append(row, button);
+    return wrap;
+  }
+
+  async function dismiss(r) {
+    if (!confirm('Dismiss ' + r.repo + '#' + r.number + '? It leaves the inbox for good.')) return;
+    const res = await fetch(r.dismissUrl, { method: 'POST' });
+    if (!res.ok) {
+      el('status').textContent = 'could not dismiss ' + r.repo + '#' + r.number + ': ' + await res.text();
+      return;
+    }
+    refresh();
+  }
+
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   }
@@ -120,15 +149,15 @@ export function inboxPage(): string {
     try {
       const res = await fetch('/api/inbox', { cache: 'no-store' });
       const view = await res.json();
-      fill('ready-section', 'ready', view.ready, readyRow);
-      fill('working-section', 'working', view.working, r => plainRow(r, 'work', r.status));
+      fill('ready-section', 'ready', view.ready, r => withDismiss(readyRow(r), r));
+      fill('working-section', 'working', view.working, r => withDismiss(plainRow(r, 'work', r.status), r));
       fill('other-section', 'other', view.other, r => {
         const bad = r.status === 'failed';
-        return plainRow(r, bad ? 'bad' : 'work', r.status);
+        return withDismiss(plainRow(r, bad ? 'bad' : 'work', r.status), r);
       });
       const total = view.ready.length + view.working.length + view.other.length;
       el('all-empty').hidden = total > 0;
-      el('status').textContent = view.ready.length + ' ready \\u00b7 ' + view.working.length + ' preparing';
+      el('status').textContent = view.ready.length + ' ready \\u00b7 ' + view.working.length + ' queued';
       el('foot').textContent = 'Updated ' + new Date().toLocaleTimeString();
     } catch (err) {
       el('status').textContent = 'the inbox daemon is not responding';

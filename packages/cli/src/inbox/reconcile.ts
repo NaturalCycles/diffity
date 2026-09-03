@@ -28,13 +28,18 @@ export interface ReconcileInput {
  *
  * Nothing prepares a draft, the reviewer's own pull request, or a bot's. A closed or merged one, or
  * one no longer asking for the review, is retired but keeps whatever was prepared. A new commit
- * makes a prepared review stale and worth redoing. Everything else asked of the reviewer is queued.
+ * makes a prepared review stale and worth redoing. One the reviewer dismissed stays dismissed,
+ * whatever the forge says next. Everything else asked of the reviewer is queued.
  */
 export function reconcile(input: ReconcileInput): Transition | null {
   const { existing, snapshot, requested, viewerLogin } = input;
 
   // Listed by search but the detail view failed this tick: keep the row as it is and try next time.
   if (!snapshot) {
+    return null;
+  }
+
+  if (existing?.status === 'dismissed') {
     return null;
   }
 

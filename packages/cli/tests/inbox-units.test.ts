@@ -22,6 +22,13 @@ describe('parseInboxConfig', () => {
     expect(() => parseInboxConfig({ prepare: ['claude', 42] })).toThrow(/prepare must be a non-empty array/);
     expect(() => parseInboxConfig([])).toThrow(/must be a JSON object/);
   });
+
+  it('takes maxPrepared as a positive integer only', () => {
+    expect(parseInboxConfig({}).maxPrepared).toBe(5);
+    expect(parseInboxConfig({ maxPrepared: 2 }).maxPrepared).toBe(2);
+    expect(() => parseInboxConfig({ maxPrepared: 0 })).toThrow(/maxPrepared must be a positive integer/);
+    expect(() => parseInboxConfig({ maxPrepared: 2.5 })).toThrow(/maxPrepared must be a positive integer/);
+  });
 });
 
 describe('composePrompt', () => {

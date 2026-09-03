@@ -1,4 +1,4 @@
-import type { InboxPr, InboxStore } from './store.js';
+import { isRetired, type InboxPr, type InboxStore } from './store.js';
 
 /** One row as the inbox surface shows it: what it is, what was done, and whether it needs a look. */
 export interface InboxRow {
@@ -17,6 +17,8 @@ export interface InboxRow {
   stale: boolean;
   preparedAt: string | null;
   openUrl: string | null;
+  /** Where a POST dismisses it; null while it is being prepared, and once it is retired. */
+  dismissUrl: string | null;
 }
 
 export interface InboxView {
@@ -34,7 +36,7 @@ export function buildView(store: InboxStore, openBase: string, now: string): Inb
   const ready = rows.filter(row => row.status === 'prepared' || row.status === 'stale')
     .sort((a, b) => diffSize(a) - diffSize(b));
   const working = rows.filter(row => row.status === 'queued' || row.status === 'preparing');
-  const other = rows.filter(row => !ready.includes(row) && !working.includes(row) && row.status !== 'hidden' && row.status !== 'done');
+  const other = rows.filter(row => !ready.includes(row) && !working.includes(row) && !isRetired(row.status));
   return { ready, working, other, generatedAt: now };
 }
 
@@ -57,6 +59,7 @@ function toRow(pr: InboxPr, openBase: string): InboxRow {
     stale,
     preparedAt: pr.preparedAt,
     openUrl: openable ? `${openBase}/open/${encodeURIComponent(pr.id)}` : null,
+    dismissUrl: pr.status === 'preparing' || isRetired(pr.status) ? null : `${openBase}/dismiss/${encodeURIComponent(pr.id)}`,
   };
 }
 

@@ -37,13 +37,15 @@ let prepared: string[];
 let removed: string[];
 let prepareResult: (snap: PrSnapshot) => PrepareResult;
 
-function deps(): TickDeps {
+function deps(over: Partial<TickDeps> = {}): TickDeps {
   return {
     forge,
     prepare: (snap) => { prepared.push(prId(snap)); return Promise.resolve(prepareResult(snap)); },
     removeWorktree: (worktree) => { removed.push(worktree); },
     log: () => {},
     now: () => '2026-09-02T12:00:00.000Z',
+    maxPrepared: 100,
+    ...over,
   };
 }
 
@@ -169,5 +171,75 @@ describe('runTick', () => {
     await runTick(store, deps());
     expect(prepared).toEqual([]);
     expect(store.get('o/r#1')!.status).toBe('prepared');
+  });
+
+  it('prepares no more than maxPrepared at once, smallest first, and leaves the rest queued', async () => {
+    forge.set(snapshot({ number: 1, additions: 300, deletions: 0 }));
+    forge.set(snapshot({ number: 2, additions: 10, deletions: 0 }));
+    forge.set(snapshot({ number: 3, additions: 50, deletions: 0 }));
+    await runTick(store, deps({ maxPrepared: 2 }));
+
+    expect(prepared).toEqual(['o/r#2', 'o/r#3']);
+    const waiting = store.get('o/r#1')!;
+    expect(waiting.status).toBe('queued');
+    expect(waiting.statusReason).toBe('waiting: 2 reviews already prepared');
+  });
+
+  it('fills a slot once a prepared review is no longer requested', async () => {
+    forge.set(snapshot({ number: 1, additions: 300, deletions: 0 }));
+    forge.set(snapshot({ number: 2, additions: 10, deletions: 0 }));
+    await runTick(store, deps({ maxPrepared: 1 }));
+    expect(prepared).toEqual(['o/r#2']);
+
+    // The review on #2 is posted: GitHub withdraws the request, and the next tick moves on to #1.
+    forge.requested = forge.requested.filter(ref => ref.number !== 2);
+    prepared = [];
+    await runTick(store, deps({ maxPrepared: 1 }));
+    expect(store.get('o/r#2')!.status).toBe('hidden');
+    expect(prepared).toEqual(['o/r#1']);
+  });
+
+  it('refreshes a stale review even at the cap, without preparing a queued one', async () => {
+    forge.set(snapshot({ number: 1, additions: 10, deletions: 0 }));
+    forge.set(snapshot({ number: 2, additions: 300, deletions: 0 }));
+    await runTick(store, deps({ maxPrepared: 1 }));
+    expect(prepared).toEqual(['o/r#1']);
+
+    forge.snapshots.set('o/r#1', snapshot({ number: 1, additions: 10, deletions: 0, headSha: 'bbb' }));
+    prepared = [];
+    await runTick(store, deps({ maxPrepared: 1 }));
+    expect(prepared).toEqual(['o/r#1']);
+    expect(store.get('o/r#1')!.preparedHeadSha).toBe('bbb');
+    expect(store.get('o/r#2')!.status).toBe('queued');
+  });
+
+  it('never re-queues a dismissed pull request, and its slot goes to the next in line', async () => {
+    forge.set(snapshot({ number: 1, additions: 10, deletions: 0 }));
+    forge.set(snapshot({ number: 2, additions: 400, deletions: 0 }));
+    await runTick(store, deps({ maxPrepared: 1 }));
+    store.setStatus('o/r#1', 'dismissed', 'dismissed by the reviewer');
+
+    prepared = [];
+    forge.snapshots.set('o/r#1', snapshot({ number: 1, additions: 10, deletions: 0, headSha: 'bbb' }));
+    await runTick(store, deps({ maxPrepared: 1 }));
+    expect(store.get('o/r#1')!.status).toBe('dismissed');
+    expect(prepared).toEqual(['o/r#2']);
+
+    const view = buildView(store, 'http://localhost:5390', '2026-09-02T12:00:00.000Z');
+    expect(view.ready.map(row => row.number)).toEqual([2]);
+    expect(view.other).toEqual([]);
+  });
+
+  it('offers a dismiss link for every row but one being prepared', async () => {
+    forge.set(snapshot({ number: 1, additions: 10, deletions: 0 }));
+    forge.set(snapshot({ number: 2, additions: 300, deletions: 0 }));
+    await runTick(store, deps({ maxPrepared: 1 }));
+    store.observe(snapshot({ number: 3 }), true, 'now');
+    store.setStatus('o/r#3', 'preparing');
+
+    const view = buildView(store, 'http://localhost:5390', '2026-09-02T12:00:00.000Z');
+    expect(view.ready[0].dismissUrl).toBe('http://localhost:5390/dismiss/o%2Fr%231');
+    const byNumber = Object.fromEntries(view.working.map(row => [row.number, row.dismissUrl]));
+    expect(byNumber).toEqual({ 2: 'http://localhost:5390/dismiss/o%2Fr%232', 3: null });
   });
 });

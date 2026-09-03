@@ -12,6 +12,7 @@ export const INBOX_STATUSES = [
   'failed',
   'draft',
   'hidden',
+  'dismissed',
   'done',
 ] as const;
 export type InboxStatus = (typeof INBOX_STATUSES)[number];
@@ -58,6 +59,11 @@ export interface Prepared {
 
 export function prId(ref: { owner: string; repo: string; number: number }): string {
   return `${ref.owner}/${ref.repo}#${ref.number}`;
+}
+
+/** Statuses the inbox is finished with: no poll re-queues them and no surface lists them. */
+export function isRetired(status: InboxStatus): boolean {
+  return status === 'done' || status === 'hidden' || status === 'dismissed';
 }
 
 /**

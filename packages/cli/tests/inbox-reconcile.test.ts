@@ -86,4 +86,10 @@ describe('reconcile', () => {
     // A new head resets the budget.
     expect(reconcile({ existing: { ...failing, attempts: 3 }, snapshot: snapshot({ headSha: 'ddd' }), requested: true, viewerLogin: 'me' })!.prepare).toBe(true);
   });
+
+  it('keeps a dismissed pull request dismissed, whatever the forge says next', () => {
+    const dismissed = existing({ status: 'dismissed', statusReason: 'dismissed by the reviewer' });
+    expect(reconcile({ existing: dismissed, snapshot: snapshot({ headSha: 'bbb' }), requested: true, viewerLogin: 'me' })).toBeNull();
+    expect(reconcile({ existing: dismissed, snapshot: snapshot(), requested: false, viewerLogin: 'me' })).toBeNull();
+  });
 });

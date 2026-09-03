@@ -1,6 +1,6 @@
 import type { PrRef, PrSnapshot } from '@diffity/github';
 import { reconcile } from './reconcile.js';
-import { prId, type InboxPr, type InboxStore } from './store.js';
+import { isRetired, prId, type InboxPr, type InboxStore } from './store.js';
 import type { PrepareResult } from './prepare.js';
 
 /** The forge, as one tick needs it — one interface so a test can stand in for GitHub. */
@@ -19,6 +19,8 @@ export interface TickDeps {
   now(): string;
   /** False once the daemon is shutting down, so the drain stops starting new preparations. */
   shouldContinue?(): boolean;
+  /** How many prepared reviews may wait for the reviewer at once; the rest of the queue waits. */
+  maxPrepared: number;
 }
 
 /**
@@ -71,12 +73,36 @@ export async function runTick(store: InboxStore, deps: TickDeps): Promise<void> 
     }
   }
 
-  for (const snapshot of toPrepare) {
+  // A stale review is already in the reviewer's pile and is only refreshed. New ones fill the pile
+  // smallest first and no further than `maxPrepared`: each preparation spends an agent run, so the
+  // rest stay queued until a prepared review is posted or dismissed.
+  const candidates = toPrepare
+    .map(snapshot => ({ snapshot, refresh: store.get(prId(snapshot))?.status === 'stale' }))
+    .sort((a, b) => Number(b.refresh) - Number(a.refresh) || diffSize(a.snapshot) - diffSize(b.snapshot));
+  let waiting = 0;
+  for (const { snapshot, refresh } of candidates) {
     if (deps.shouldContinue && !deps.shouldContinue()) {
       break;
     }
+    if (!refresh && countReady(store) >= deps.maxPrepared) {
+      store.setStatus(prId(snapshot), 'queued', `waiting: ${deps.maxPrepared} reviews already prepared`);
+      waiting++;
+      continue;
+    }
     await prepareOne(store, snapshot, deps);
   }
+  if (waiting > 0) {
+    deps.log(`${waiting} left queued: ${deps.maxPrepared} reviews already prepared`);
+  }
+}
+
+/** Prepared reviews waiting for the reviewer, stale ones included: they are still openable. */
+function countReady(store: InboxStore): number {
+  return store.all().filter(pr => pr.status === 'prepared' || pr.status === 'stale').length;
+}
+
+function diffSize(snapshot: PrSnapshot): number {
+  return snapshot.additions + snapshot.deletions;
 }
 
 async function prepareOne(store: InboxStore, snapshot: PrSnapshot, deps: TickDeps): Promise<void> {
@@ -107,10 +133,6 @@ async function prepareOne(store: InboxStore, snapshot: PrSnapshot, deps: TickDep
       deps.log(`failed to prepare ${id}: ${result.reason}`);
       return;
   }
-}
-
-function isRetired(status: InboxPr['status']): boolean {
-  return status === 'done' || status === 'hidden';
 }
 
 function prToRef(pr: InboxPr): PrRef {
