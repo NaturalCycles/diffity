@@ -75,9 +75,10 @@ export interface SettingsHost {
 export function settingsHost(config: InboxConfig, configPath: string | undefined, onPollChanged: () => void = () => {}): SettingsHost {
   return {
     get: () => ({
-      filter: config.filter, alertWhen: config.alertWhen, maxPrepared: config.maxPrepared, pollMinutes: config.pollMinutes,
+      filter: config.filter, alertWhen: config.alertWhen, alertPaths: config.alertPaths,
+      maxPrepared: config.maxPrepared, pollMinutes: config.pollMinutes,
       live: config.live, liveTimeoutMinutes: config.liveTimeoutMinutes, prepareTimeoutMinutes: config.prepareTimeoutMinutes,
-      agent: config.agent,
+      waitForCi: config.waitForCi, agent: config.agent,
     }),
     update: settings => {
       // The config object is the one the tick, the prepares and the opens read from, so the change
@@ -131,6 +132,8 @@ export async function runDaemon(
     shouldContinue: () => !stopping,
     // Read at each tick, not copied: the page can change it while the daemon runs.
     get maxPrepared() { return config.maxPrepared; },
+    get waitForCi() { return config.waitForCi; },
+    get alertPaths() { return config.alertPaths; },
     get agentModel() { return config.agent.model; },
     pauseUntil: (until: string) => {
       store.pauseUntil(until);

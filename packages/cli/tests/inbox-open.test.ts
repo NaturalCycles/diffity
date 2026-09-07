@@ -27,7 +27,7 @@ function snapshot(): PrSnapshot {
   return {
     owner: 'o', repo: 'r', number: 4, title: 'A change', url: 'https://github.com/o/r/pull/4',
     author: 'alice', isBot: false, isDraft: false, state: 'OPEN', headSha: 'aaa', baseRef: 'main',
-    additions: 3, deletions: 1, changedFiles: 2, createdAt: 'now', updatedAt: 'now',
+    additions: 3, deletions: 1, changedFiles: 2, createdAt: 'now', updatedAt: 'now', checks: [], files: [],
   };
 }
 
@@ -222,7 +222,7 @@ describe('the inbox server routes', () => {
   };
 
   async function serve(store: InboxStore, logs: string[] = [], attendants: AttendantHost | null = null, onBump: (() => void) | null = null, configPath?: string, extra: Partial<ServerHooks> = {}) {
-    const config = { pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', alertWhen: '', agent: agentConfig(), prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10 };
+    const config = { pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', alertWhen: '', alertPaths: [], agent: agentConfig(), waitForCi: false, prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10 };
     const server = startInboxServer(store, config, m => logs.push(m), stubOpen, { attendants, onBump, settings: settingsHost(config, configPath), ...extra });
     await new Promise(resolve => server.on('listening', resolve));
     const { port } = server.address() as { port: number };
@@ -354,10 +354,14 @@ describe('the inbox server routes', () => {
     const { port, server } = await serve(store, [], null, null, configPath);
     try {
       const before = await (await fetch(`http://127.0.0.1:${port}/api/settings`)).json();
-      expect(before).toEqual({ filter: '', alertWhen: '', maxPrepared: 5, pollMinutes: 5, live: true, liveTimeoutMinutes: 10, prepareTimeoutMinutes: 30, agent: agentConfig() });
+      expect(before).toEqual({
+        filter: '', alertWhen: '', alertPaths: [], maxPrepared: 5, pollMinutes: 5, live: true,
+        liveTimeoutMinutes: 10, prepareTimeoutMinutes: 30, waitForCi: false, agent: agentConfig(),
+      });
 
       const next = {
-        filter: 'skip payments', alertWhen: 'a P1', maxPrepared: 2, pollMinutes: 3, live: false, liveTimeoutMinutes: 4, prepareTimeoutMinutes: 20,
+        filter: 'skip payments', alertWhen: 'a P1', alertPaths: ['packages/shared/src/model/**'],
+        maxPrepared: 2, pollMinutes: 3, live: false, liveTimeoutMinutes: 4, prepareTimeoutMinutes: 20, waitForCi: true,
         agent: { ...agentConfig(), model: 'opus', mcpAllow: ['mcp__atlassian__getJiraIssue'] },
       };
       const saved = await fetch(`http://127.0.0.1:${port}/api/settings`, {
@@ -453,7 +457,7 @@ describe('the inbox server routes', () => {
       ensureServer: () => Promise.resolve(7788),
       importBundle: () => { throw new Error('head moved'); },
     };
-    const config = { pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', alertWhen: '', agent: agentConfig(), prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10 };
+    const config = { pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', alertWhen: '', alertPaths: [], agent: agentConfig(), waitForCi: false, prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10 };
     const server = startInboxServer(store, config, m => logs.push(m), failingOpen);
     await new Promise(resolve => server.on('listening', resolve));
     const { port } = server.address() as { port: number };

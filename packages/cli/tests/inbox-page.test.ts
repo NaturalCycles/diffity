@@ -40,6 +40,28 @@ describe('the inbox page', () => {
     expect(inboxPage()).toContain('.title .meta { color: var(--muted); font-size: 12px; min-width: 0;');
   });
 
+  it('marks each card with what CI said, and keeps the card\'s width its own', () => {
+    const script = pageScript();
+    expect(script).toContain("'<span class=\"ci ci-' + r.ciState");
+    for (const label of ['CI passing', 'CI failing', 'CI running']) {
+      expect(script).toContain(label);
+    }
+    // A row with nothing reported gets no dot at all, and the glyph itself cannot stretch a card.
+    expect(script).toContain('ciDot(r) +');
+    expect(inboxPage()).toContain('.ci { flex: none;');
+  });
+
+  it('has a settings field for the CI hold and the alert paths, and sends both back', () => {
+    const html = inboxPage();
+    expect(html).toContain('id="waitForCi" type="checkbox"');
+    expect(html).toContain('Hold a pull request until its CI has passed');
+    expect(html).toContain('id="alertPaths"');
+    expect(html).toContain('Alert me if a changed file matches (one glob per line)');
+    const script = pageScript();
+    expect(script).toContain("alertPaths: el('alertPaths').value.split('\\n')");
+    expect(script).toContain("waitForCi: el('waitForCi').checked");
+  });
+
   it('sends the agent block back with the settings, empty fields as null', () => {
     const script = pageScript();
     expect(script).toContain("model: el('agentModel').value.trim() || null");

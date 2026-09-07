@@ -10,7 +10,8 @@ function snapshot(over: Partial<PrSnapshot> = {}): PrSnapshot {
   return {
     owner: 'o', repo: 'r', number: 1, title: 'A change', url: 'https://github.com/o/r/pull/1',
     author: 'alice', isBot: false, isDraft: false, state: 'OPEN', headSha: 'aaa', baseRef: 'main',
-    additions: 10, deletions: 2, changedFiles: 3, createdAt: '2026-09-02T10:00:00Z', updatedAt: '2026-09-02T10:00:00Z', ...over,
+    additions: 10, deletions: 2, changedFiles: 3, createdAt: '2026-09-02T10:00:00Z', updatedAt: '2026-09-02T10:00:00Z',
+    checks: [], files: [], ...over,
   };
 }
 
@@ -61,6 +62,8 @@ function deps(over: Partial<TickDeps> = {}): TickDeps {
     log: () => {},
     now: () => '2026-09-02T12:00:00.000Z',
     maxPrepared: 100,
+    waitForCi: false,
+    alertPaths: [],
     agentModel: 'the-configured-model',
     pauseUntil: until => { pauses.push(until); },
     ...over,
@@ -153,6 +156,41 @@ describe('runTick', () => {
     expect(view.ready.map(row => row.number)).toEqual([2, 1]);
     expect(view.ready.map(row => [row.summary, row.alert])).toEqual([['1 P2', 'touches auth'], ['1 P2', null]]);
     expect(view.ready[0].openUrl).toBe('http://localhost:5390/open/o%2Fr%232');
+  });
+
+  it('alerts on the reviewer\'s own paths when the agent raised nothing, and defers to it when it did', async () => {
+    forge.set(snapshot({ number: 1, files: [{ path: 'README.md', additions: 1, deletions: 0 }, { path: 'packages/shared/src/model/user.ts', additions: 2, deletions: 1 }] }));
+    forge.set(snapshot({ number: 2, files: [{ path: 'packages/shared/src/model/user.ts', additions: 2, deletions: 1 }] }));
+    forge.set(snapshot({ number: 3, files: [{ path: 'README.md', additions: 1, deletions: 0 }] }));
+    await runTick(store, deps({ alertPaths: ['packages/shared/src/model/**'] }));
+
+    expect(store.get('o/r#1')!.alert).toBe('touches packages/shared/src/model/user.ts');
+    // Number 2 is the one the fake agent alerts on: its own words stand.
+    expect(store.get('o/r#2')!.alert).toBe('touches auth');
+    expect(store.get('o/r#3')!.alert).toBeNull();
+  });
+
+  it('carries what CI said about each head to the surface', async () => {
+    forge.set(snapshot({ number: 1, checks: [{ name: 'check-job', status: 'success' }] }));
+    forge.set(snapshot({ number: 2, checks: [{ name: 'check-job', status: 'pending' }] }));
+    forge.set(snapshot({ number: 3 }));
+    await runTick(store, deps());
+
+    const view = buildView(store, 'http://localhost:5390', '2026-09-02T12:00:00.000Z');
+    expect(new Map(view.ready.map(row => [row.number, row.ciState])))
+      .toEqual(new Map([[1, 'passing'], [2, 'running'], [3, 'none']]));
+  });
+
+  it('leaves a pull request queued while its CI runs, and skips one whose CI failed', async () => {
+    forge.set(snapshot({ number: 1, checks: [{ name: 'check-job', status: 'pending' }] }));
+    forge.set(snapshot({ number: 2, checks: [{ name: 'check-job', status: 'failure' }] }));
+    forge.set(snapshot({ number: 3, checks: [{ name: 'check-job', status: 'success' }] }));
+    await runTick(store, deps({ waitForCi: true }));
+
+    expect(prepared).toEqual(['o/r#3']);
+    expect(store.get('o/r#1')!.statusReason).toBe('waiting: CI running (1 checks)');
+    expect(store.get('o/r#2')!.status).toBe('skipped');
+    expect(store.get('o/r#2')!.statusReason).toBe('CI failed: check-job');
   });
 
   it('holds a failed preparation with its reason and log, and stops after the attempt cap', async () => {

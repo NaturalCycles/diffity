@@ -21,6 +21,16 @@ describe('parseInboxConfig', () => {
     expect(config.agent).toEqual(DEFAULT_INBOX_CONFIG.agent);
   });
 
+  it('takes the CI hold and the alert paths, and refuses each by name', () => {
+    expect(parseInboxConfig({ waitForCi: true, alertPaths: [' packages/shared/src/model/** ', '**/dbref/**'] }))
+      .toMatchObject({ waitForCi: true, alertPaths: ['packages/shared/src/model/**', '**/dbref/**'] });
+    expect(DEFAULT_INBOX_CONFIG.waitForCi).toBe(false);
+    expect(DEFAULT_INBOX_CONFIG.alertPaths).toEqual([]);
+    expect(() => parseInboxConfig({ waitForCi: 'yes' })).toThrow(/waitForCi must be true or false/);
+    expect(() => parseInboxConfig({ alertPaths: 'src/**' })).toThrow(/alertPaths must be an array of non-empty globs/);
+    expect(() => parseInboxConfig({ alertPaths: [' '] })).toThrow(/alertPaths must be an array of non-empty globs/);
+  });
+
   it('refuses a non-positive interval, by name', () => {
     expect(() => parseInboxConfig({ pollMinutes: 0 })).toThrow(/pollMinutes must be a positive number/);
     expect(() => parseInboxConfig([])).toThrow(/must be a JSON object/);
@@ -69,7 +79,8 @@ describe('parseInboxConfig', () => {
       const path = join(dir, 'config.json');
       writeFileSync(path, JSON.stringify({ port: 5399, filter: 'old', pollMinutes: 2 }, null, 2));
       const settings = {
-        filter: 'skip payments', alertWhen: 'a P1', maxPrepared: 3, pollMinutes: 7, live: false, liveTimeoutMinutes: 4, prepareTimeoutMinutes: 20,
+        filter: 'skip payments', alertWhen: 'a P1', alertPaths: ['packages/shared/**'], maxPrepared: 3, pollMinutes: 7,
+        live: false, liveTimeoutMinutes: 4, prepareTimeoutMinutes: 20, waitForCi: true,
         agent: { model: 'opus', effort: 'high', mcpAllow: [], extraArgs: [], maxBudgetUsd: null },
       };
       saveInboxSettings(path, settings);
@@ -105,6 +116,7 @@ describe('composePrompt', () => {
     owner: 'o', repo: 'r', number: 7, title: 'Add a widget', url: 'https://github.com/o/r/pull/7',
     author: 'alice', isBot: false, isDraft: false, state: 'OPEN', headSha: 'abc', baseRef: 'main',
     additions: 12, deletions: 3, changedFiles: 2, createdAt: '2026-09-02T10:00:00Z', updatedAt: '2026-09-02T10:00:00Z',
+    checks: [], files: [],
   };
 
   it('tells the agent the worktree, forbids the forge, and asks for a verdict', () => {
@@ -140,6 +152,49 @@ describe('composePrompt', () => {
     expect(some).toContain('  mcp__claude_ai_Atlassian__getJiraIssue\n  mcp__claude_ai_Slack__slack_read_thread');
     expect(some).toContain('Nothing else outside this checkout.');
   });
+
+  it('reports what CI made of the head and tells the agent not to redo its work', () => {
+    const prompt = composePrompt({
+      snapshot: {
+        ...snapshot,
+        checks: [
+          { name: 'check-job', status: 'success' },
+          { name: 'pr-ecosystem-test (admin3)', status: 'success' },
+          { name: 'e2e', status: 'pending' },
+          { name: 'integration-test-job', status: 'skipped' },
+          { name: 'ncapp3-playwright-e2e-tests-job', status: 'skipped' },
+        ],
+      },
+      worktreePath: '/wt', port: 5555, filter: '', alertWhen: '', mcpAllow: [],
+    });
+    expect(prompt).toContain('CI at this head: check-job SUCCESS \u00b7 pr-ecosystem-test (admin3) SUCCESS \u00b7 e2e PENDING \u00b7 2 more skipped');
+    expect(prompt).toContain('Do not install dependencies, build, typecheck, lint or run tests');
+    expect(prompt).toContain('If a check failed or is still running,\nsay so in the summary.');
+  });
+
+  it('says so plainly when every check was skipped', () => {
+    const prompt = composePrompt({
+      snapshot: { ...snapshot, checks: [{ name: 'a', status: 'skipped' }, { name: 'b', status: 'skipped' }] },
+      worktreePath: '/wt', port: 5555, filter: '', alertWhen: '', mcpAllow: [],
+    });
+    expect(prompt).toContain('CI at this head: 2 checks skipped, none ran');
+  });
+
+  it('says CI has not reported when nothing has, and still forbids the toolchain', () => {
+    const prompt = composePrompt({ snapshot, worktreePath: '/wt', port: 5555, filter: '', alertWhen: '', mcpAllow: [] });
+    expect(prompt).toContain('CI has not reported for this head.');
+    expect(prompt).toContain('Do not install dependencies, build, typecheck, lint or run tests');
+  });
+
+  it('holds a check name to one line and a length, as it does the author\'s other text', () => {
+    const name = `pr-feature-branch / ${'x'.repeat(200)}`;
+    const prompt = composePrompt({
+      snapshot: { ...snapshot, checks: [{ name: `deploy\n${name}`, status: 'failure' }] },
+      worktreePath: '/wt', port: 5555, filter: '', alertWhen: '', mcpAllow: [],
+    });
+    const line = prompt.split('\n').find(l => l.startsWith('CI at this head:'))!;
+    expect(line).toBe(`CI at this head: ${`deploy ${name}`.slice(0, 80)} FAILURE`);
+  });
 });
 
 describe('composePrompt alerts', () => {
@@ -147,6 +202,7 @@ describe('composePrompt alerts', () => {
     owner: 'o', repo: 'r', number: 7, title: 'Add a widget', url: 'https://github.com/o/r/pull/7',
     author: 'alice', isBot: false, isDraft: false, state: 'OPEN', headSha: 'abc', baseRef: 'main',
     additions: 12, deletions: 3, changedFiles: 2, createdAt: '2026-09-02T10:00:00Z', updatedAt: '2026-09-02T10:00:00Z',
+    checks: [], files: [],
   };
 
   it('asks for an ALERT line only when the reviewer said what matters', () => {
@@ -178,7 +234,8 @@ describe('summarizeFindings', () => {
 
 describe('parseSettingsPatch', () => {
   const full = {
-    filter: 'a', alertWhen: 'b', maxPrepared: 2, pollMinutes: 3, live: false, liveTimeoutMinutes: 5, prepareTimeoutMinutes: 15,
+    filter: 'a', alertWhen: 'b', alertPaths: ['src/**'], maxPrepared: 2, pollMinutes: 3, live: false,
+    liveTimeoutMinutes: 5, prepareTimeoutMinutes: 15, waitForCi: false,
     agent: { model: null, effort: null, mcpAllow: [], extraArgs: [], maxBudgetUsd: null },
   };
   it('takes every editable key, validated as the config file is, and refuses anything else by name', () => {
