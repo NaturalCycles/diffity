@@ -89,7 +89,7 @@ export function inboxPage(): string {
   <span class="tools">
     <button class="bell" id="bell" type="button" hidden
       title="Announces a review the moment it turns prepared. What gets announced is in Settings, at the bottom of the page.">Turn on notifications</button>
-    <button class="reload" id="reload" type="button" title="Poll GitHub now">&#x27F3;</button>
+    <button class="reload" id="reload" type="button" title="Poll GitHub now" aria-label="Poll GitHub now">&#x27F3;</button>
   </span>
 </header>
 <main>
