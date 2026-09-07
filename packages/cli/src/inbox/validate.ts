@@ -135,10 +135,17 @@ export function composeValidatePrompt(ctx: ValidatePromptContext): string {
   return lines.join('\n') + '\n';
 }
 
-/** Whether the checking agent finished: its last word has to be the verdict and nothing else. */
+/** Whether the checking agent finished, read from the last verdict line it printed. */
 export function validateVerdictOf(text: string): 'validated' | 'none' {
   const lines = text.split('\n').map(line => line.trim()).filter(Boolean);
-  return lines[lines.length - 1] === 'VALIDATED' ? 'validated' : 'none';
+  // Read from the end, as the drafting verdict is: a closing sentence after the verdict line does
+  // not lose the check, and only a line that is the verdict on its own counts as one.
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i] === 'VALIDATED') {
+      return 'validated';
+    }
+  }
+  return 'none';
 }
 
 function indent(text: string): string {

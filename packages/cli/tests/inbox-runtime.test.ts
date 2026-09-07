@@ -19,7 +19,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  rmSync(root, { recursive: true, force: true });
+  // A test that started a real diffity server may still be losing it: the process writes to its
+  // data directory until the signal lands, and a plain rm walks into what it is still writing.
+  rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 function attendedPr(): AttendedPr {
@@ -283,9 +285,28 @@ describe('the real listThreads', () => {
       expect(generalCommentIdOf(threads)).toMatch(/\w/);
     } finally {
       server.stop();
+      await gone(dataDir);
     }
   }, 40_000);
 });
+
+/** Waits for the server registered in a data directory to be gone, so its files stop moving. */
+async function gone(dataDir: string, waitMs = 10_000): Promise<void> {
+  const registry = join(dataDir, 'registry.json');
+  const deadline = Date.now() + waitMs;
+  while (Date.now() < deadline) {
+    const rows = (() => {
+      try { return JSON.parse(readFileSync(registry, 'utf-8')) as { pid: number }[]; } catch { return []; }
+    })();
+    const alive = rows.filter(row => {
+      try { process.kill(row.pid, 0); return true; } catch { return false; }
+    });
+    if (alive.length === 0) {
+      return;
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+}
 
 // Helpers kept below the tests they serve.
 import { writeFileSync } from 'node:fs';

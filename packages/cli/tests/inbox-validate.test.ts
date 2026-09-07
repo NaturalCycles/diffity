@@ -140,6 +140,8 @@ describe('validateVerdictOf', () => {
     expect(validateVerdictOf('checked two findings\nVALIDATED\n')).toBe('validated');
     expect(validateVerdictOf('VALIDATED')).toBe('validated');
     expect(validateVerdictOf('  VALIDATED  \n\n')).toBe('validated');
+    // A closing sentence after the verdict must not lose the check, as with the drafting verdict.
+    expect(validateVerdictOf('VALIDATED\nI amended one and dismissed one.')).toBe('validated');
     // Still going, or stopped mid-thought: nothing was settled.
     expect(validateVerdictOf('I will print VALIDATED when done.\nreading src/a.ts')).toBe('none');
     expect(validateVerdictOf('VALIDATED the first one, on to the next')).toBe('none');

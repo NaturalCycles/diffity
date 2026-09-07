@@ -237,18 +237,33 @@ describe('composePrompt alerts', () => {
 
 describe('summarizeFindings', () => {
   const c = (body: string, kind: 'review' | 'aside' = 'review') => ({ body, kind, author: { name: 'Agent', type: 'agent' as const }, createdAt: '' });
+  const open = (filePath: string, ...comments: ReturnType<typeof c>[]) => ({ filePath, status: 'open' as const, comments });
+
   it('counts finding threads by the severity they open with, in order, leaving the summary out', () => {
     expect(summarizeFindings([
-      { filePath: 'a.ts', comments: [c('P2: one'), c('reply', 'aside')] },
-      { filePath: 'b.ts', comments: [c('P1: two')] },
-      { filePath: 'c.ts', comments: [c('p2: lower case counts')] },
-      { filePath: 'd.ts', comments: [c('[must-fix] old vocabulary')] },
-      { filePath: 'e.ts', comments: [c('no label at all')] },
-      { filePath: '__general__', comments: [c('Overall fine.')] },
+      open('a.ts', c('P2: one'), c('reply', 'aside')),
+      open('b.ts', c('P1: two')),
+      open('c.ts', c('p2: lower case counts')),
+      open('d.ts', c('[must-fix] old vocabulary')),
+      open('e.ts', c('no label at all')),
+      open('__general__', c('Overall fine.')),
     ])).toBe('1 P1 \u00b7 2 P2 \u00b7 1 must-fix \u00b7 1 other');
-    expect(summarizeFindings([{ filePath: '__general__', comments: [c('Nothing found.')] }])).toBe('no findings');
+    expect(summarizeFindings([open('__general__', c('Nothing found.'))])).toBe('no findings');
     expect(severityOf('  P3: nit')).toBe('P3');
     expect(severityOf('[question] why?')).toBe('question');
+  });
+
+  it('leaves out a finding the checking pass settled, so the card counts only what is left', () => {
+    expect(summarizeFindings([
+      { filePath: 'a.ts', status: 'dismissed', comments: [c('P1: this does not hold')] },
+      { filePath: 'b.ts', status: 'resolved', comments: [c('P2: already answered')] },
+      open('c.ts', c('P3: a nit')),
+    ])).toBe('1 P3');
+
+    expect(summarizeFindings([
+      { filePath: 'a.ts', status: 'dismissed', comments: [c('P1: this does not hold')] },
+      { filePath: 'b.ts', status: 'dismissed', comments: [c('P2: nor this')] },
+    ])).toBe('no findings');
   });
 });
 

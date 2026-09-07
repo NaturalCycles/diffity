@@ -288,7 +288,7 @@ describe('preparePr', () => {
       },
       exportBundle: ({ outPath }) => {
         mkdirSync(dirname(outPath), { recursive: true });
-        writeFileSync(outPath, JSON.stringify({ threads: [{ filePath: 'a.ts', comments: [{ body: 'P1: bad', kind: 'review' }] }] }));
+        writeFileSync(outPath, JSON.stringify({ threads: [{ filePath: 'a.ts', status: 'open', comments: [{ body: 'P1: bad', kind: 'review' }] }] }));
       },
     }));
 
@@ -306,6 +306,26 @@ describe('preparePr', () => {
     expect(timeouts).toEqual([30 * 60_000, 15 * 60_000]);
   });
 
+  it('drops a finding the checking pass dismissed from the summary the card shows', async () => {
+    const result = await preparePr(snapshot(), checking(), deps({
+      listThreads: () => Promise.resolve([draftedThread()]),
+      runAgent: ({ argv }) => {
+        argvs.push(argv);
+        return Promise.resolve({ stdout: argvs.length === 1 ? 'PREPARED\n' : 'VALIDATED\n', timedOut: false });
+      },
+      // The bundle keeps a dismissed thread, so the count has to read its status.
+      exportBundle: ({ outPath }) => {
+        mkdirSync(dirname(outPath), { recursive: true });
+        writeFileSync(outPath, JSON.stringify({ threads: [
+          { filePath: 'a.ts', status: 'dismissed', comments: [{ body: 'P1: this does not hold', kind: 'review' }] },
+          { filePath: 'a.ts', status: 'open', comments: [{ body: 'P3: a nit', kind: 'review' }] },
+        ] }));
+      },
+    }));
+
+    expect(result.kind === 'prepared' && result.summary).toBe('1 P3');
+  });
+
   it('keeps the draft and marks it unchecked when the checking agent times out', async () => {
     const result = await preparePr(snapshot(), checking(), deps({
       listThreads: () => Promise.resolve([draftedThread()]),
@@ -317,7 +337,7 @@ describe('preparePr', () => {
       },
       exportBundle: ({ outPath }) => {
         mkdirSync(dirname(outPath), { recursive: true });
-        writeFileSync(outPath, JSON.stringify({ threads: [{ filePath: 'a.ts', comments: [{ body: 'P1: bad', kind: 'review' }] }] }));
+        writeFileSync(outPath, JSON.stringify({ threads: [{ filePath: 'a.ts', status: 'open', comments: [{ body: 'P1: bad', kind: 'review' }] }] }));
       },
     }));
 
@@ -480,8 +500,8 @@ describe('the inbox JSON server', () => {
       exportBundle: ({ outPath }) => {
         mkdirSync(dirname(outPath), { recursive: true });
         writeFileSync(outPath, JSON.stringify({ threads: [
-          { filePath: 'a.ts', comments: [{ body: 'P1: bad', kind: 'review' }] },
-          { filePath: 'a.ts', comments: [{ body: 'P2: meh', kind: 'review' }] },
+          { filePath: 'a.ts', status: 'open', comments: [{ body: 'P1: bad', kind: 'review' }] },
+          { filePath: 'a.ts', status: 'open', comments: [{ body: 'P2: meh', kind: 'review' }] },
         ] }));
       },
     }));
