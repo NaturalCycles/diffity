@@ -30,6 +30,16 @@ describe('the inbox page', () => {
     expect(html).toContain('id="agentMaxBudgetUsd" type="number" min="0.5"');
   });
 
+  it('shows what a prepared review spent, the totals, and the pause', () => {
+    const script = pageScript();
+    expect(script).toContain("Math.round(r.spend.minutes) + ' min");
+    expect(script).toContain("'agent runs today: '");
+    expect(script).toContain("'preparing paused until '");
+    // The cost hangs off the meta line, which is the part that gives: a long one cannot widen the card.
+    expect(script).toContain("r.spend ? r.spend.detail : ''");
+    expect(inboxPage()).toContain('.title .meta { color: var(--muted); font-size: 12px; min-width: 0;');
+  });
+
   it('sends the agent block back with the settings, empty fields as null', () => {
     const script = pageScript();
     expect(script).toContain("model: el('agentModel').value.trim() || null");

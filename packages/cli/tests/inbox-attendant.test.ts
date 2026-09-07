@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { LiveRequest } from '@diffity/api';
 import { Attendants, composeLivePrompt, parseAwaitOutcome, type AttendantDeps, type AwaitOutcome } from '../src/inbox/attendant.js';
 
-const pr = { id: 'o/r#4', url: 'https://github.com/o/r/pull/4', title: 'A change', author: 'alice' };
+const pr = { id: 'o/r#4', url: 'https://github.com/o/r/pull/4', title: 'A change', author: 'alice', headSha: 'aaa' };
 
 function request(over: Partial<LiveRequest> = {}): LiveRequest {
   return {
@@ -13,7 +13,7 @@ function request(over: Partial<LiveRequest> = {}): LiveRequest {
 
 /** Deps that hand out a scripted sequence of outcomes and record what was asked of them. */
 function scripted(outcomes: AwaitOutcome[], answerEndsWith: { timedOut: boolean } = { timedOut: false }) {
-  const answers: { worktree: string; prompt: string }[] = [];
+  const answers: { worktree: string; prId: string; prompt: string }[] = [];
   const givenUp: { commentId: string; note: string }[] = [];
   const logs: string[] = [];
   let answerGate: (() => void) | null = null;
@@ -29,8 +29,8 @@ function scripted(outcomes: AwaitOutcome[], answerEndsWith: { timedOut: boolean 
       waits.push(() => resolve({ kind: 'failed', reason: 'stopped' }));
       signal.addEventListener('abort', () => resolve({ kind: 'failed', reason: 'stopped' }), { once: true });
     }),
-    answer: (worktree, prompt) => new Promise<{ timedOut: boolean }>(resolve => {
-      answers.push({ worktree, prompt });
+    answer: (worktree, answered, prompt) => new Promise<{ timedOut: boolean }>(resolve => {
+      answers.push({ worktree, prId: answered.id, prompt });
       answerGate = () => resolve(answerEndsWith);
     }),
     giveUp: (_worktree, request, note) => { givenUp.push({ commentId: request.commentId, note }); return Promise.resolve(); },
@@ -50,6 +50,8 @@ describe('an attendant', () => {
 
     expect(script.answers).toHaveLength(1);
     expect(script.answers[0].worktree).toBe('/wt');
+    // The answering agent is told which pull request it is answering about, so its run is logged.
+    expect(script.answers[0].prId).toBe('o/r#4');
     expect(script.answers[0].prompt).toContain('why is this safe?');
     expect(script.answers[0].prompt).toContain('agent reply t1 --aside --answers c1');
     // The next wait is already parked while the answer is still running.

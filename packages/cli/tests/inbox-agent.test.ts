@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { buildAgentArgv, shellQuote, skillBody } from '../src/inbox/agent-argv.js';
-import { parseAgentOutput } from '../src/inbox/agent-output.js';
+import { parseAgentOutput, rateLimitOf } from '../src/inbox/agent-output.js';
 import { allowFromEnv, mcpGateDecision } from '../src/inbox/mcp-gate.js';
 import { DEFAULT_INBOX_CONFIG, type AgentConfig } from '../src/inbox/config.js';
 
@@ -263,5 +263,75 @@ describe('parseAgentOutput', () => {
     expect(parseAgentOutput(JSON.stringify({ type: 'assistant', result: 'PREPARED' })))
       .toEqual({ text: JSON.stringify({ type: 'assistant', result: 'PREPARED' }), stats: null });
     expect(parseAgentOutput('')).toEqual({ text: '', stats: null });
+  });
+});
+
+describe('rateLimitOf', () => {
+  const limit = "Claude AI usage limit reached. You've hit your session limit \u00b7 resets 2pm (Europe/Stockholm)";
+
+  it('says nothing about a run that did not hit a limit', () => {
+    expect(rateLimitOf('reviewing\nPREPARED', new Date('2026-09-07T09:00:00Z'))).toBeNull();
+    expect(rateLimitOf('the rate of change here is high', new Date('2026-09-07T09:00:00Z'))).toBeNull();
+  });
+
+  it('reads the reset time in the zone the message named, today or tomorrow', () => {
+    // 11:00 in Stockholm, so 14:00 there is still ahead: today, 12:00 UTC.
+    expect(rateLimitOf(limit, new Date('2026-09-07T09:00:00Z'))).toEqual({ resetsAt: '2026-09-07T12:00:00.000Z' });
+    // 15:00 in Stockholm: the next 14:00 there is tomorrow.
+    expect(rateLimitOf(limit, new Date('2026-09-07T13:00:00Z'))).toEqual({ resetsAt: '2026-09-08T12:00:00.000Z' });
+  });
+
+  it('follows the zone through its winter offset', () => {
+    expect(rateLimitOf(limit, new Date('2026-01-15T09:00:00Z'))).toEqual({ resetsAt: '2026-01-15T13:00:00.000Z' });
+  });
+
+  it('reads a 24-hour time and a time with minutes', () => {
+    const stockholm = "You've hit your usage limit, resets 06:30 (Europe/Stockholm)";
+    expect(rateLimitOf(stockholm, new Date('2026-09-07T00:00:00Z'))).toEqual({ resetsAt: '2026-09-07T04:30:00.000Z' });
+    const newYork = "You've hit your session limit \u00b7 resets 2:15pm (America/New_York)";
+    expect(rateLimitOf(newYork, new Date('2026-09-07T10:00:00Z'))).toEqual({ resetsAt: '2026-09-07T18:15:00.000Z' });
+  });
+
+  it('reads a time with no zone on the reviewer\'s own clock', () => {
+    const now = new Date('2026-09-07T09:00:00Z');
+    const parsed = rateLimitOf("You've hit your session limit \u00b7 resets 23:45", now);
+    const at = new Date(parsed!.resetsAt!);
+    expect([at.getHours(), at.getMinutes()]).toEqual([23, 45]);
+    expect(at.getTime()).toBeGreaterThan(now.getTime());
+  });
+
+  it('reads a time introduced with "at"', () => {
+    expect(rateLimitOf("You've hit your session limit \u00b7 resets at 2pm (Europe/Stockholm)", new Date('2026-09-07T09:00:00Z')))
+      .toEqual({ resetsAt: '2026-09-07T12:00:00.000Z' });
+    expect(rateLimitOf("You've hit your usage limit, resets at 06:30 (Europe/Stockholm)", new Date('2026-09-07T00:00:00Z')))
+      .toEqual({ resetsAt: '2026-09-07T04:30:00.000Z' });
+  });
+
+  it('counts forward from now when the message says how long is left', () => {
+    const now = new Date('2026-09-07T09:00:00Z');
+    expect(rateLimitOf("You've hit your session limit \u00b7 resets in 3 hours", now)).toEqual({ resetsAt: '2026-09-07T12:00:00.000Z' });
+    expect(rateLimitOf("You've hit your usage limit, resets in 45 minutes", now)).toEqual({ resetsAt: '2026-09-07T09:45:00.000Z' });
+    expect(rateLimitOf("You've hit your session limit \u00b7 resets in 1 hour 30 minutes", now)).toEqual({ resetsAt: '2026-09-07T10:30:00.000Z' });
+    expect(rateLimitOf("You've hit your session limit \u00b7 resets in 90 mins", now)).toEqual({ resetsAt: '2026-09-07T10:30:00.000Z' });
+    expect(rateLimitOf("You've hit your session limit \u00b7 resets in 1 hr", now)).toEqual({ resetsAt: '2026-09-07T10:00:00.000Z' });
+  });
+
+  it('flags the limit with no time when the message names none it can read', () => {
+    for (const text of [
+      "You've hit your session limit",
+      "You've hit your session limit \u00b7 resets soon",
+      "You've hit your session limit \u00b7 resets in a while",
+      "You've hit your session limit \u00b7 resets 25:00",
+      "You've hit your session limit \u00b7 resets 13pm",
+    ]) {
+      expect(rateLimitOf(text, new Date('2026-09-07T09:00:00Z'))).toEqual({ resetsAt: null });
+    }
+  });
+
+  it('falls back to the local clock when the zone is not one Intl knows', () => {
+    const now = new Date('2026-09-07T09:00:00Z');
+    const parsed = rateLimitOf("You've hit your session limit \u00b7 resets 2pm (Middle/Earth)", now);
+    const at = new Date(parsed!.resetsAt!);
+    expect([at.getHours(), at.getMinutes()]).toEqual([14, 0]);
   });
 });

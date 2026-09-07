@@ -3,10 +3,11 @@ import pc from 'picocolors';
 import { isCliInstalled, isAuthenticated } from '@diffity/github';
 import { loadInboxConfig } from '../inbox/config.js';
 import { inboxConfigPath, inboxStorePath } from '../inbox/paths.js';
-import { InboxStore } from '../inbox/store.js';
+import { InboxStore, type RunTotals } from '../inbox/store.js';
 import { runDaemon } from '../inbox/daemon.js';
 import { allowFromEnv, mcpGateDecision } from '../inbox/mcp-gate.js';
 import { buildView } from '../inbox/view.js';
+import { localHhMm, localWhen, minutesOf, money, tokensLabel } from '../inbox/runs.js';
 
 export function registerInboxCommand(program: Command): void {
   const inbox = program
@@ -88,6 +89,7 @@ export function registerInboxCommand(program: Command): void {
 
       if (view.ready.length === 0 && view.working.length === 0 && view.other.length === 0 && view.dismissed.length === 0) {
         console.log(pc.dim('Nothing in the inbox yet. Run `diffity inbox` to start watching.'));
+        spent(view);
         return;
       }
 
@@ -103,7 +105,69 @@ export function registerInboxCommand(program: Command): void {
       section('Dismissed', view.dismissed.map(row =>
         `  ${pc.dim('dismissed')} ${row.repo}#${row.number} ${row.title}`,
       ));
+
+      spent(view);
     });
+
+  inbox
+    .command('runs')
+    .description('Print the agent runs the inbox has made, and what they spent')
+    .option('--json', 'Output as JSON')
+    .option('--since <days>', 'How far back to look, in days', '7')
+    .action((opts: { json?: boolean; since?: string }) => {
+      const days = Number(opts.since ?? 7);
+      if (!Number.isFinite(days) || days <= 0) {
+        console.error(pc.red('Error: --since takes a number of days.'));
+        process.exit(1);
+      }
+      const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+      const store = new InboxStore(inboxStorePath());
+      const runs = store.runs({ since });
+      const totals = store.runTotals(since);
+      store.close();
+
+      if (opts.json) {
+        console.log(JSON.stringify({ since, days, runs, totals }, null, 2));
+        return;
+      }
+      if (runs.length === 0) {
+        console.log(pc.dim(`No agent runs in the last ${days} day(s).`));
+        return;
+      }
+      table([
+        ['when', 'PR', 'phase', 'model', 'turns', 'min', 'cost', 'tokens', 'outcome'],
+        ...runs.map(run => [
+          localWhen(run.startedAt), run.prId, run.phase, run.model ?? '—',
+          run.turns === null ? '—' : String(run.turns),
+          run.durationMs === null ? '—' : minutesOf([run]).toFixed(1),
+          money(run.costUsd), tokensLabel(run) || '—', run.outcome,
+        ]),
+      ]);
+      console.log('');
+      console.log(`${totals.count} run${totals.count === 1 ? '' : 's'} · ${Math.round(totals.minutes)} min · ${money(totals.costUsd)} over the last ${days} day(s)`);
+    });
+}
+
+/** What the agent has spent, and whether it is waiting out a limit, for the foot of the listing. */
+function spent(view: { runs: { today: RunTotals; week: RunTotals }; pausedUntil: string | null }): void {
+  const window = (totals: RunTotals) => `${totals.count} · ${Math.round(totals.minutes)} min · ${money(totals.costUsd)}`;
+  if (view.runs.week.count > 0) {
+    console.log('');
+    console.log(pc.dim(`agent runs today: ${window(view.runs.today)} · 7 days: ${window(view.runs.week)}`));
+  }
+  if (view.pausedUntil) {
+    console.log(pc.yellow(`Preparing paused until ${localHhMm(view.pausedUntil)} — Claude session limit`));
+  }
+}
+
+/** Rows printed as columns, the first row being the header. */
+function table(rows: string[][]): void {
+  const widths = rows[0].map((_, column) => Math.max(...rows.map(row => row[column].length)));
+  const line = (row: string[]) => row.map((cell, column) => cell.padEnd(widths[column])).join('  ').trimEnd();
+  console.log(pc.dim(line(rows[0])));
+  for (const row of rows.slice(1)) {
+    console.log(line(row));
+  }
 }
 
 /** All of stdin, parsed; unparseable input reads as null, which the gate refuses. */

@@ -341,6 +341,8 @@ diffity inbox              # run the watcher and a small status server
 diffity inbox --once       # run a single poll-and-prepare pass, then exit
 diffity inbox status       # print the current inbox without starting the daemon
 diffity inbox status --json
+diffity inbox runs         # every agent run of the last 7 days, and what it spent
+diffity inbox runs --since 30 --json
 ```
 
 On first run it writes `~/.diffity/inbox/config.json`:
@@ -364,6 +366,10 @@ On first run it writes `~/.diffity/inbox/config.json`:
 | `liveTimeoutMinutes` | How long one answer may take before the agent is stopped (default 10). Editable from the page. |
 
 The command itself is not configurable: the daemon builds `claude -p --output-format json` with the flags the review depends on. It runs with `--setting-sources ""`, so the agent gets none of your Claude settings — no MCP servers, no memory, no `CLAUDE.md`, none of your installed skills. Listing tools in `agent.mcpAllow` brings your MCP servers back and adds a `PreToolUse` hook (`diffity inbox mcp-gate`) that refuses every MCP call but those, by name; the prompt then tells the agent it may read the ticket or document the pull request refers to, and nothing else outside the checkout. A deny list keeps it off `gh pr review`, `gh pr comment`, `gh pr merge` and `gh api`, and off `pnpm`, `npm`, `npx`, `yarn`, `bun` and `make` — CI has already built and tested this head. The skill shipped with this build goes into the agent's system prompt — `diffity-review` for a preparation, `diffity-live` for an answer — so neither depends on what you have installed.
+
+Every agent run is logged: the pull request and head it was for, which pass it was (`prepare` for a preparation, `answer` for a question asked in the page), the models it actually used, how long it took, its turns, its cost and its tokens, and how it ended (`prepared`, `skipped`, `answered`, `failed`, `timeout`, `rate-limited`). `diffity inbox runs` prints that log with totals — the record of what the inbox costs you. A prepared review's card carries its own share of it, "· 8 min · $1.20", with each run behind that head listed on hover, and the page's footer keeps a running total for today and for the last seven days.
+
+A run that ends on your Claude session limit is not the pull request's fault, so it is waited out rather than retried: the row goes back in the queue as "waiting: Claude session limit until 14:00", no failed attempt is counted against it, and no further preparation starts until the limit lifts. The reset time is read out of the agent's own message ("resets 2pm (Europe/Stockholm)"), or set half an hour ahead when the message names none. Polling and reconciling carry on meanwhile, so the page stays current and says how long the pause has left; the pause is kept with the inbox, so restarting the daemon does not spend another run rediscovering the limit.
 
 If your config still has a `prepare` key from an earlier version, delete it — the daemon refuses to start with it, and the built command takes its place. A flag you were passing belongs in `agent.extraArgs`.
 

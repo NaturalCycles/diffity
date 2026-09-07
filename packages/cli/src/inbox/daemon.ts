@@ -9,6 +9,7 @@ import { logsDir, preparePr, type PrepareDeps } from './prepare.js';
 import { realAttendantDeps, realPrepareDeps, type Inflight } from './runtime.js';
 import { Attendants, type AttendedPr } from './attendant.js';
 import { removeWorktree, cloneDir } from './worktree.js';
+import { localHhMm } from './runs.js';
 import { findInstanceForRepo, killInstance } from '../registry.js';
 import { repoHash } from './open-session.js';
 import { InboxStore } from './store.js';
@@ -61,6 +62,8 @@ export interface ServerHooks {
 export interface DaemonStatus {
   ticking: boolean;
   lastPollAt: string | null;
+  /** Until when preparation is held back by the reviewer's Claude limit, or null when it is not. */
+  pausedUntil: string | null;
 }
 
 /** The settings as the page reads and writes them: the running config, persisted when a path is known. */
@@ -116,6 +119,9 @@ export async function runDaemon(
 
   const inflight: Inflight = {};
   const prepareDeps: PrepareDeps = realPrepareDeps(nodePath, entry, inboxDataDir, config, log, inflight);
+  // The pause outlives this process: a session limit is the reviewer's, not the daemon's, so it is
+  // kept in the store and a restart does not spend a run rediscovering it.
+  const pausedUntil = () => store.pausedUntil(new Date().toISOString());
   const deps = {
     forge: options.forge ?? realForge,
     prepare: (snapshot: Parameters<typeof preparePr>[0], opts: { bumped: boolean }) => preparePr(snapshot, config, prepareDeps, opts),
@@ -125,6 +131,12 @@ export async function runDaemon(
     shouldContinue: () => !stopping,
     // Read at each tick, not copied: the page can change it while the daemon runs.
     get maxPrepared() { return config.maxPrepared; },
+    get agentModel() { return config.agent.model; },
+    pauseUntil: (until: string) => {
+      store.pauseUntil(until);
+      log(`preparing paused until ${localHhMm(until)} — Claude session limit`);
+    },
+    pausedUntil,
   };
 
   // A bump arriving mid-tick is served by another tick right after, not by the next poll.
@@ -164,7 +176,7 @@ export async function runDaemon(
   // server's error handler) before it can reclaim and kill the first one's in-flight servers.
   const openDeps = options.openDeps ?? realOpenSessionDeps(nodePath, entry);
   const attendants: AttendantHost = options.attendants ?? new Attendants(
-    realAttendantDeps(nodePath, entry, config, worktree => join(logsDir(), `${basename(worktree)}.live.log`), log),
+    realAttendantDeps(nodePath, entry, config, worktree => join(logsDir(), `${basename(worktree)}.live.log`), log, run => store.recordRun(run)),
   );
   let timer: NodeJS.Timeout | undefined;
   const armPoll = () => {
@@ -175,7 +187,7 @@ export async function runDaemon(
   };
   const settings = settingsHost(config, options.configPath, armPoll);
   const server = await bindInboxServer(store, config, log, openDeps, {
-    attendants, onBump: requestTick, onTick: requestTick, settings, status: () => ({ ticking, lastPollAt }),
+    attendants, onBump: requestTick, onTick: requestTick, settings, status: () => ({ ticking, lastPollAt, pausedUntil: pausedUntil() }),
   });
   reclaimLeftoverServers(log);
   armPoll();
@@ -363,7 +375,7 @@ async function handleOpen(store: InboxStore, config: InboxConfig, id: string, op
     }
     const { pr } = resolution;
     if (config.live) {
-      attendants?.ensure(pr.worktreePath!, { id: pr.id, url: pr.url, title: pr.title, author: pr.author });
+      attendants?.ensure(pr.worktreePath!, { id: pr.id, url: pr.url, title: pr.title, author: pr.author, headSha: pr.preparedHeadSha ?? pr.headSha });
     }
     res.writeHead(302, { Location: url });
     res.end();

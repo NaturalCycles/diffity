@@ -1,6 +1,7 @@
 import type { PrRef, PrSnapshot } from '@diffity/github';
 import { reconcile } from './reconcile.js';
-import { isRetired, prId, type InboxPr, type InboxStore } from './store.js';
+import { isRetired, prId, runRecordOf, type InboxPr, type InboxStore, type RunOutcome } from './store.js';
+import { localHhMm } from './runs.js';
 import type { PrepareResult } from './prepare.js';
 
 /** The forge, as one tick needs it — one interface so a test can stand in for GitHub. */
@@ -21,6 +22,12 @@ export interface TickDeps {
   shouldContinue?(): boolean;
   /** How many prepared reviews may wait for the reviewer at once; the rest of the queue waits. */
   maxPrepared: number;
+  /** `agent.model`, recorded for a run that did not report which models it spent on. */
+  agentModel: string | null;
+  /** Holds preparation back until then — a session limit is waited out, not retried. */
+  pauseUntil(until: string): void;
+  /** Until when preparation is held back, or null when it is not; polling carries on regardless. */
+  pausedUntil?(): string | null;
 }
 
 /**
@@ -71,6 +78,21 @@ export async function runTick(store: InboxStore, deps: TickDeps): Promise<void> 
         store.setPaths(pr.id, { worktreePath: null });
       }
     }
+  }
+
+  // A pause is the reviewer's Claude limit, not the forge's: the poll above still ran, so the page
+  // is current, and only the agent runs wait. The reason goes back on every row held back, because
+  // the reconcile above has just cleared it — a queued row reads as plainly queued otherwise.
+  const pausedUntil = deps.pausedUntil?.() ?? null;
+  if (pausedUntil) {
+    const reason = `waiting: preparing paused until ${localHhMm(pausedUntil)}`;
+    for (const snapshot of toPrepare) {
+      store.setStatus(prId(snapshot), 'queued', reason);
+    }
+    if (toPrepare.length > 0) {
+      deps.log(`${toPrepare.length} left queued: ${reason}`);
+    }
+    return;
   }
 
   // Bumped ones first, in the order they were asked for, and past the cap: the reviewer wants them
@@ -126,6 +148,7 @@ async function prepareOne(store: InboxStore, snapshot: PrSnapshot, deps: TickDep
 
   const result = await deps.prepare(snapshot, { bumped });
   store.clearBump(id);
+  recordPrepareRun(store, snapshot, deps, result);
   switch (result.kind) {
     case 'prepared':
       store.markPrepared(id, {
@@ -145,10 +168,50 @@ async function prepareOne(store: InboxStore, snapshot: PrSnapshot, deps: TickDep
       deps.log(`skipped ${id}: ${result.reason}`);
       return;
     case 'failed':
+      if (result.failure === 'rate-limit') {
+        // Nothing is wrong with this pull request, so it keeps its retries and goes back in the
+        // queue; nothing else is prepared until the limit lifts either.
+        store.setStatus(id, 'queued', result.reason);
+        store.setPaths(id, { worktreePath: null, logPath: result.logPath ?? null });
+        deps.pauseUntil(result.resetsAt ?? new Date(Date.parse(deps.now()) + 30 * 60_000).toISOString());
+        deps.log(`${id}: ${result.reason}`);
+        return;
+      }
       store.failAttempt(id, result.reason);
       store.setPaths(id, { worktreePath: result.worktree ?? null, logPath: result.logPath ?? null });
       deps.log(`failed to prepare ${id}: ${result.reason}`);
       return;
+  }
+}
+
+/** The preparation's agent run in the log — unless it never got as far as running one. */
+function recordPrepareRun(store: InboxStore, snapshot: PrSnapshot, deps: TickDeps, result: PrepareResult): void {
+  if (result.kind === 'failed' && result.failure === 'worktree') {
+    return;
+  }
+  store.recordRun(runRecordOf({
+    prId: prId(snapshot),
+    headSha: result.kind === 'prepared' ? result.headSha : snapshot.headSha,
+    phase: 'prepare',
+    outcome: outcomeOf(result),
+    startedAt: result.run.startedAt,
+    endedAt: result.run.endedAt,
+    stats: result.run.stats,
+    configModel: deps.agentModel,
+    note: result.kind === 'prepared' ? null : result.reason,
+  }));
+}
+
+function outcomeOf(result: PrepareResult): RunOutcome {
+  switch (result.kind) {
+    case 'prepared':
+      return 'prepared';
+    case 'skipped':
+      return 'skipped';
+    case 'failed':
+      if (result.failure === 'timeout') return 'timeout';
+      if (result.failure === 'rate-limit') return 'rate-limited';
+      return 'failed';
   }
 }
 

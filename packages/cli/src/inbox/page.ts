@@ -71,7 +71,7 @@ export function inboxPage(): string {
   .title { flex: 1; min-width: 0; }
   .title .name { font-weight: 600; }
   .title .repo { color: var(--muted); font-weight: 500; }
-  .title .meta { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .title .meta { color: var(--muted); font-size: 12px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .badge { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
   .badge.stale { color: var(--stale); border: 1px solid var(--stale); }
   .badge.work { color: var(--work); border: 1px solid var(--line); }
@@ -167,6 +167,26 @@ export function inboxPage(): string {
     return text ? '<div class="meta"' + (hover ? ' title="' + esc(hover) + '"' : '') + '>' + text + '</div>' : '';
   }
 
+  function money(usd) { return usd == null ? '\\u2014' : '$' + usd.toFixed(2); }
+
+  function hhmm(iso) {
+    const at = new Date(iso);
+    return String(at.getHours()).padStart(2, '0') + ':' + String(at.getMinutes()).padStart(2, '0');
+  }
+
+  /** What the agent runs behind a prepared review came to; the hover has them one by one. */
+  function spendLabel(r) {
+    return r.spend ? Math.round(r.spend.minutes) + ' min \\u00b7 ' + money(r.spend.costUsd) : '';
+  }
+
+  function totals(t) {
+    return t.count + ' \\u00b7 ' + Math.round(t.minutes) + ' min \\u00b7 ' + money(t.costUsd);
+  }
+
+  function runsLabel(runs) {
+    return runs ? 'agent runs today: ' + totals(runs.today) + ' \\u00b7 7 days: ' + totals(runs.week) : '';
+  }
+
   function times(r) {
     const parts = [];
     if (r.createdAt) parts.push('opened ' + ago(r.createdAt));
@@ -185,7 +205,8 @@ export function inboxPage(): string {
       '<span class="size">' + sizeLabel(r) + '</span>' +
       '<span class="title"><div><span class="repo">' + esc(r.repo) + '#' + r.number + '</span> ' +
       '<span class="name">' + esc(r.title) + '</span></div>' +
-      '<div class="meta">by ' + esc(r.author) + ' \\u00b7 ' + r.changedFiles + ' file(s)' + (r.summary ? ' \\u00b7 ' + esc(r.summary) : '') + (times(r) ? ' \\u00b7 ' + times(r) : '') + '</div></span>' +
+      metaLine(['by ' + esc(r.author), r.changedFiles + ' file(s)', esc(r.summary || ''), spendLabel(r), times(r)],
+        r.spend ? r.spend.detail : '') + '</span>' +
       (r.alert ? '<span class="badge alert" title="' + esc(r.alert) + '">alert</span>' : '') +
       (r.stale ? '<span class="badge stale">stale</span>' : '') +
       '<span class="open-hint">open \\u2197</span>';
@@ -373,7 +394,11 @@ export function inboxPage(): string {
       el('all-empty').hidden = total > 0;
       el('status').textContent = view.ready.length + ' ready \\u00b7 ' + view.working.length + ' queued';
       showReload(view.ticking === true);
-      el('foot').textContent = 'Updated ' + new Date().toLocaleTimeString() + (view.lastPollAt ? ' \\u00b7 last poll ' + ago(view.lastPollAt) : '');
+      el('foot').textContent = [
+        'Updated ' + new Date().toLocaleTimeString() + (view.lastPollAt ? ' \\u00b7 last poll ' + ago(view.lastPollAt) : ''),
+        runsLabel(view.runs),
+        view.pausedUntil ? 'preparing paused until ' + hhmm(view.pausedUntil) + ' \\u2014 Claude session limit' : '',
+      ].filter(Boolean).join(' \\u00b7 ');
     } catch (err) {
       el('status').textContent = 'the inbox daemon is not responding';
     }

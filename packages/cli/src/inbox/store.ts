@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { PrSnapshot } from '@diffity/github';
+import type { RunStats } from './agent-output.js';
 
 export const INBOX_STATUSES = [
   'queued',
@@ -68,6 +69,89 @@ export interface Prepared {
   alert: string | null;
 }
 
+/** Which agent pass a run was: the drafting one, the one that checks its findings, or an answer. */
+export const RUN_PHASES = ['prepare', 'validate', 'answer'] as const;
+export type RunPhase = (typeof RUN_PHASES)[number];
+
+export const RUN_OUTCOMES = ['prepared', 'skipped', 'validated', 'answered', 'failed', 'timeout', 'rate-limited'] as const;
+export type RunOutcome = (typeof RUN_OUTCOMES)[number];
+
+/** One agent run as the log keeps it: what it was for, what it spent, and how it ended. */
+export interface RunRecord {
+  prId: string;
+  /** The head the run was about; null when the run was not tied to one. */
+  headSha: string | null;
+  phase: RunPhase;
+  /** The models the run actually used, comma-separated, or the one the config asked for. */
+  model: string | null;
+  startedAt: string;
+  endedAt: string;
+  durationMs: number | null;
+  turns: number | null;
+  costUsd: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cacheReadTokens: number | null;
+  cacheWriteTokens: number | null;
+  outcome: RunOutcome;
+  /** Why it ended as it did, when there is more to say than the outcome. */
+  note: string | null;
+}
+
+export interface RunRow extends RunRecord {
+  id: number;
+}
+
+export interface RunTotals {
+  count: number;
+  minutes: number;
+  costUsd: number;
+}
+
+/**
+ * A run as the log wants it, from what the agent reported. `--output-format json` gives the run's
+ * own duration; without it the wall clock the daemon measured stands in, and the model is the one
+ * the config asked for rather than the one that answered.
+ */
+export function runRecordOf(input: {
+  prId: string;
+  headSha: string | null;
+  phase: RunPhase;
+  outcome: RunOutcome;
+  startedAt: string;
+  endedAt: string;
+  stats: RunStats | null;
+  /** `agent.model`, used when the run did not say which models it spent on. */
+  configModel: string | null;
+  note?: string | null;
+}): RunRecord {
+  const { stats } = input;
+  const models = stats?.models.length ? stats.models.join(',') : null;
+  return {
+    prId: input.prId,
+    headSha: input.headSha,
+    phase: input.phase,
+    model: models ?? input.configModel ?? null,
+    startedAt: input.startedAt,
+    endedAt: input.endedAt,
+    durationMs: stats?.durationMs ?? elapsedMs(input.startedAt, input.endedAt),
+    turns: stats?.turns ?? null,
+    costUsd: stats?.costUsd ?? null,
+    inputTokens: stats?.inputTokens ?? null,
+    outputTokens: stats?.outputTokens ?? null,
+    cacheReadTokens: stats?.cacheReadTokens ?? null,
+    cacheWriteTokens: stats?.cacheWriteTokens ?? null,
+    outcome: input.outcome,
+    note: input.note ?? null,
+  };
+}
+
+function elapsedMs(startedAt: string, endedAt: string): number | null {
+  const from = Date.parse(startedAt);
+  const to = Date.parse(endedAt);
+  return Number.isFinite(from) && Number.isFinite(to) ? Math.max(0, to - from) : null;
+}
+
 export function prId(ref: { owner: string; repo: string; number: number }): string {
   return `${ref.owner}/${ref.repo}#${ref.number}`;
 }
@@ -126,6 +210,28 @@ export class InboxStore {
         alert TEXT
       )
     `);
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS inbox_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        pr_id TEXT NOT NULL,
+        head_sha TEXT,
+        phase TEXT NOT NULL,
+        model TEXT,
+        started_at TEXT NOT NULL,
+        ended_at TEXT NOT NULL,
+        duration_ms INTEGER,
+        turns INTEGER,
+        cost_usd REAL,
+        input_tokens INTEGER,
+        output_tokens INTEGER,
+        cache_read_tokens INTEGER,
+        cache_write_tokens INTEGER,
+        outcome TEXT NOT NULL,
+        note TEXT
+      )
+    `);
+    this.db.exec('CREATE INDEX IF NOT EXISTS inbox_runs_pr_started ON inbox_runs (pr_id, started_at)');
+    this.db.exec('CREATE TABLE IF NOT EXISTS inbox_state (key TEXT PRIMARY KEY, value TEXT)');
     // A table from an earlier build gains the columns it lacks; a fresh one already has them.
     for (const column of ['attempts INTEGER NOT NULL DEFAULT 0', 'created_at TEXT', 'updated_at TEXT', 'bumped_at TEXT', 'summary TEXT', 'alert TEXT']) {
       try {
@@ -218,6 +324,64 @@ export class InboxStore {
     `).run(prepared.headSha, prepared.at, prepared.bundlePath, prepared.worktreePath, prepared.logPath, prepared.summary, prepared.alert, id);
   }
 
+  recordRun(run: RunRecord): void {
+    this.db.prepare(`
+      INSERT INTO inbox_runs (
+        pr_id, head_sha, phase, model, started_at, ended_at, duration_ms, turns, cost_usd,
+        input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, outcome, note
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      run.prId, run.headSha, run.phase, run.model, run.startedAt, run.endedAt, run.durationMs,
+      run.turns, run.costUsd, run.inputTokens, run.outputTokens, run.cacheReadTokens,
+      run.cacheWriteTokens, run.outcome, run.note,
+    );
+  }
+
+  /** The run log, newest first. */
+  runs(opts: { since?: string; prId?: string } = {}): RunRow[] {
+    const where: string[] = [];
+    const params: string[] = [];
+    if (opts.since) {
+      where.push('started_at >= ?');
+      params.push(opts.since);
+    }
+    if (opts.prId) {
+      where.push('pr_id = ?');
+      params.push(opts.prId);
+    }
+    const sql = `SELECT * FROM inbox_runs${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY started_at DESC, id DESC`;
+    return (this.db.prepare(sql).all(...params) as unknown as RunDbRow[]).map(rowToRun);
+  }
+
+  /** What the agent has spent since a moment; a run whose cost went unreported adds nothing to it. */
+  runTotals(since: string): RunTotals {
+    const row = this.db.prepare(
+      'SELECT COUNT(*) AS count, SUM(duration_ms) AS ms, SUM(cost_usd) AS cost FROM inbox_runs WHERE started_at >= ?',
+    ).get(since) as unknown as { count: number; ms: number | null; cost: number | null };
+    return { count: row.count, minutes: round1((row.ms ?? 0) / 60_000), costUsd: row.cost ?? 0 };
+  }
+
+  /** The runs behind one prepared review — every pass made at that head, oldest first. */
+  latestRunsFor(prId: string, headSha: string): RunRow[] {
+    return (this.db.prepare('SELECT * FROM inbox_runs WHERE pr_id = ? AND head_sha = ? ORDER BY started_at ASC, id ASC')
+      .all(prId, headSha) as unknown as RunDbRow[]).map(rowToRun);
+  }
+
+  /** Holds preparation back until a moment, or lifts the hold when given null. */
+  pauseUntil(until: string | null): void {
+    if (until === null) {
+      this.db.prepare("DELETE FROM inbox_state WHERE key = 'pausedUntil'").run();
+      return;
+    }
+    this.db.prepare("INSERT INTO inbox_state (key, value) VALUES ('pausedUntil', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(until);
+  }
+
+  /** Until when preparation is held back, or null when it is not — a moment already past is not one. */
+  pausedUntil(now: string): string | null {
+    const row = this.db.prepare("SELECT value FROM inbox_state WHERE key = 'pausedUntil'").get() as unknown as { value: string } | undefined;
+    return row && row.value > now ? row.value : null;
+  }
+
   /** Where the preparation left its trail, kept even when it ended in a skip or a failure. */
   setPaths(id: string, paths: { worktreePath?: string | null; logPath?: string | null }): void {
     if (paths.worktreePath !== undefined) {
@@ -293,6 +457,50 @@ function rowToPr(row: Row): InboxPr {
     firstSeenAt: row.first_seen_at,
     lastSeenAt: row.last_seen_at,
   };
+}
+
+interface RunDbRow {
+  id: number;
+  pr_id: string;
+  head_sha: string | null;
+  phase: string;
+  model: string | null;
+  started_at: string;
+  ended_at: string;
+  duration_ms: number | null;
+  turns: number | null;
+  cost_usd: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_read_tokens: number | null;
+  cache_write_tokens: number | null;
+  outcome: string;
+  note: string | null;
+}
+
+function rowToRun(row: RunDbRow): RunRow {
+  return {
+    id: row.id,
+    prId: row.pr_id,
+    headSha: row.head_sha,
+    phase: row.phase as RunPhase,
+    model: row.model,
+    startedAt: row.started_at,
+    endedAt: row.ended_at,
+    durationMs: row.duration_ms,
+    turns: row.turns,
+    costUsd: row.cost_usd,
+    inputTokens: row.input_tokens,
+    outputTokens: row.output_tokens,
+    cacheReadTokens: row.cache_read_tokens,
+    cacheWriteTokens: row.cache_write_tokens,
+    outcome: row.outcome as RunOutcome,
+    note: row.note,
+  };
+}
+
+function round1(value: number): number {
+  return Math.round(value * 10) / 10;
 }
 
 /** A row from a build that knew other statuses is shown as needing work rather than crashing the list. */

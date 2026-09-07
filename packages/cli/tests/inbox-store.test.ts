@@ -3,7 +3,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { InboxStore } from '../src/inbox/store.js';
+import { InboxStore, runRecordOf, type RunRecord } from '../src/inbox/store.js';
+import type { RunStats } from '../src/inbox/agent-output.js';
 import type { PrSnapshot } from '@diffity/github';
 
 let dir: string;
@@ -96,6 +97,106 @@ describe('InboxStore migration', () => {
     expect(pr.attempts).toBe(0);
     expect(pr.summary).toBe('1 P1');
     expect(pr.alert).toBe('touches auth');
+    store.close();
+  });
+});
+
+describe('the run log', () => {
+  function record(over: Partial<RunRecord> = {}): RunRecord {
+    return {
+      prId: 'o/r#1', headSha: 'aaa', phase: 'prepare', model: 'claude-x',
+      startedAt: '2026-09-07T09:00:00.000Z', endedAt: '2026-09-07T09:08:00.000Z',
+      durationMs: 480_000, turns: 12, costUsd: 1.2, inputTokens: 30, outputTokens: 27_000,
+      cacheReadTokens: 1_100_000, cacheWriteTokens: 76_000, outcome: 'prepared', note: null, ...over,
+    };
+  }
+
+  it('keeps a run whole and lists them newest first', () => {
+    const store = new InboxStore(path);
+    store.recordRun(record());
+    store.recordRun(record({ phase: 'answer', outcome: 'answered', startedAt: '2026-09-07T10:00:00.000Z', endedAt: '2026-09-07T10:01:00.000Z' }));
+
+    const rows = store.runs();
+    expect(rows.map(row => row.phase)).toEqual(['answer', 'prepare']);
+    expect(rows[1]).toEqual({ id: 1, ...record() });
+    store.close();
+  });
+
+  it('lists one pull request, or one window, at a time', () => {
+    const store = new InboxStore(path);
+    store.recordRun(record({ startedAt: '2026-09-01T09:00:00.000Z' }));
+    store.recordRun(record({ prId: 'o/r#2', startedAt: '2026-09-07T09:00:00.000Z' }));
+
+    expect(store.runs({ prId: 'o/r#2' }).map(row => row.prId)).toEqual(['o/r#2']);
+    expect(store.runs({ since: '2026-09-05T00:00:00.000Z' }).map(row => row.prId)).toEqual(['o/r#2']);
+    expect(store.runs({ since: '2026-09-05T00:00:00.000Z', prId: 'o/r#1' })).toEqual([]);
+    store.close();
+  });
+
+  it('adds up the minutes and the costs it knows, from the window given', () => {
+    const store = new InboxStore(path);
+    store.recordRun(record({ durationMs: 480_000, costUsd: 1.2 }));
+    store.recordRun(record({ durationMs: 120_000, costUsd: null }));
+    store.recordRun(record({ startedAt: '2026-08-01T09:00:00.000Z', durationMs: 600_000, costUsd: 9 }));
+
+    expect(store.runTotals('2026-09-01T00:00:00.000Z')).toEqual({ count: 2, minutes: 10, costUsd: 1.2 });
+    expect(store.runTotals('2026-09-08T00:00:00.000Z')).toEqual({ count: 0, minutes: 0, costUsd: 0 });
+    store.close();
+  });
+
+  it('finds the runs behind one prepared head, oldest first', () => {
+    const store = new InboxStore(path);
+    store.recordRun(record({ phase: 'prepare' }));
+    store.recordRun(record({ phase: 'answer', outcome: 'answered', startedAt: '2026-09-07T10:00:00.000Z' }));
+    store.recordRun(record({ headSha: 'bbb', startedAt: '2026-09-07T11:00:00.000Z' }));
+
+    expect(store.latestRunsFor('o/r#1', 'aaa').map(row => row.phase)).toEqual(['prepare', 'answer']);
+    expect(store.latestRunsFor('o/r#1', 'ccc')).toEqual([]);
+    store.close();
+  });
+});
+
+describe('runRecordOf', () => {
+  function stats(over: Partial<RunStats> = {}): RunStats {
+    return {
+      costUsd: 1.2, durationMs: 480_000, turns: 12, inputTokens: 30, outputTokens: 27_000,
+      cacheReadTokens: 1_100_000, cacheWriteTokens: 76_000, models: ['claude-x'], isError: false,
+      subtype: 'success', ...over,
+    };
+  }
+
+  const shape = {
+    prId: 'o/r#1', headSha: 'aaa', phase: 'prepare' as const, outcome: 'prepared' as const,
+    startedAt: '2026-09-07T09:00:00.000Z', endedAt: '2026-09-07T09:10:00.000Z', configModel: 'opus',
+  };
+
+  it('takes the models and the duration the run reported', () => {
+    expect(runRecordOf({ ...shape, stats: stats({ models: ['claude-x', 'claude-haiku'] }) }))
+      .toMatchObject({ model: 'claude-x,claude-haiku', durationMs: 480_000, turns: 12, costUsd: 1.2, outputTokens: 27_000 });
+  });
+
+  it('falls back to the configured model and to the wall clock the daemon measured', () => {
+    expect(runRecordOf({ ...shape, stats: stats({ models: [], durationMs: null }) }))
+      .toMatchObject({ model: 'opus', durationMs: 600_000 });
+    expect(runRecordOf({ ...shape, stats: null }))
+      .toMatchObject({ model: 'opus', durationMs: 600_000, turns: null, costUsd: null, outputTokens: null });
+    expect(runRecordOf({ ...shape, stats: null, configModel: null }).model).toBeNull();
+  });
+});
+
+describe('the preparing pause', () => {
+  it('reads back a moment still ahead, and not one already past', () => {
+    const store = new InboxStore(path);
+    expect(store.pausedUntil('2026-09-07T12:00:00.000Z')).toBeNull();
+
+    store.pauseUntil('2026-09-07T14:00:00.000Z');
+    expect(store.pausedUntil('2026-09-07T12:00:00.000Z')).toBe('2026-09-07T14:00:00.000Z');
+    expect(store.pausedUntil('2026-09-07T14:00:01.000Z')).toBeNull();
+
+    store.pauseUntil('2026-09-07T15:00:00.000Z');
+    expect(store.pausedUntil('2026-09-07T14:30:00.000Z')).toBe('2026-09-07T15:00:00.000Z');
+    store.pauseUntil(null);
+    expect(store.pausedUntil('2026-09-07T14:30:00.000Z')).toBeNull();
     store.close();
   });
 });
