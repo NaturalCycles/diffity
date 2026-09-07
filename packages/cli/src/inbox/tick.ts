@@ -87,15 +87,17 @@ export async function runTick(store: InboxStore, deps: TickDeps): Promise<void> 
       || Number(b.refresh) - Number(a.refresh)
       || diffSize(a.snapshot) - diffSize(b.snapshot));
   let waiting = 0;
-  for (const { snapshot, refresh, bumpedAt } of candidates) {
+  for (const { snapshot, refresh } of candidates) {
     if (deps.shouldContinue && !deps.shouldContinue()) {
       break;
     }
-    // The reviewer may have dismissed it from the page while this tick was busy with another.
-    if (store.get(prId(snapshot))?.status === 'dismissed') {
+    // Read again, not taken from the listing: the reviewer may have dismissed or bumped it from
+    // the page while this tick was busy with another.
+    const row = store.get(prId(snapshot));
+    if (row?.status === 'dismissed') {
       continue;
     }
-    const bumped = bumpedAt !== null;
+    const bumped = row?.bumpedAt != null;
     if (!refresh && !bumped && countReady(store) >= deps.maxPrepared) {
       store.setStatus(prId(snapshot), 'queued', `waiting: ${deps.maxPrepared} reviews already prepared`);
       waiting++;
