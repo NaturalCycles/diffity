@@ -30,6 +30,20 @@ describe('the inbox page', () => {
     expect(html).toContain('id="agentMaxBudgetUsd" type="number" min="0.5"');
   });
 
+  it('has a settings field for each validate setting, and sends the block back', () => {
+    const html = inboxPage();
+    for (const id of ['validateModel', 'validateTimeoutMinutes', 'validateMaxBudgetUsd']) {
+      expect(html).toContain(`id="${id}"`);
+    }
+    // The pass is off until a model is named, which is what the field's placeholder says.
+    expect(html).toContain('id="validateModel" type="text" placeholder="off"');
+    expect(html).toContain('id="validateMaxBudgetUsd" type="number" min="0.5"');
+    const script = pageScript();
+    expect(script).toContain("model: el('validateModel').value.trim() || null");
+    expect(script).toContain("timeoutMinutes: Number(el('validateTimeoutMinutes').value)");
+    expect(script).toContain("maxBudgetUsd: checkBudget === '' ? null : Number(checkBudget)");
+  });
+
   it('shows what a prepared review spent, the totals, and the pause', () => {
     const script = pageScript();
     expect(script).toContain("Math.round(r.spend.minutes) + ' min");

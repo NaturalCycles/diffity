@@ -60,6 +60,25 @@ describe('parseInboxConfig', () => {
     expect(() => parseInboxConfig({ agent: { maxBudgetUsd: 0 } })).toThrow(/agent\.maxBudgetUsd must be a positive number/);
   });
 
+  it('takes the validate block, and refuses each field by name', () => {
+    expect(parseInboxConfig({}).validate).toEqual({ model: null, timeoutMinutes: 15, maxBudgetUsd: null });
+    expect(parseInboxConfig({ validate: { model: 'opus', timeoutMinutes: 20, maxBudgetUsd: 3 } }).validate)
+      .toEqual({ model: 'opus', timeoutMinutes: 20, maxBudgetUsd: 3 });
+    // An explicit null is off and uncapped, not a type error.
+    expect(parseInboxConfig({ validate: { model: null, maxBudgetUsd: null } }).validate).toEqual(DEFAULT_INBOX_CONFIG.validate);
+
+    expect(() => parseInboxConfig({ validate: [] })).toThrow(/validate must be a JSON object/);
+    expect(() => parseInboxConfig({ validate: { model: '' } })).toThrow(/validate\.model must be a non-empty string/);
+    expect(() => parseInboxConfig({ validate: { timeoutMinutes: 0 } })).toThrow(/validate\.timeoutMinutes must be a positive number/);
+    expect(() => parseInboxConfig({ validate: { maxBudgetUsd: 0 } })).toThrow(/validate\.maxBudgetUsd must be a positive number/);
+  });
+
+  it('hands out a fresh validate block, so one parsed config cannot change another', () => {
+    parseInboxConfig({}).validate.model = 'opus';
+    expect(parseInboxConfig({}).validate.model).toBeNull();
+    expect(DEFAULT_INBOX_CONFIG.validate.model).toBeNull();
+  });
+
   it('hands out a fresh agent block, so one parsed config cannot change another', () => {
     const first = parseInboxConfig({});
     first.agent.mcpAllow.push('mcp__a__b');
@@ -82,6 +101,7 @@ describe('parseInboxConfig', () => {
         filter: 'skip payments', alertWhen: 'a P1', alertPaths: ['packages/shared/**'], maxPrepared: 3, pollMinutes: 7,
         live: false, liveTimeoutMinutes: 4, prepareTimeoutMinutes: 20, waitForCi: true,
         agent: { model: 'opus', effort: 'high', mcpAllow: [], extraArgs: [], maxBudgetUsd: null },
+        validate: { model: null, timeoutMinutes: 15, maxBudgetUsd: null },
       };
       saveInboxSettings(path, settings);
       const raw = JSON.parse(readFileSync(path, 'utf-8'));
@@ -237,6 +257,7 @@ describe('parseSettingsPatch', () => {
     filter: 'a', alertWhen: 'b', alertPaths: ['src/**'], maxPrepared: 2, pollMinutes: 3, live: false,
     liveTimeoutMinutes: 5, prepareTimeoutMinutes: 15, waitForCi: false,
     agent: { model: null, effort: null, mcpAllow: [], extraArgs: [], maxBudgetUsd: null },
+    validate: { model: null, timeoutMinutes: 15, maxBudgetUsd: null },
   };
   it('takes every editable key, validated as the config file is, and refuses anything else by name', () => {
     expect(parseSettingsPatch(JSON.stringify(full))).toEqual({ ok: true, settings: full });
@@ -247,6 +268,15 @@ describe('parseSettingsPatch', () => {
     expect(parseSettingsPatch(JSON.stringify({ ...full, filter: 'x'.repeat(5000) }))).toMatchObject({ ok: false });
     expect(parseSettingsPatch('nope')).toMatchObject({ ok: false });
     expect(parseSettingsPatch('[]')).toMatchObject({ ok: false });
+  });
+
+  it('takes the validate fields the page edits and refuses a bad one by name', () => {
+    const edited = { ...full, validate: { model: 'opus', timeoutMinutes: 20, maxBudgetUsd: 3 } };
+    expect(parseSettingsPatch(JSON.stringify(edited))).toEqual({ ok: true, settings: edited });
+    expect(parseSettingsPatch(JSON.stringify({ ...full, validate: undefined })))
+      .toMatchObject({ ok: false, message: 'validate is missing' });
+    expect(parseSettingsPatch(JSON.stringify({ ...full, validate: { ...full.validate, timeoutMinutes: 0 } })))
+      .toMatchObject({ ok: false, message: 'validate.timeoutMinutes must be a positive number' });
   });
 
   it('takes the agent fields the page edits and refuses a bad one by name', () => {

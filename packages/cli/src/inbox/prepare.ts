@@ -6,6 +6,7 @@ import { inboxDir } from './paths.js';
 import { localHhMm } from './runs.js';
 import { composePrompt, verdictOf } from './prompt.js';
 import { summarizeBundleFile } from './summary.js';
+import { composeValidatePrompt, generalCommentIdOf, threadsToValidate, validateVerdictOf, type ReviewThread } from './validate.js';
 import { cloneDir, prepareWorktree, removeWorktree, worktreePath } from './worktree.js';
 
 /** A running diffity server for a worktree, and the way to stop it again. */
@@ -35,7 +36,11 @@ export interface PrepareDeps {
   startServer(worktree: string, diffRef: string): Promise<ServerHandle>;
   /** The drafting agent's command, built fresh so a settings change applies from the next prepare. */
   agentArgv(): string[];
+  /** The checking agent's command: the same one with the validate model and budget. */
+  validateArgv(): string[];
   runAgent(opts: RunAgentOpts): Promise<{ stdout: string; timedOut: boolean }>;
+  /** The threads the drafting agent left in the session over this worktree. */
+  listThreads(worktree: string): Promise<ReviewThread[]>;
   exportBundle(opts: ExportOpts): void | Promise<void>;
   now(): string;
 }
@@ -53,8 +58,21 @@ export interface RunLog {
   stats: RunStats | null;
 }
 
+/**
+ * Whether the drafted findings were checked by a second pass: `not-needed` when none of them was a
+ * P1 or P2, or the pass is off; `unchecked` when the pass was due but did not finish.
+ */
+export type Validation = 'validated' | 'unchecked' | 'not-needed';
+
+/** The checking pass's run and what it came to; whatever that is, the draft is kept. */
+export interface ValidateRun extends RunLog {
+  outcome: 'validated' | 'timeout' | 'failed';
+  /** Why the findings went unchecked, when they did. */
+  note: string | null;
+}
+
 export type PrepareResult =
-  | { kind: 'prepared'; headSha: string; bundlePath: string; worktree: string; logPath: string; at: string; summary: string | null; alert: string | null; run: RunLog }
+  | { kind: 'prepared'; headSha: string; bundlePath: string; worktree: string; logPath: string; at: string; summary: string | null; alert: string | null; run: RunLog; validation: Validation; validateRun: ValidateRun | null }
   | { kind: 'skipped'; reason: string; logPath: string; run: RunLog }
   | { kind: 'failed'; reason: string; failure: PrepareFailure; worktree: string | null; logPath: string | null; run: RunLog; resetsAt?: string | null };
 
@@ -150,6 +168,13 @@ export async function preparePr(snapshot: PrSnapshot, config: InboxConfig, deps:
       return { kind: 'failed', failure: 'agent', reason: 'the agent ended without SKIP or PREPARED', worktree: null, logPath, run };
     }
 
+    // The draft stands whatever the check comes to, so this runs before the bundle is written and
+    // never turns a prepared review into a failure.
+    const validateRun = await checkFindings(snapshot, config, deps, { worktree: dest, port: server.port, logPath });
+    const validation: Validation = validateRun === null
+      ? 'not-needed'
+      : validateRun.outcome === 'validated' ? 'validated' : 'unchecked';
+
     // The head actually checked out, which may be newer than the snapshot if the author pushed
     // between the search and the fetch; recording it keeps the next tick from calling it stale.
     const bundlePath = join(bundlesDir(), `${snapshot.owner}-${snapshot.repo}-${snapshot.number}-${head.slice(0, 12)}.json`);
@@ -159,10 +184,83 @@ export async function preparePr(snapshot: PrSnapshot, config: InboxConfig, deps:
       return { kind: 'failed', failure: 'bundle', reason: `the review was prepared but its bundle could not be written: ${err instanceof Error ? err.message : err}`, worktree: dest, logPath, run };
     }
 
-    return { kind: 'prepared', headSha: head, bundlePath, worktree: dest, logPath, at: deps.now(), summary: summarizeBundleFile(bundlePath), alert: verdict.alert, run };
+    return {
+      kind: 'prepared', headSha: head, bundlePath, worktree: dest, logPath, at: deps.now(),
+      summary: withValidation(summarizeBundleFile(bundlePath), validation), alert: verdict.alert,
+      run, validation, validateRun,
+    };
   } catch (err) {
     return { kind: 'failed', failure: 'agent', reason: err instanceof Error ? err.message : String(err), worktree: dest, logPath, run };
   } finally {
     server?.stop();
   }
+}
+
+/**
+ * The second pass over the draft: the checking model reads the findings that would hold up a merge
+ * against the code, and amends or dismisses the ones that do not stand. Null when there was
+ * nothing to check — the pass is off, or the draft found no P1 or P2 — and otherwise a run the
+ * caller keeps whether it finished or not, because the draft goes to the reviewer either way.
+ */
+async function checkFindings(
+  snapshot: PrSnapshot,
+  config: InboxConfig,
+  deps: PrepareDeps,
+  ctx: { worktree: string; port: number; logPath: string },
+): Promise<ValidateRun | null> {
+  if (config.validate.model === null) {
+    return null;
+  }
+  const startedAt = deps.now();
+  try {
+    const drafted = await deps.listThreads(ctx.worktree);
+    const threads = threadsToValidate(drafted);
+    if (threads.length === 0) {
+      return null;
+    }
+    const { stdout, timedOut } = await deps.runAgent({
+      argv: deps.validateArgv(),
+      prompt: composeValidatePrompt({
+        snapshot, worktreePath: ctx.worktree, port: ctx.port, threads,
+        generalCommentId: generalCommentIdOf(drafted),
+      }),
+      cwd: ctx.worktree,
+      logPath: validateLogPath(ctx.logPath),
+      timeoutMs: config.validate.timeoutMinutes * 60_000,
+    });
+    const endedAt = deps.now();
+    if (timedOut) {
+      return { startedAt, endedAt, stats: null, outcome: 'timeout', note: `the checking agent did not finish within ${config.validate.timeoutMinutes} minutes` };
+    }
+    const parsed = parseAgentOutput(stdout);
+    const ran = { startedAt, endedAt, stats: parsed.stats };
+    if (parsed.stats?.subtype === 'error_max_budget_usd') {
+      const budget = config.validate.maxBudgetUsd;
+      return { ...ran, outcome: 'failed', note: budget === null ? 'the checking agent hit its budget' : `the checking agent hit its budget of $${budget}` };
+    }
+    // Not a pause: the review itself is done, so it goes to the reviewer unchecked rather than
+    // holding the queue for a limit that has nothing to do with this pull request.
+    if (rateLimitOf(parsed.text, new Date(endedAt))) {
+      return { ...ran, outcome: 'failed', note: 'the checking agent hit the Claude session limit' };
+    }
+    if (validateVerdictOf(parsed.text) === 'none') {
+      return { ...ran, outcome: 'failed', note: 'the checking agent ended without VALIDATED' };
+    }
+    return { ...ran, outcome: 'validated', note: null };
+  } catch (err) {
+    return { startedAt, endedAt: deps.now(), stats: null, outcome: 'failed', note: `the findings could not be checked: ${err instanceof Error ? err.message : err}` };
+  }
+}
+
+/** The checking agent's log, beside the drafting agent's rather than appended to it. */
+function validateLogPath(logPath: string): string {
+  return `${logPath.replace(/\.log$/, '')}.validate.log`;
+}
+
+/** What the card says about a draft nobody checked, so "1 P1" is not read as a settled one. */
+function withValidation(summary: string | null, validation: Validation): string | null {
+  if (validation !== 'unchecked') {
+    return summary;
+  }
+  return summary === null ? 'unchecked' : `${summary} \u00b7 unchecked`;
 }

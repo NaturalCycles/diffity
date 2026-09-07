@@ -24,6 +24,19 @@ export interface AgentConfig {
   maxBudgetUsd: number | null;
 }
 
+/**
+ * The second pass over a drafted review: a stronger model reads the P1 and P2 findings against the
+ * code and amends or dismisses the ones that do not hold. Off until a model is named.
+ */
+export interface ValidateConfig {
+  /** The model that checks the drafted findings; null runs no second pass at all. */
+  model: string | null;
+  /** How long the check may take before the agent is stopped and the draft goes out unchecked. */
+  timeoutMinutes: number;
+  /** `--max-budget-usd` for the checking run; null leaves it uncapped. */
+  maxBudgetUsd: number | null;
+}
+
 export interface InboxConfig {
   /** How often GitHub is asked; well inside its limits at a handful of calls per tick. */
   pollMinutes: number;
@@ -49,6 +62,7 @@ export interface InboxConfig {
    */
   alertPaths: string[];
   agent: AgentConfig;
+  validate: ValidateConfig;
   /** Whether a pull request waits for its CI to pass before an agent is spent on it. */
   waitForCi: boolean;
   prepareTimeoutMinutes: number;
@@ -75,6 +89,7 @@ export const DEFAULT_INBOX_CONFIG: InboxConfig = {
   alertWhen: '',
   alertPaths: [],
   agent: { model: null, effort: null, mcpAllow: [], extraArgs: [], maxBudgetUsd: null },
+  validate: { model: null, timeoutMinutes: 15, maxBudgetUsd: null },
   waitForCi: false,
   prepareTimeoutMinutes: 30,
   maxPrepared: 5,
@@ -107,7 +122,7 @@ export function parseInboxConfig(raw: unknown, source = 'inbox config'): InboxCo
     throw new Error(`${source} must be a JSON object`);
   }
   const obj = raw as Record<string, unknown>;
-  const config: InboxConfig = { ...DEFAULT_INBOX_CONFIG, alertPaths: [], agent: defaultAgent() };
+  const config: InboxConfig = { ...DEFAULT_INBOX_CONFIG, alertPaths: [], agent: defaultAgent(), validate: defaultValidate() };
 
   if (obj.prepare !== undefined) {
     throw new Error(`${source}: "prepare" was replaced by the "agent" block — delete it (the built-in command applies) and put extra flags in agent.extraArgs`);
@@ -144,6 +159,9 @@ export function parseInboxConfig(raw: unknown, source = 'inbox config'): InboxCo
   }
   if (obj.agent !== undefined) {
     config.agent = parseAgentConfig(obj.agent, source);
+  }
+  if (obj.validate !== undefined) {
+    config.validate = parseValidateConfig(obj.validate, source);
   }
   if (obj.waitForCi !== undefined) {
     if (typeof obj.waitForCi !== 'boolean') {
@@ -213,8 +231,31 @@ function parseAgentConfig(raw: unknown, source: string): AgentConfig {
   return agent;
 }
 
+function defaultValidate(): ValidateConfig {
+  return { ...DEFAULT_INBOX_CONFIG.validate };
+}
+
+function parseValidateConfig(raw: unknown, source: string): ValidateConfig {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new Error(`${source}: validate must be a JSON object`);
+  }
+  const obj = raw as Record<string, unknown>;
+  const validate = defaultValidate();
+
+  if (obj.model !== undefined && obj.model !== null) {
+    validate.model = text(obj.model, 'validate.model', source);
+  }
+  if (obj.timeoutMinutes !== undefined) {
+    validate.timeoutMinutes = positive(obj.timeoutMinutes, 'validate.timeoutMinutes', source);
+  }
+  if (obj.maxBudgetUsd !== undefined && obj.maxBudgetUsd !== null) {
+    validate.maxBudgetUsd = positive(obj.maxBudgetUsd, 'validate.maxBudgetUsd', source);
+  }
+  return validate;
+}
+
 /** The settings the inbox page edits, kept in the config file beside the keys only the file holds. */
-export type InboxSettings = Pick<InboxConfig, 'filter' | 'alertWhen' | 'alertPaths' | 'maxPrepared' | 'pollMinutes' | 'live' | 'liveTimeoutMinutes' | 'prepareTimeoutMinutes' | 'waitForCi' | 'agent'>;
+export type InboxSettings = Pick<InboxConfig, 'filter' | 'alertWhen' | 'alertPaths' | 'maxPrepared' | 'pollMinutes' | 'live' | 'liveTimeoutMinutes' | 'prepareTimeoutMinutes' | 'waitForCi' | 'agent' | 'validate'>;
 
 /**
  * Writes the page-editable settings into the config file, leaving every other key as the reviewer

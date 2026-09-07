@@ -144,6 +144,9 @@ export function inboxPage(): string {
         <option value="max">max</option>
       </select></label>
       <label>Budget per run ($)<input id="agentMaxBudgetUsd" type="number" min="0.5" step="0.5" placeholder="uncapped"></label>
+      <label>Checking model<input id="validateModel" type="text" placeholder="off"></label>
+      <label>Checking timeout (minutes)<input id="validateTimeoutMinutes" type="number" min="1" step="1"></label>
+      <label>Checking budget per run ($)<input id="validateMaxBudgetUsd" type="number" min="0.5" step="0.5" placeholder="uncapped"></label>
       <label class="check"><input id="live" type="checkbox"> Park a live agent on opened reviews</label>
       <label class="check"><input id="waitForCi" type="checkbox"> Hold a pull request until its CI has passed</label>
     </div>
@@ -365,6 +368,10 @@ export function inboxPage(): string {
       el('agentEffort').value = agent.effort || '';
       el('agentMcpAllow').value = (agent.mcpAllow || []).join('\\n');
       el('agentMaxBudgetUsd').value = agent.maxBudgetUsd == null ? '' : agent.maxBudgetUsd;
+      const validate = settings.validate || {};
+      el('validateModel').value = validate.model || '';
+      el('validateTimeoutMinutes').value = validate.timeoutMinutes;
+      el('validateMaxBudgetUsd').value = validate.maxBudgetUsd == null ? '' : validate.maxBudgetUsd;
     } catch (err) {
       el('settings-status').textContent = 'settings could not be loaded';
     }
@@ -372,6 +379,7 @@ export function inboxPage(): string {
 
   async function saveSettings() {
     const budget = el('agentMaxBudgetUsd').value.trim();
+    const checkBudget = el('validateMaxBudgetUsd').value.trim();
     const next = {
       filter: el('filter').value,
       alertWhen: el('alertWhen').value,
@@ -389,6 +397,11 @@ export function inboxPage(): string {
         // Not editable here; sent back as it came so a save does not drop it.
         extraArgs: (settings.agent && settings.agent.extraArgs) || [],
         maxBudgetUsd: budget === '' ? null : Number(budget),
+      },
+      validate: {
+        model: el('validateModel').value.trim() || null,
+        timeoutMinutes: Number(el('validateTimeoutMinutes').value),
+        maxBudgetUsd: checkBudget === '' ? null : Number(checkBudget),
       },
     };
     const res = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next) });

@@ -29,6 +29,8 @@ export interface TickDeps {
   alertPaths: string[];
   /** `agent.model`, recorded for a run that did not report which models it spent on. */
   agentModel: string | null;
+  /** `validate.model`, recorded the same way for the pass that checks the draft. */
+  validateModel: string | null;
   /** Holds preparation back until then — a session limit is waited out, not retried. */
   pauseUntil(until: string): void;
   /** Until when preparation is held back, or null when it is not; polling carries on regardless. */
@@ -154,6 +156,7 @@ async function prepareOne(store: InboxStore, snapshot: PrSnapshot, deps: TickDep
   const result = await deps.prepare(snapshot, { bumped });
   store.clearBump(id);
   recordPrepareRun(store, snapshot, deps, result);
+  recordValidateRun(store, snapshot, deps, result);
   switch (result.kind) {
     case 'prepared':
       store.markPrepared(id, {
@@ -167,6 +170,9 @@ async function prepareOne(store: InboxStore, snapshot: PrSnapshot, deps: TickDep
         alert: result.alert ?? alertForPaths(snapshot.files, deps.alertPaths),
       });
       deps.log(`prepared ${id}`);
+      if (result.validateRun?.note) {
+        deps.log(`${id}: the drafted findings went unchecked — ${result.validateRun.note}`);
+      }
       return;
     case 'skipped':
       store.setStatus(id, 'skipped', result.reason);
@@ -205,6 +211,25 @@ function recordPrepareRun(store: InboxStore, snapshot: PrSnapshot, deps: TickDep
     stats: result.run.stats,
     configModel: deps.agentModel,
     note: result.kind === 'prepared' ? null : result.reason,
+  }));
+}
+
+/** The pass that checked the draft, when there was one; the draft stands whatever it came to. */
+function recordValidateRun(store: InboxStore, snapshot: PrSnapshot, deps: TickDeps, result: PrepareResult): void {
+  if (result.kind !== 'prepared' || result.validateRun === null) {
+    return;
+  }
+  const { startedAt, endedAt, stats, outcome, note } = result.validateRun;
+  store.recordRun(runRecordOf({
+    prId: prId(snapshot),
+    headSha: result.headSha,
+    phase: 'validate',
+    outcome,
+    startedAt,
+    endedAt,
+    stats,
+    configModel: deps.validateModel,
+    note,
   }));
 }
 
