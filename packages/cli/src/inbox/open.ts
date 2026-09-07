@@ -37,3 +37,18 @@ export function resolveDismiss(store: InboxStore, id: string): Resolution {
   }
   return { ok: true, pr };
 }
+
+/**
+ * Whether a pull request can be bumped to the front of the queue: one that is waiting, or that a
+ * verdict or a failure has set aside. A prepared, stale or in-flight one has nothing to gain.
+ */
+export function resolveBump(store: InboxStore, id: string): Resolution {
+  const pr = store.get(id);
+  if (!pr) {
+    return { ok: false, status: 404, message: `No pull request ${id} in the inbox.` };
+  }
+  if (pr.status !== 'queued' && pr.status !== 'skipped' && pr.status !== 'failed') {
+    return { ok: false, status: 409, message: `${id} is ${pr.status}; only a queued, skipped or failed pull request can be bumped.` };
+  }
+  return { ok: true, pr };
+}

@@ -29,7 +29,8 @@ export interface ReconcileInput {
  * Nothing prepares a draft, the reviewer's own pull request, or a bot's. A closed or merged one, or
  * one no longer asking for the review, is retired but keeps whatever was prepared. A new commit
  * makes a prepared review stale and worth redoing. One the reviewer dismissed stays dismissed until
- * it gets new commits. Everything else asked of the reviewer is queued.
+ * it gets new commits; one they bumped is prepared whatever else would have held it back, drafts
+ * apart. Everything else asked of the reviewer is queued.
  */
 export function reconcile(input: ReconcileInput): Transition | null {
   const { existing, snapshot, requested, viewerLogin } = input;
@@ -54,6 +55,11 @@ export function reconcile(input: ReconcileInput): Transition | null {
 
   if (snapshot.isDraft) {
     return settled('draft', 'draft');
+  }
+  // The reviewer asked for this one by name: no verdict — a skip, a spent retry budget, a bot author,
+  // their own name on it — stands in the way.
+  if (existing?.bumpedAt) {
+    return { status: 'queued', reason: 'bumped by the reviewer', prepare: true };
   }
   if (snapshot.isBot) {
     return settled('skipped', `bot author (${snapshot.author})`);

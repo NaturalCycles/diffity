@@ -215,9 +215,9 @@ describe('the inbox server routes', () => {
     importBundle: () => {},
   };
 
-  async function serve(store: InboxStore, logs: string[] = [], attendants: AttendantHost | null = null) {
+  async function serve(store: InboxStore, logs: string[] = [], attendants: AttendantHost | null = null, onBump: (() => void) | null = null) {
     const config = { pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', prepare: ['x'], prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10 };
-    const server = startInboxServer(store, config, m => logs.push(m), stubOpen, attendants);
+    const server = startInboxServer(store, config, m => logs.push(m), stubOpen, attendants, onBump);
     await new Promise(resolve => server.on('listening', resolve));
     const { port } = server.address() as { port: number };
     return { port, server };
@@ -305,6 +305,31 @@ describe('the inbox server routes', () => {
       server.close();
       store.close();
       if (prev === undefined) delete process.env.DIFFITY_DATA_DIR; else process.env.DIFFITY_DATA_DIR = prev;
+    }
+  });
+
+  it('bumps a queued pull request on POST /prepare/<id> and asks for a tick; refuses a prepared one', async () => {
+    const store = preparedStore();
+    store.observe({ ...snapshot(), number: 5 }, true, 'now');
+    store.setStatus('o/r#5', 'queued', 'waiting: 5 reviews already prepared');
+    let ticks = 0;
+    const { port, server } = await serve(store, [], null, () => { ticks++; });
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/prepare/${encodeURIComponent('o/r#5')}`, { method: 'POST' });
+      expect(res.status).toBe(204);
+      const pr = store.get('o/r#5')!;
+      expect(pr.status).toBe('queued');
+      expect(pr.statusReason).toBe('bumped by the reviewer');
+      expect(pr.bumpedAt).not.toBeNull();
+      expect(ticks).toBe(1);
+
+      const prepared = await fetch(`http://127.0.0.1:${port}/prepare/${encodeURIComponent('o/r#4')}`, { method: 'POST' });
+      expect(prepared.status).toBe(409);
+      const unknown = await fetch(`http://127.0.0.1:${port}/prepare/${encodeURIComponent('o/r#9')}`, { method: 'POST' });
+      expect(unknown.status).toBe(404);
+    } finally {
+      server.close();
+      store.close();
     }
   });
 

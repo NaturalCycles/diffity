@@ -13,7 +13,7 @@ export interface Forge {
 export interface TickDeps {
   forge: Forge;
   /** Prepares one pull request; the daemon passes the real preparer, a test a fake. */
-  prepare(snapshot: PrSnapshot): Promise<PrepareResult>;
+  prepare(snapshot: PrSnapshot, opts: { bumped: boolean }): Promise<PrepareResult>;
   removeWorktree(worktree: string, repo: string): void | Promise<void>;
   log(message: string): void;
   now(): string;
@@ -73,14 +73,21 @@ export async function runTick(store: InboxStore, deps: TickDeps): Promise<void> 
     }
   }
 
-  // A stale review is already in the reviewer's pile and is only refreshed. New ones fill the pile
-  // smallest first and no further than `maxPrepared`: each preparation spends an agent run, so the
-  // rest stay queued until a prepared review is posted or dismissed.
+  // Bumped ones first, in the order they were asked for, and past the cap: the reviewer wants them
+  // now. A stale review is already in the reviewer's pile and is only refreshed. New ones fill the
+  // pile smallest first and no further than `maxPrepared`: each preparation spends an agent run, so
+  // the rest stay queued until a prepared review is posted or dismissed.
   const candidates = toPrepare
-    .map(snapshot => ({ snapshot, refresh: store.get(prId(snapshot))?.status === 'stale' }))
-    .sort((a, b) => Number(b.refresh) - Number(a.refresh) || diffSize(a.snapshot) - diffSize(b.snapshot));
+    .map(snapshot => {
+      const row = store.get(prId(snapshot));
+      return { snapshot, refresh: row?.status === 'stale', bumpedAt: row?.bumpedAt ?? null };
+    })
+    .sort((a, b) => Number(b.bumpedAt !== null) - Number(a.bumpedAt !== null)
+      || (a.bumpedAt ?? '').localeCompare(b.bumpedAt ?? '')
+      || Number(b.refresh) - Number(a.refresh)
+      || diffSize(a.snapshot) - diffSize(b.snapshot));
   let waiting = 0;
-  for (const { snapshot, refresh } of candidates) {
+  for (const { snapshot, refresh, bumpedAt } of candidates) {
     if (deps.shouldContinue && !deps.shouldContinue()) {
       break;
     }
@@ -88,12 +95,13 @@ export async function runTick(store: InboxStore, deps: TickDeps): Promise<void> 
     if (store.get(prId(snapshot))?.status === 'dismissed') {
       continue;
     }
-    if (!refresh && countReady(store) >= deps.maxPrepared) {
+    const bumped = bumpedAt !== null;
+    if (!refresh && !bumped && countReady(store) >= deps.maxPrepared) {
       store.setStatus(prId(snapshot), 'queued', `waiting: ${deps.maxPrepared} reviews already prepared`);
       waiting++;
       continue;
     }
-    await prepareOne(store, snapshot, deps);
+    await prepareOne(store, snapshot, deps, bumped);
   }
   if (waiting > 0) {
     deps.log(`${waiting} left queued: ${deps.maxPrepared} reviews already prepared`);
@@ -109,12 +117,13 @@ function diffSize(snapshot: PrSnapshot): number {
   return snapshot.additions + snapshot.deletions;
 }
 
-async function prepareOne(store: InboxStore, snapshot: PrSnapshot, deps: TickDeps): Promise<void> {
+async function prepareOne(store: InboxStore, snapshot: PrSnapshot, deps: TickDeps, bumped: boolean): Promise<void> {
   const id = prId(snapshot);
   store.setStatus(id, 'preparing', null);
   deps.log(`preparing ${id} — ${snapshot.title}`);
 
-  const result = await deps.prepare(snapshot);
+  const result = await deps.prepare(snapshot, { bumped });
+  store.clearBump(id);
   switch (result.kind) {
     case 'prepared':
       store.markPrepared(id, {

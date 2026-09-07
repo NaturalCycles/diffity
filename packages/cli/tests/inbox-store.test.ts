@@ -69,6 +69,23 @@ describe('InboxStore migration', () => {
     store.close();
   });
 
+  it('bumps a row to queued and remembers when, until the bump is spent', () => {
+    const store = new InboxStore(path);
+    store.observe(snapshot(), true, 'now');
+    store.setStatus('o/r#1', 'skipped', 'payments PR');
+    expect(store.get('o/r#1')!.bumpedAt).toBeNull();
+
+    store.bump('o/r#1', '2026-09-07T10:00:00Z');
+    const bumped = store.get('o/r#1')!;
+    expect(bumped.status).toBe('queued');
+    expect(bumped.statusReason).toBe('bumped by the reviewer');
+    expect(bumped.bumpedAt).toBe('2026-09-07T10:00:00Z');
+
+    store.clearBump('o/r#1');
+    expect(store.get('o/r#1')!.bumpedAt).toBeNull();
+    store.close();
+  });
+
   it('opens a fresh database and round-trips a prepared row', () => {
     const store = new InboxStore(path);
     store.observe(snapshot(), true, 'now');

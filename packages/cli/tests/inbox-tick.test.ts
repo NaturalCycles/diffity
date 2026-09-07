@@ -34,13 +34,14 @@ class FakeForge implements Forge {
 let store: InboxStore;
 let forge: FakeForge;
 let prepared: string[];
+let bumpedFlags: boolean[];
 let removed: string[];
 let prepareResult: (snap: PrSnapshot) => PrepareResult;
 
 function deps(over: Partial<TickDeps> = {}): TickDeps {
   return {
     forge,
-    prepare: (snap) => { prepared.push(prId(snap)); return Promise.resolve(prepareResult(snap)); },
+    prepare: (snap, opts) => { prepared.push(prId(snap)); bumpedFlags.push(opts.bumped); return Promise.resolve(prepareResult(snap)); },
     removeWorktree: (worktree) => { removed.push(worktree); },
     log: () => {},
     now: () => '2026-09-02T12:00:00.000Z',
@@ -53,6 +54,7 @@ beforeEach(() => {
   store = new InboxStore(':memory:');
   forge = new FakeForge();
   prepared = [];
+  bumpedFlags = [];
   removed = [];
   prepareResult = (snap) => ({
     kind: 'prepared', headSha: snap.headSha, bundlePath: `/b/${snap.number}.json`,
@@ -278,5 +280,40 @@ describe('runTick', () => {
     expect(view.ready[0].dismissUrl).toBe('http://localhost:5390/dismiss/o%2Fr%231');
     const byNumber = Object.fromEntries(view.working.map(row => [row.number, row.dismissUrl]));
     expect(byNumber).toEqual({ 2: 'http://localhost:5390/dismiss/o%2Fr%232', 3: null });
+  });
+
+  it('prepares a bumped pull request first and past the cap, then the bump is spent', async () => {
+    forge.set(snapshot({ number: 1, additions: 10, deletions: 0 }));
+    forge.set(snapshot({ number: 2, additions: 20, deletions: 0 }));
+    forge.set(snapshot({ number: 3, additions: 300, deletions: 0 }));
+    await runTick(store, deps({ maxPrepared: 1 }));
+    expect(prepared).toEqual(['o/r#1']);
+    expect(bumpedFlags).toEqual([false]);
+
+    store.bump('o/r#3', '2026-09-07T10:00:00Z');
+    prepared = [];
+    bumpedFlags = [];
+    await runTick(store, deps({ maxPrepared: 1 }));
+
+    expect(prepared).toEqual(['o/r#3']);
+    expect(bumpedFlags).toEqual([true]);
+    expect(store.get('o/r#3')!.status).toBe('prepared');
+    expect(store.get('o/r#3')!.bumpedAt).toBeNull();
+    expect(store.get('o/r#2')!.status).toBe('queued');
+  });
+
+  it('offers a bump on queued, skipped and failed rows only, and lists a bumped row first', async () => {
+    forge.set(snapshot({ number: 1, additions: 10, deletions: 0 }));
+    forge.set(snapshot({ number: 2, additions: 20, deletions: 0 }));
+    forge.set(snapshot({ number: 3, additions: 30, deletions: 0 }));
+    await runTick(store, deps({ maxPrepared: 1 }));
+    store.bump('o/r#3', '2026-09-07T10:00:00Z');
+
+    const view = buildView(store, 'http://localhost:5390', '2026-09-02T12:00:00.000Z');
+    expect(view.ready[0].prepareUrl).toBeNull();
+    expect(view.working.map(row => [row.number, row.bumped, row.prepareUrl])).toEqual([
+      [3, true, null],
+      [2, false, 'http://localhost:5390/prepare/o%2Fr%232'],
+    ]);
   });
 });
