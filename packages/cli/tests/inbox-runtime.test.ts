@@ -57,6 +57,28 @@ describe('runAgent', () => {
     }
   });
 
+  it('hands the allowlist to the agent, so its gate hook can read it', async () => {
+    const argv = ['node', '-e', 'process.stdout.write(process.env.DIFFITY_MCP_ALLOW ?? "unset")'];
+    expect((await runAgent(opts(argv), root, ['mcp__a__b', 'mcp__c__d'])).stdout).toBe('mcp__a__b,mcp__c__d');
+    expect((await runAgent(opts(argv), root)).stdout).toBe('');
+  });
+
+  it('appends the text of a JSON result to the log, so the raw output stays readable', async () => {
+    const result = JSON.stringify({ type: 'result', subtype: 'success', result: 'reviewing\nPREPARED' });
+    const argv = ['node', '-e', `process.stdout.write(${JSON.stringify(result)})`];
+    const run = await runAgent(opts(argv), root);
+
+    expect(run.stdout).toBe(result);
+    const log = readFileSync(join(root, 'agent.log'), 'utf-8');
+    expect(log).toBe(`${result}\n--- result ---\nreviewing\nPREPARED\n`);
+  });
+
+  it('leaves the log as it came when the output is not a JSON result', async () => {
+    const argv = ['node', '-e', 'process.stdout.write("reviewing\\nPREPARED\\n")'];
+    await runAgent(opts(argv), root);
+    expect(readFileSync(join(root, 'agent.log'), 'utf-8')).toBe('reviewing\nPREPARED\n');
+  });
+
   it('reports a timeout and kills a hung agent rather than hanging', async () => {
     const argv = ['node', '-e', 'setInterval(()=>{},1000)'];
     const result = await runAgent(opts(argv, { timeoutMs: 300 }), root);

@@ -74,6 +74,7 @@ export function settingsHost(config: InboxConfig, configPath: string | undefined
     get: () => ({
       filter: config.filter, alertWhen: config.alertWhen, maxPrepared: config.maxPrepared, pollMinutes: config.pollMinutes,
       live: config.live, liveTimeoutMinutes: config.liveTimeoutMinutes, prepareTimeoutMinutes: config.prepareTimeoutMinutes,
+      agent: config.agent,
     }),
     update: settings => {
       // The config object is the one the tick, the prepares and the opens read from, so the change
@@ -114,7 +115,7 @@ export async function runDaemon(
   let lastPollAt: string | null = null;
 
   const inflight: Inflight = {};
-  const prepareDeps: PrepareDeps = realPrepareDeps(nodePath, entry, inboxDataDir, inflight);
+  const prepareDeps: PrepareDeps = realPrepareDeps(nodePath, entry, inboxDataDir, config, log, inflight);
   const deps = {
     forge: options.forge ?? realForge,
     prepare: (snapshot: Parameters<typeof preparePr>[0], opts: { bumped: boolean }) => preparePr(snapshot, config, prepareDeps, opts),

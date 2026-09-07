@@ -6,7 +6,13 @@ import { tmpdir } from 'node:os';
 import { runDaemon } from '../src/inbox/daemon.js';
 import { InboxStore } from '../src/inbox/store.js';
 import type { Forge } from '../src/inbox/tick.js';
+import type { AgentConfig } from '../src/inbox/config.js';
 import type { PrSnapshot } from '@diffity/github';
+
+/** The built-in agent settings, fresh each call so a test cannot leak into the next. */
+function agentConfig(): AgentConfig {
+  return { model: null, effort: null, mcpAllow: [], extraArgs: [], maxBudgetUsd: null };
+}
 
 let root: string;
 let origDataDir: string | undefined;
@@ -38,7 +44,7 @@ function seedRegistry(pid: number): void {
 function config(port: number) {
   return {
     pollMinutes: 5, port, reposDir: join(root, 'repos'), worktreesDir: join(root, 'inbox', 'worktrees'),
-    filter: '', alertWhen: '', prepare: ['unused'], prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10,
+    filter: '', alertWhen: '', agent: agentConfig(), prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10,
   };
 }
 

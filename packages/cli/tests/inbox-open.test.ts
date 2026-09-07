@@ -11,9 +11,15 @@ import { openPreparedSession, baseRefOf, ensureServer, repoHash, serverArgs, typ
 import { startInboxServer, settingsHost, type AttendantHost, type ServerHooks } from '../src/inbox/daemon.js';
 import { InboxStore } from '../src/inbox/store.js';
 import { readRegistry, registerInstance } from '../src/registry.js';
+import type { AgentConfig } from '../src/inbox/config.js';
 import type { PrSnapshot } from '@diffity/github';
 
 const ENTRY = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'index.js');
+
+/** The built-in agent settings, fresh each call so a test cannot leak into the next. */
+function agentConfig(): AgentConfig {
+  return { model: null, effort: null, mcpAllow: [], extraArgs: [], maxBudgetUsd: null };
+}
 
 let root: string;
 
@@ -216,7 +222,7 @@ describe('the inbox server routes', () => {
   };
 
   async function serve(store: InboxStore, logs: string[] = [], attendants: AttendantHost | null = null, onBump: (() => void) | null = null, configPath?: string, extra: Partial<ServerHooks> = {}) {
-    const config = { pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', alertWhen: '', prepare: ['x'], prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10 };
+    const config = { pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', alertWhen: '', agent: agentConfig(), prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10 };
     const server = startInboxServer(store, config, m => logs.push(m), stubOpen, { attendants, onBump, settings: settingsHost(config, configPath), ...extra });
     await new Promise(resolve => server.on('listening', resolve));
     const { port } = server.address() as { port: number };
@@ -348,9 +354,12 @@ describe('the inbox server routes', () => {
     const { port, server } = await serve(store, [], null, null, configPath);
     try {
       const before = await (await fetch(`http://127.0.0.1:${port}/api/settings`)).json();
-      expect(before).toEqual({ filter: '', alertWhen: '', maxPrepared: 5, pollMinutes: 5, live: true, liveTimeoutMinutes: 10, prepareTimeoutMinutes: 30 });
+      expect(before).toEqual({ filter: '', alertWhen: '', maxPrepared: 5, pollMinutes: 5, live: true, liveTimeoutMinutes: 10, prepareTimeoutMinutes: 30, agent: agentConfig() });
 
-      const next = { filter: 'skip payments', alertWhen: 'a P1', maxPrepared: 2, pollMinutes: 3, live: false, liveTimeoutMinutes: 4, prepareTimeoutMinutes: 20 };
+      const next = {
+        filter: 'skip payments', alertWhen: 'a P1', maxPrepared: 2, pollMinutes: 3, live: false, liveTimeoutMinutes: 4, prepareTimeoutMinutes: 20,
+        agent: { ...agentConfig(), model: 'opus', mcpAllow: ['mcp__atlassian__getJiraIssue'] },
+      };
       const saved = await fetch(`http://127.0.0.1:${port}/api/settings`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next),
       });
@@ -444,7 +453,7 @@ describe('the inbox server routes', () => {
       ensureServer: () => Promise.resolve(7788),
       importBundle: () => { throw new Error('head moved'); },
     };
-    const config = { pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', alertWhen: '', prepare: ['x'], prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10 };
+    const config = { pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', alertWhen: '', agent: agentConfig(), prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10 };
     const server = startInboxServer(store, config, m => logs.push(m), failingOpen);
     await new Promise(resolve => server.on('listening', resolve));
     const { port } = server.address() as { port: number };

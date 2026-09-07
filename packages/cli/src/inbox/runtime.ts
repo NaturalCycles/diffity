@@ -5,6 +5,8 @@ import { createWriteStream, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { ExportOpts, PrepareDeps, RunAgentOpts, ServerHandle } from './prepare.js';
 import type { InboxConfig } from './config.js';
+import { buildAgentArgv, reviewSkillBody } from './agent-argv.js';
+import { parseAgentOutput } from './agent-output.js';
 import { parseAwaitOutcome, type AttendantDeps } from './attendant.js';
 import { diffityDir } from '../registry.js';
 
@@ -23,14 +25,15 @@ export interface Inflight {
  * `dataDirFor` gives each pull request its own diffity data directory, so a prepared session never
  * mixes with the reviewer's own diffity or with the previous run's findings on a re-prepare.
  */
-export function realPrepareDeps(nodePath: string, entry: string, dataDirFor: (worktree: string) => string, inflight: Inflight = {}): PrepareDeps {
+export function realPrepareDeps(nodePath: string, entry: string, dataDirFor: (worktree: string) => string, config: InboxConfig, log: (message: string) => void, inflight: Inflight = {}): PrepareDeps {
   return {
     startServer: async (worktree, diffRef) => {
       const handle = await startDiffityServer(nodePath, entry, worktree, diffRef, dataDirFor(worktree));
       inflight.serverStop = () => { handle.stop(); inflight.serverStop = undefined; };
       return { port: handle.port, stop: () => { handle.stop(); inflight.serverStop = undefined; } };
     },
-    runAgent: opts => runAgent(opts, dataDirFor(opts.cwd), inflight),
+    agentArgv: () => buildAgentArgv({ nodePath, entry, agent: config.agent, systemPrompt: reviewSkillBody(entry, log) }),
+    runAgent: opts => runAgent(opts, dataDirFor(opts.cwd), config.agent.mcpAllow, inflight),
     exportBundle: opts => exportBundle(nodePath, entry, opts, dataDirFor(opts.worktree)),
     now: () => new Date().toISOString(),
   };
@@ -108,7 +111,7 @@ function stopServer(pid: number | undefined): void {
  * not rest on the prompt alone. On a timeout the whole process group is killed, not just the direct
  * child, so a tool the agent spawned cannot outlive it.
  */
-export function runAgent(opts: RunAgentOpts, dataDir: string, inflight: Inflight = {}): Promise<{ stdout: string; timedOut: boolean }> {
+export function runAgent(opts: RunAgentOpts, dataDir: string, mcpAllow: string[] = [], inflight: Inflight = {}): Promise<{ stdout: string; timedOut: boolean }> {
   mkdirSync(dirname(opts.logPath), { recursive: true });
   const log = createWriteStream(opts.logPath, { flags: opts.appendLog ? 'a' : 'w' });
   const [command, ...args] = opts.argv;
@@ -118,7 +121,7 @@ export function runAgent(opts: RunAgentOpts, dataDir: string, inflight: Inflight
       cwd: opts.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: true,
-      env: agentEnv(dataDir),
+      env: agentEnv(dataDir, mcpAllow),
     });
     inflight.agentKill = () => killGroup(child.pid, 'SIGTERM');
     let stdout = '';
@@ -142,13 +145,23 @@ export function runAgent(opts: RunAgentOpts, dataDir: string, inflight: Inflight
 
     child.on('error', err => {
       clearInflight();
-      if (!settled) { settled = true; clearTimeout(timer); if (escalate) clearTimeout(escalate); log.end(); reject(new Error(`could not run the prepare command "${command}": ${err.message}`)); }
+      if (!settled) { settled = true; clearTimeout(timer); if (escalate) clearTimeout(escalate); log.end(); reject(new Error(`could not run the agent command "${command}": ${err.message}`)); }
     });
     child.on('close', () => {
       clearInflight();
       clearTimeout(timer);
       if (escalate) clearTimeout(escalate);
-      if (!settled) { settled = true; log.end(); resolve({ stdout, timedOut: false }); }
+      if (!settled) {
+        settled = true;
+        // The tee above holds the raw JSON of a `--output-format json` run; the text the agent
+        // would otherwise have printed goes in after it, so the log stays readable.
+        const { text, stats } = parseAgentOutput(stdout);
+        if (stats) {
+          log.write(`\n--- result ---\n${text}\n`);
+        }
+        log.end();
+        resolve({ stdout, timedOut: false });
+      }
     });
   });
 }
@@ -159,7 +172,7 @@ export function runAgent(opts: RunAgentOpts, dataDir: string, inflight: Inflight
  * so the promise it backs is "the daemon does not hand the agent your credentials", not "the agent
  * cannot possibly reach GitHub".
  */
-function agentEnv(dataDir: string): NodeJS.ProcessEnv {
+function agentEnv(dataDir: string, mcpAllow: string[]): NodeJS.ProcessEnv {
   const env = { ...process.env };
   // gh's auth tokens, over HTTPS.
   delete env.GH_TOKEN;
@@ -179,14 +192,16 @@ function agentEnv(dataDir: string): NodeJS.ProcessEnv {
   env.GIT_CONFIG_NOSYSTEM = '1';
   env.GIT_TERMINAL_PROMPT = '0';
   env.DIFFITY_DATA_DIR = dataDir;
+  // What `inbox mcp-gate`, run as the agent's PreToolUse hook, judges each MCP call against.
+  env.DIFFITY_MCP_ALLOW = mcpAllow.join(',');
   mkdirSync(env.GH_CONFIG_DIR, { recursive: true });
   return env;
 }
 
 /**
  * The real side effects behind an attendant. The wait is this CLI's own `agent await` over the
- * worktree; the answer is the configured agent command with the forge's credentials stripped, as
- * for preparation, but in the reviewer's own diffity data directory — the opened session lives
+ * worktree; the answer is the same built agent command as a preparation, with the forge's
+ * credentials stripped, but in the reviewer's own diffity data directory — the opened session lives
  * there, and the reply has to land in it.
  */
 export function realAttendantDeps(nodePath: string, entry: string, config: InboxConfig, logPathFor: (worktree: string) => string, log: (message: string) => void): AttendantDeps {
@@ -210,9 +225,11 @@ export function realAttendantDeps(nodePath: string, entry: string, config: Inbox
       signal.addEventListener('abort', onAbort, { once: true });
       try {
         const { timedOut } = await runAgent({
-          argv: config.prepare, prompt, cwd: worktree, logPath: logPathFor(worktree),
+          // No review skill in the system prompt: the live prompt is the whole job here.
+          argv: buildAgentArgv({ nodePath, entry, agent: config.agent, systemPrompt: null }),
+          prompt, cwd: worktree, logPath: logPathFor(worktree),
           timeoutMs: config.liveTimeoutMinutes * 60_000, appendLog: true,
-        }, diffityDir(), inflight);
+        }, diffityDir(), config.agent.mcpAllow, inflight);
         if (timedOut) {
           log(`the answering agent in ${worktree} did not finish within ${config.liveTimeoutMinutes} minutes`);
         }

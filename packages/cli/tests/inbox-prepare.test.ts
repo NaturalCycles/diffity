@@ -8,8 +8,13 @@ import { worktreePath } from '../src/inbox/worktree.js';
 import { startInboxServer } from '../src/inbox/daemon.js';
 import { InboxStore } from '../src/inbox/store.js';
 import { buildView } from '../src/inbox/view.js';
-import type { InboxConfig } from '../src/inbox/config.js';
+import type { AgentConfig, InboxConfig } from '../src/inbox/config.js';
 import type { PrSnapshot } from '@diffity/github';
+
+/** The built-in agent settings, fresh each call so a test cannot leak into the next. */
+function agentConfig(): AgentConfig {
+  return { model: null, effort: null, mcpAllow: [], extraArgs: [], maxBudgetUsd: null };
+}
 
 let root: string;
 let reposDir: string;
@@ -31,7 +36,7 @@ function snapshot(): PrSnapshot {
 function config(): InboxConfig {
   return {
     pollMinutes: 5, port: 0, reposDir, worktreesDir, filter: '', alertWhen: '',
-    prepare: ['unused'], prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10,
+    agent: agentConfig(), prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10,
   };
 }
 
@@ -64,12 +69,15 @@ afterEach(() => {
 });
 
 let prompts: string[] = [];
+let argvs: string[][] = [];
 
 function deps(over: Partial<PrepareDeps> = {}): PrepareDeps {
   return {
     startServer: () => Promise.resolve({ port: 5555, stop: () => {} }),
-    runAgent: ({ cwd, prompt }) => {
+    agentArgv: () => ['claude', '-p', '--output-format', 'json'],
+    runAgent: ({ cwd, prompt, argv }) => {
       prompts.push(prompt);
+      argvs.push(argv);
       // The worktree exists and holds the checked-out file by the time the agent runs.
       expect(existsSync(join(cwd, 'a.ts'))).toBe(true);
       return Promise.resolve({ stdout: 'reviewing\nPREPARED\n', timedOut: false });
@@ -84,7 +92,8 @@ function deps(over: Partial<PrepareDeps> = {}): PrepareDeps {
 }
 
 describe('preparePr', () => {
-  it('cuts a worktree, runs the agent, exports a bundle, and keeps the worktree', async () => {
+  it('cuts a worktree, runs the built agent command, exports a bundle, and keeps the worktree', async () => {
+    argvs = [];
     const result = await preparePr(snapshot(), config(), deps());
 
     expect(result.kind).toBe('prepared');
@@ -92,6 +101,37 @@ describe('preparePr', () => {
     expect(existsSync(result.worktree)).toBe(true);
     expect(readFileSync(result.bundlePath, 'utf-8')).toContain('bundle');
     expect(result.headSha).toBe(snapshot().headSha);
+    expect(argvs[0]).toEqual(['claude', '-p', '--output-format', 'json']);
+  });
+
+  it('reads the verdict out of a JSON result and carries the run\'s stats', async () => {
+    const result = await preparePr(snapshot(), config(), deps({
+      runAgent: () => Promise.resolve({
+        stdout: JSON.stringify({
+          type: 'result', subtype: 'success', result: 'reviewing\nPREPARED', total_cost_usd: 1.25, duration_ms: 60_000,
+          num_turns: 12, usage: { input_tokens: 30, output_tokens: 900 }, modelUsage: { 'claude-x': {} },
+        }),
+        timedOut: false,
+      }),
+    }));
+
+    expect(result.kind).toBe('prepared');
+    expect(result.stats).toMatchObject({ costUsd: 1.25, turns: 12, outputTokens: 900, models: ['claude-x'], subtype: 'success' });
+  });
+
+  it('fails with the budget as the reason when the agent hit it', async () => {
+    const dest = worktreePath(worktreesDir, snapshot());
+    const result = await preparePr(snapshot(), { ...config(), agent: { ...agentConfig(), maxBudgetUsd: 3 } }, deps({
+      runAgent: () => Promise.resolve({
+        stdout: JSON.stringify({ type: 'result', subtype: 'error_max_budget_usd', result: '', is_error: true }),
+        timedOut: false,
+      }),
+    }));
+
+    expect(result.kind).toBe('failed');
+    if (result.kind !== 'failed') return;
+    expect(result.reason).toBe('the agent hit its budget of $3');
+    expect(existsSync(dest)).toBe(false);
   });
 
   it('removes the worktree when the agent skips', async () => {

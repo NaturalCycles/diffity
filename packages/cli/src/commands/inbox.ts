@@ -5,6 +5,7 @@ import { loadInboxConfig } from '../inbox/config.js';
 import { inboxConfigPath, inboxStorePath } from '../inbox/paths.js';
 import { InboxStore } from '../inbox/store.js';
 import { runDaemon } from '../inbox/daemon.js';
+import { allowFromEnv, mcpGateDecision } from '../inbox/mcp-gate.js';
 import { buildView } from '../inbox/view.js';
 
 export function registerInboxCommand(program: Command): void {
@@ -55,6 +56,20 @@ export function registerInboxCommand(program: Command): void {
       handleStop = handle.stop;
     });
 
+  // Not for a person to run: this is the PreToolUse hook the daemon puts in the review agent's
+  // settings, and it answers on its exit code — 0 lets the call through, 2 refuses it.
+  inbox
+    .command('mcp-gate', { hidden: true })
+    .description('Allow only the MCP tools named in DIFFITY_MCP_ALLOW')
+    .action(async () => {
+      const decision = mcpGateDecision(await readJsonStdin(), allowFromEnv(process.env.DIFFITY_MCP_ALLOW));
+      if (decision.allow) {
+        return;
+      }
+      console.error(decision.message);
+      process.exit(2);
+    });
+
   inbox
     .command('status')
     .description('Print the current inbox without starting the daemon')
@@ -89,6 +104,20 @@ export function registerInboxCommand(program: Command): void {
         `  ${pc.dim('dismissed')} ${row.repo}#${row.number} ${row.title}`,
       ));
     });
+}
+
+/** All of stdin, parsed; unparseable input reads as null, which the gate refuses. */
+async function readJsonStdin(): Promise<unknown> {
+  let raw = '';
+  process.stdin.setEncoding('utf-8');
+  for await (const chunk of process.stdin) {
+    raw += chunk;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
 }
 
 function section(title: string, lines: string[]): void {

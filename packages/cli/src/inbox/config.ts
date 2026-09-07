@@ -2,6 +2,28 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 
+/**
+ * How the review agent is run. The command itself is built by `buildAgentArgv`, not configured:
+ * the flags that keep the agent off the forge and out of the reviewer's own settings belong to the
+ * daemon, and only these choices are left open.
+ */
+export interface AgentConfig {
+  /** `--model`; null leaves the agent's own default. */
+  model: string | null;
+  /** `--effort`, one of low, medium, high, xhigh, max; null leaves the agent's own default. */
+  effort: string | null;
+  /**
+   * The exact MCP tool names the agent may call. Empty runs it with no user settings at all — no
+   * MCP servers, no memory, no installed skills. Anything listed brings the reviewer's MCP servers
+   * back, with a hook refusing every MCP tool but these.
+   */
+  mcpAllow: string[];
+  /** Appended verbatim to the built command. */
+  extraArgs: string[];
+  /** `--max-budget-usd` for one run; null leaves it uncapped. */
+  maxBudgetUsd: number | null;
+}
+
 export interface InboxConfig {
   /** How often GitHub is asked; well inside its limits at a handful of calls per tick. */
   pollMinutes: number;
@@ -21,13 +43,7 @@ export interface InboxConfig {
    * empty means every prepared review is worth a notification.
    */
   alertWhen: string;
-  /**
-   * The agent, as argv; it runs in the pull request's worktree and reads its prompt on stdin. That
-   * worktree is code the pull request's author controls, so the daemon runs the agent without the
-   * forge's credentials in its environment — but the command itself still executes attacker-chosen
-   * repository scripts, so only point it at an agent you would run on an untrusted checkout.
-   */
-  prepare: string[];
+  agent: AgentConfig;
   prepareTimeoutMinutes: number;
   /**
    * How many prepared reviews may wait for the reviewer at once. Each preparation spends an agent
@@ -36,7 +52,7 @@ export interface InboxConfig {
   maxPrepared: number;
   /**
    * Whether opening a prepared review also parks a live agent on it, answering what the reader asks
-   * in the page — one run of the `prepare` command per question.
+   * in the page — one agent run per question.
    */
   live: boolean;
   /** How long one answer may take before the agent is stopped. */
@@ -50,12 +66,7 @@ export const DEFAULT_INBOX_CONFIG: InboxConfig = {
   worktreesDir: '~/.diffity/inbox/worktrees',
   filter: '',
   alertWhen: '',
-  // Defence in depth on top of the stripped credentials: the agent is also denied the gh commands
-  // that could reach the pull request even if it tried.
-  prepare: [
-    'claude', '-p', '--dangerously-skip-permissions',
-    '--disallowedTools', 'Bash(gh pr review:*)', 'Bash(gh pr comment:*)', 'Bash(gh pr merge:*)', 'Bash(gh api:*)',
-  ],
+  agent: { model: null, effort: null, mcpAllow: [], extraArgs: [], maxBudgetUsd: null },
   prepareTimeoutMinutes: 30,
   maxPrepared: 5,
   live: true,
@@ -87,8 +98,11 @@ export function parseInboxConfig(raw: unknown, source = 'inbox config'): InboxCo
     throw new Error(`${source} must be a JSON object`);
   }
   const obj = raw as Record<string, unknown>;
-  const config: InboxConfig = { ...DEFAULT_INBOX_CONFIG };
+  const config: InboxConfig = { ...DEFAULT_INBOX_CONFIG, agent: defaultAgent() };
 
+  if (obj.prepare !== undefined) {
+    throw new Error(`${source}: "prepare" was replaced by the "agent" block — delete it (the built-in command applies) and put extra flags in agent.extraArgs`);
+  }
   if (obj.pollMinutes !== undefined) {
     config.pollMinutes = positive(obj.pollMinutes, 'pollMinutes', source);
   }
@@ -113,11 +127,8 @@ export function parseInboxConfig(raw: unknown, source = 'inbox config'): InboxCo
     }
     config.alertWhen = obj.alertWhen;
   }
-  if (obj.prepare !== undefined) {
-    if (!Array.isArray(obj.prepare) || obj.prepare.length === 0 || !obj.prepare.every(part => typeof part === 'string' && part !== '')) {
-      throw new Error(`${source}: prepare must be a non-empty array of strings (a command and its arguments)`);
-    }
-    config.prepare = obj.prepare as string[];
+  if (obj.agent !== undefined) {
+    config.agent = parseAgentConfig(obj.agent, source);
   }
   if (obj.prepareTimeoutMinutes !== undefined) {
     config.prepareTimeoutMinutes = positive(obj.prepareTimeoutMinutes, 'prepareTimeoutMinutes', source);
@@ -137,8 +148,52 @@ export function parseInboxConfig(raw: unknown, source = 'inbox config'): InboxCo
   return config;
 }
 
+const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+/** An exact MCP tool name, as the reviewer's client reports it: mcp__<server>__<tool>. */
+const MCP_TOOL_NAME = /^mcp__[A-Za-z0-9_.-]+__[A-Za-z0-9_.-]+$/;
+
+function defaultAgent(): AgentConfig {
+  return { ...DEFAULT_INBOX_CONFIG.agent, mcpAllow: [], extraArgs: [] };
+}
+
+function parseAgentConfig(raw: unknown, source: string): AgentConfig {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new Error(`${source}: agent must be a JSON object`);
+  }
+  const obj = raw as Record<string, unknown>;
+  const agent = defaultAgent();
+
+  if (obj.model !== undefined && obj.model !== null) {
+    agent.model = text(obj.model, 'agent.model', source);
+  }
+  if (obj.effort !== undefined && obj.effort !== null) {
+    const effort = text(obj.effort, 'agent.effort', source);
+    if (!EFFORTS.includes(effort)) {
+      throw new Error(`${source}: agent.effort must be one of ${EFFORTS.join('|')}`);
+    }
+    agent.effort = effort;
+  }
+  if (obj.mcpAllow !== undefined) {
+    if (!Array.isArray(obj.mcpAllow) || !obj.mcpAllow.every(name => typeof name === 'string' && MCP_TOOL_NAME.test(name))) {
+      throw new Error(`${source}: agent.mcpAllow must be an array of exact MCP tool names, like mcp__server__tool`);
+    }
+    agent.mcpAllow = obj.mcpAllow as string[];
+  }
+  if (obj.extraArgs !== undefined) {
+    if (!Array.isArray(obj.extraArgs) || !obj.extraArgs.every(arg => typeof arg === 'string' && arg !== '')) {
+      throw new Error(`${source}: agent.extraArgs must be an array of non-empty strings`);
+    }
+    agent.extraArgs = obj.extraArgs as string[];
+  }
+  if (obj.maxBudgetUsd !== undefined && obj.maxBudgetUsd !== null) {
+    agent.maxBudgetUsd = positive(obj.maxBudgetUsd, 'agent.maxBudgetUsd', source);
+  }
+  return agent;
+}
+
 /** The settings the inbox page edits, kept in the config file beside the keys only the file holds. */
-export type InboxSettings = Pick<InboxConfig, 'filter' | 'alertWhen' | 'maxPrepared' | 'pollMinutes' | 'live' | 'liveTimeoutMinutes' | 'prepareTimeoutMinutes'>;
+export type InboxSettings = Pick<InboxConfig, 'filter' | 'alertWhen' | 'maxPrepared' | 'pollMinutes' | 'live' | 'liveTimeoutMinutes' | 'prepareTimeoutMinutes' | 'agent'>;
 
 /**
  * Writes the page-editable settings into the config file, leaving every other key as the reviewer

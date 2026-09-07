@@ -59,7 +59,7 @@ beforeEach(() => {
   prepareResult = (snap) => ({
     kind: 'prepared', headSha: snap.headSha, bundlePath: `/b/${snap.number}.json`,
     worktree: `/wt/${snap.number}`, logPath: `/l/${snap.number}.log`, at: '2026-09-02T12:00:00.000Z',
-    summary: '1 P2', alert: snap.number === 2 ? 'touches auth' : null,
+    summary: '1 P2', alert: snap.number === 2 ? 'touches auth' : null, stats: null,
   });
 });
 
@@ -89,7 +89,7 @@ describe('runTick', () => {
 
   it('records a skip verdict without preparing again next tick', async () => {
     forge.set(snapshot());
-    prepareResult = () => ({ kind: 'skipped', reason: 'payments PR', logPath: '/l/1.log' });
+    prepareResult = () => ({ kind: 'skipped', reason: 'payments PR', logPath: '/l/1.log', stats: null });
     await runTick(store, deps());
     expect(store.get('o/r#1')!.status).toBe('skipped');
     expect(store.get('o/r#1')!.statusReason).toBe('payments PR');
@@ -139,7 +139,7 @@ describe('runTick', () => {
 
   it('holds a failed preparation with its reason and log, and stops after the attempt cap', async () => {
     forge.set(snapshot());
-    prepareResult = () => ({ kind: 'failed', reason: 'no local clone', worktree: null, logPath: '/l/1.log' });
+    prepareResult = () => ({ kind: 'failed', reason: 'no local clone', worktree: null, logPath: '/l/1.log', stats: null });
 
     for (let i = 0; i < 5; i++) {
       prepared = [];
