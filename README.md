@@ -353,13 +353,21 @@ On first run it writes `~/.diffity/inbox/config.json`:
 | `worktreesDir` | Where each pull request gets its worktree. |
 | `filter` | Your own words on what does and doesn't need your attention, handed to the agent — it answers with a skip instead of reviewing when a PR matches (e.g. "Skip payments-focused PRs"). Editable from the page's Settings panel. |
 | `alertWhen` | Your own words on what needs you *now*. The agent judges each prepared review against them and flags the ones that match; the page notifies for those only — empty means every prepared review. Editable from the page's Settings panel. |
-| `prepare` | The review agent, as a command and its arguments. It runs in the PR's worktree and reads its prompt on stdin. |
+| `agent.model` | `--model` for the review agent; `null` leaves its own default. Editable from the page. |
+| `agent.effort` | `--effort`: `low`, `medium`, `high`, `xhigh` or `max`; `null` leaves its own default. Editable from the page. |
+| `agent.mcpAllow` | The exact MCP tool names the agent may call, e.g. `mcp__claude_ai_Atlassian__getJiraIssue`. Empty (the default) means no MCP servers at all. Editable from the page. |
+| `agent.extraArgs` | Appended verbatim to the built command, for a flag this table does not cover. |
+| `agent.maxBudgetUsd` | `--max-budget-usd` for one run; `null` leaves it uncapped. A run that hits it is a failed attempt with that reason. Editable from the page. |
 | `prepareTimeoutMinutes` | How long one preparation may take before it's abandoned. Editable from the page. |
 | `maxPrepared` | How many prepared reviews may wait for you at once (default 5). Each preparation is an agent run; the rest of the queue waits until a prepared review is posted or dismissed. Editable from the page. |
-| `live` | Whether opening a prepared review also parks a live agent on it (default true). Questions asked in the page — the Ask button on a finding — each run the `prepare` command once to answer; the agent may answer and amend findings, never edit code, and never reaches GitHub. Editable from the page. |
+| `live` | Whether opening a prepared review also parks a live agent on it (default true). Questions asked in the page — the Ask button on a finding — each run the agent once to answer; the agent may answer and amend findings, never edit code, and never reaches GitHub. Editable from the page. |
 | `liveTimeoutMinutes` | How long one answer may take before the agent is stopped (default 10). Editable from the page. |
 
-> ⚠️ The `prepare` command runs inside a checkout the pull request's author controls, so it executes their repository scripts. The daemon runs it without the forge's credentials in its environment, but you should still only point `prepare` at an agent you're willing to run on untrusted code.
+The command itself is not configurable: the daemon builds `claude -p --output-format json` with the flags the review depends on. It runs with `--setting-sources ""`, so the agent gets none of your Claude settings — no MCP servers, no memory, no `CLAUDE.md`, none of your installed skills. Listing tools in `agent.mcpAllow` brings your MCP servers back and adds a `PreToolUse` hook (`diffity inbox mcp-gate`) that refuses every MCP call but those, by name; the prompt then tells the agent it may read the ticket or document the pull request refers to, and nothing else outside the checkout. A deny list keeps it off `gh pr review`, `gh pr comment`, `gh pr merge` and `gh api`, and off `pnpm`, `npm`, `npx`, `yarn`, `bun` and `make` — CI has already built and tested this head. The skill shipped with this build goes into the agent's system prompt — `diffity-review` for a preparation, `diffity-live` for an answer — so neither depends on what you have installed.
+
+If your config still has a `prepare` key from an earlier version, delete it — the daemon refuses to start with it, and the built command takes its place. A flag you were passing belongs in `agent.extraArgs`.
+
+> ⚠️ The agent runs inside a checkout the pull request's author controls, so it can execute their repository code. The daemon runs it without the forge's credentials in its environment, with the deny list above, and — unless you list MCP tools in `agent.mcpAllow`, which loads your settings for the servers behind the gate — with none of your Claude settings. That is defence in depth, not a sandbox.
 
 ## Multiple projects
 

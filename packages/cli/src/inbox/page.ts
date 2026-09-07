@@ -42,8 +42,9 @@ export function inboxPage(): string {
     background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; resize: vertical; }
   .settings-row { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
   .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px 16px; margin-top: 4px; }
-  .settings-grid input[type=number] { display: block; width: 100%; margin-top: 4px; font: inherit; font-size: 13px; color: var(--ink);
+  .settings-grid input, .settings-grid select { display: block; width: 100%; margin-top: 4px; font: inherit; font-size: 13px; color: var(--ink);
     background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+  .settings-grid input[type=checkbox] { display: inline; width: auto; margin-top: 0; }
   .settings-grid .check { display: flex; align-items: center; gap: 8px; align-self: end; margin-top: 12px; }
   .settings button { border: 1px solid var(--accent); border-radius: 8px; background: var(--accent); color: white;
     font: inherit; font-size: 12.5px; padding: 5px 12px; cursor: pointer; }
@@ -118,11 +119,24 @@ export function inboxPage(): string {
     <label>Notify me if:
       <textarea id="alertWhen" rows="3" placeholder="e.g. there is a P1, or the change touches authentication (empty: every prepared review)"></textarea>
     </label>
+    <label>MCP tools the review agent may use, one per line:
+      <textarea id="agentMcpAllow" rows="3" placeholder="e.g. mcp__claude_ai_Atlassian__getJiraIssue (empty: no MCP servers at all)"></textarea>
+    </label>
     <div class="settings-grid">
       <label>Max prepared at once<input id="maxPrepared" type="number" min="1" step="1"></label>
       <label>Poll every (minutes)<input id="pollMinutes" type="number" min="1" step="1"></label>
       <label>Preparation timeout (minutes)<input id="prepareTimeoutMinutes" type="number" min="1" step="1"></label>
       <label>Answer timeout (minutes)<input id="liveTimeoutMinutes" type="number" min="1" step="1"></label>
+      <label>Model<input id="agentModel" type="text" placeholder="the agent's default"></label>
+      <label>Effort<select id="agentEffort">
+        <option value="">the agent&#39;s default</option>
+        <option value="low">low</option>
+        <option value="medium">medium</option>
+        <option value="high">high</option>
+        <option value="xhigh">xhigh</option>
+        <option value="max">max</option>
+      </select></label>
+      <label>Budget per run ($)<input id="agentMaxBudgetUsd" type="number" min="0.5" step="0.5" placeholder="uncapped"></label>
       <label class="check"><input id="live" type="checkbox"> Park a live agent on opened reviews</label>
     </div>
     <div class="settings-row">
@@ -305,12 +319,18 @@ export function inboxPage(): string {
       el('alertWhen').value = settings.alertWhen;
       for (const key of ['maxPrepared', 'pollMinutes', 'prepareTimeoutMinutes', 'liveTimeoutMinutes']) el(key).value = settings[key];
       el('live').checked = settings.live;
+      const agent = settings.agent || {};
+      el('agentModel').value = agent.model || '';
+      el('agentEffort').value = agent.effort || '';
+      el('agentMcpAllow').value = (agent.mcpAllow || []).join('\\n');
+      el('agentMaxBudgetUsd').value = agent.maxBudgetUsd == null ? '' : agent.maxBudgetUsd;
     } catch (err) {
       el('settings-status').textContent = 'settings could not be loaded';
     }
   }
 
   async function saveSettings() {
+    const budget = el('agentMaxBudgetUsd').value.trim();
     const next = {
       filter: el('filter').value,
       alertWhen: el('alertWhen').value,
@@ -319,6 +339,14 @@ export function inboxPage(): string {
       prepareTimeoutMinutes: Number(el('prepareTimeoutMinutes').value),
       liveTimeoutMinutes: Number(el('liveTimeoutMinutes').value),
       live: el('live').checked,
+      agent: {
+        model: el('agentModel').value.trim() || null,
+        effort: el('agentEffort').value || null,
+        mcpAllow: el('agentMcpAllow').value.split('\\n').map(line => line.trim()).filter(Boolean),
+        // Not editable here; sent back as it came so a save does not drop it.
+        extraArgs: (settings.agent && settings.agent.extraArgs) || [],
+        maxBudgetUsd: budget === '' ? null : Number(budget),
+      },
     };
     const res = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next) });
     if (!res.ok) {

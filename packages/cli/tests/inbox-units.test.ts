@@ -18,14 +18,43 @@ describe('parseInboxConfig', () => {
     const config = parseInboxConfig({ pollMinutes: 2, filter: 'skip payments' });
     expect(config.pollMinutes).toBe(2);
     expect(config.filter).toBe('skip payments');
-    expect(config.prepare).toEqual(DEFAULT_INBOX_CONFIG.prepare);
+    expect(config.agent).toEqual(DEFAULT_INBOX_CONFIG.agent);
   });
 
-  it('refuses a non-positive interval and an empty prepare command, by name', () => {
+  it('refuses a non-positive interval, by name', () => {
     expect(() => parseInboxConfig({ pollMinutes: 0 })).toThrow(/pollMinutes must be a positive number/);
-    expect(() => parseInboxConfig({ prepare: [] })).toThrow(/prepare must be a non-empty array/);
-    expect(() => parseInboxConfig({ prepare: ['claude', 42] })).toThrow(/prepare must be a non-empty array/);
     expect(() => parseInboxConfig([])).toThrow(/must be a JSON object/);
+  });
+
+  it('sends the old prepare key to its replacement rather than ignoring it', () => {
+    expect(() => parseInboxConfig({ prepare: ['claude', '-p'] }))
+      .toThrow(/"prepare" was replaced by the "agent" block .* put extra flags in agent\.extraArgs/);
+  });
+
+  it('takes the agent block, and refuses each field by name', () => {
+    const agent = parseInboxConfig({
+      agent: { model: 'opus', effort: 'medium', mcpAllow: ['mcp__claude_ai_Atlassian__getJiraIssue'], extraArgs: ['--verbose'], maxBudgetUsd: 4.5 },
+    }).agent;
+    expect(agent).toEqual({
+      model: 'opus', effort: 'medium', mcpAllow: ['mcp__claude_ai_Atlassian__getJiraIssue'], extraArgs: ['--verbose'], maxBudgetUsd: 4.5,
+    });
+    // An explicit null is the default, not a type error.
+    expect(parseInboxConfig({ agent: { model: null, effort: null, maxBudgetUsd: null } }).agent).toEqual(DEFAULT_INBOX_CONFIG.agent);
+
+    expect(() => parseInboxConfig({ agent: [] })).toThrow(/agent must be a JSON object/);
+    expect(() => parseInboxConfig({ agent: { model: '' } })).toThrow(/agent\.model must be a non-empty string/);
+    expect(() => parseInboxConfig({ agent: { effort: 'sometimes' } })).toThrow(/agent\.effort must be one of low\|medium\|high\|xhigh\|max/);
+    expect(() => parseInboxConfig({ agent: { mcpAllow: ['Bash'] } })).toThrow(/agent\.mcpAllow must be an array of exact MCP tool names/);
+    expect(() => parseInboxConfig({ agent: { mcpAllow: ['mcp__server'] } })).toThrow(/agent\.mcpAllow/);
+    expect(() => parseInboxConfig({ agent: { extraArgs: [''] } })).toThrow(/agent\.extraArgs must be an array of non-empty strings/);
+    expect(() => parseInboxConfig({ agent: { maxBudgetUsd: 0 } })).toThrow(/agent\.maxBudgetUsd must be a positive number/);
+  });
+
+  it('hands out a fresh agent block, so one parsed config cannot change another', () => {
+    const first = parseInboxConfig({});
+    first.agent.mcpAllow.push('mcp__a__b');
+    expect(parseInboxConfig({}).agent.mcpAllow).toEqual([]);
+    expect(DEFAULT_INBOX_CONFIG.agent.mcpAllow).toEqual([]);
   });
 
   it('takes alertWhen as a string', () => {
@@ -39,7 +68,10 @@ describe('parseInboxConfig', () => {
     try {
       const path = join(dir, 'config.json');
       writeFileSync(path, JSON.stringify({ port: 5399, filter: 'old', pollMinutes: 2 }, null, 2));
-      const settings = { filter: 'skip payments', alertWhen: 'a P1', maxPrepared: 3, pollMinutes: 7, live: false, liveTimeoutMinutes: 4, prepareTimeoutMinutes: 20 };
+      const settings = {
+        filter: 'skip payments', alertWhen: 'a P1', maxPrepared: 3, pollMinutes: 7, live: false, liveTimeoutMinutes: 4, prepareTimeoutMinutes: 20,
+        agent: { model: 'opus', effort: 'high', mcpAllow: [], extraArgs: [], maxBudgetUsd: null },
+      };
       saveInboxSettings(path, settings);
       const raw = JSON.parse(readFileSync(path, 'utf-8'));
       expect(raw).toEqual({ port: 5399, ...settings });
@@ -76,7 +108,7 @@ describe('composePrompt', () => {
   };
 
   it('tells the agent the worktree, forbids the forge, and asks for a verdict', () => {
-    const prompt = composePrompt({ snapshot, worktreePath: '/wt', port: 5555, filter: '', alertWhen: '' });
+    const prompt = composePrompt({ snapshot, worktreePath: '/wt', port: 5555, filter: '', alertWhen: '', mcpAllow: [] });
     expect(prompt).toContain('--repo /wt');
     expect(prompt).toContain('port 5555');
     expect(prompt).toContain('NOTHING you do may reach GitHub');
@@ -85,9 +117,28 @@ describe('composePrompt', () => {
   });
 
   it('includes the reviewer\'s filter and the skip verdict when a filter is set', () => {
-    const prompt = composePrompt({ snapshot, worktreePath: '/wt', port: 5555, filter: 'Skip payments-focused PRs', alertWhen: '' });
+    const prompt = composePrompt({ snapshot, worktreePath: '/wt', port: 5555, filter: 'Skip payments-focused PRs', alertWhen: '', mcpAllow: [] });
     expect(prompt).toContain('Skip payments-focused PRs');
     expect(prompt).toContain('SKIP: <short reason>');
+  });
+
+  it('points at the review instructions in the system prompt rather than an installed skill', () => {
+    const prompt = composePrompt({ snapshot, worktreePath: '/wt', port: 5555, filter: '', alertWhen: '', mcpAllow: [] });
+    expect(prompt).toContain('following the review instructions in your system prompt (the');
+    expect(prompt).toContain('diffity-review skill)');
+  });
+
+  it('names the allowed MCP tools, and says nothing about them when there are none', () => {
+    const none = composePrompt({ snapshot, worktreePath: '/wt', port: 5555, filter: '', alertWhen: '', mcpAllow: [] });
+    expect(none).not.toContain('You may use these tools');
+
+    const some = composePrompt({
+      snapshot, worktreePath: '/wt', port: 5555, filter: '', alertWhen: '',
+      mcpAllow: ['mcp__claude_ai_Atlassian__getJiraIssue', 'mcp__claude_ai_Slack__slack_read_thread'],
+    });
+    expect(some).toContain('You may use these tools to read material the pull request refers to');
+    expect(some).toContain('  mcp__claude_ai_Atlassian__getJiraIssue\n  mcp__claude_ai_Slack__slack_read_thread');
+    expect(some).toContain('Nothing else outside this checkout.');
   });
 });
 
@@ -99,9 +150,9 @@ describe('composePrompt alerts', () => {
   };
 
   it('asks for an ALERT line only when the reviewer said what matters', () => {
-    const quiet = composePrompt({ snapshot, worktreePath: '/wt', port: 5555, filter: '', alertWhen: '' });
+    const quiet = composePrompt({ snapshot, worktreePath: '/wt', port: 5555, filter: '', alertWhen: '', mcpAllow: [] });
     expect(quiet).not.toContain('ALERT:');
-    const loud = composePrompt({ snapshot, worktreePath: '/wt', port: 5555, filter: '', alertWhen: 'there is a P1' });
+    const loud = composePrompt({ snapshot, worktreePath: '/wt', port: 5555, filter: '', alertWhen: 'there is a P1', mcpAllow: [] });
     expect(loud).toContain('  there is a P1');
     expect(loud).toContain('ALERT: <short reason>');
     expect(loud.trim().endsWith('PREPARED')).toBe(true);
@@ -126,15 +177,28 @@ describe('summarizeFindings', () => {
 });
 
 describe('parseSettingsPatch', () => {
-  const full = { filter: 'a', alertWhen: 'b', maxPrepared: 2, pollMinutes: 3, live: false, liveTimeoutMinutes: 5, prepareTimeoutMinutes: 15 };
+  const full = {
+    filter: 'a', alertWhen: 'b', maxPrepared: 2, pollMinutes: 3, live: false, liveTimeoutMinutes: 5, prepareTimeoutMinutes: 15,
+    agent: { model: null, effort: null, mcpAllow: [], extraArgs: [], maxBudgetUsd: null },
+  };
   it('takes every editable key, validated as the config file is, and refuses anything else by name', () => {
     expect(parseSettingsPatch(JSON.stringify(full))).toEqual({ ok: true, settings: full });
     expect(parseSettingsPatch(JSON.stringify({ ...full, alertWhen: undefined }))).toMatchObject({ ok: false, message: 'alertWhen is missing' });
+    expect(parseSettingsPatch(JSON.stringify({ ...full, agent: undefined }))).toMatchObject({ ok: false, message: 'agent is missing' });
     expect(parseSettingsPatch(JSON.stringify({ ...full, maxPrepared: 0 }))).toMatchObject({ ok: false, message: 'maxPrepared must be a positive integer' });
     expect(parseSettingsPatch(JSON.stringify({ ...full, live: 'yes' }))).toMatchObject({ ok: false, message: 'live must be true or false' });
     expect(parseSettingsPatch(JSON.stringify({ ...full, filter: 'x'.repeat(5000) }))).toMatchObject({ ok: false });
     expect(parseSettingsPatch('nope')).toMatchObject({ ok: false });
     expect(parseSettingsPatch('[]')).toMatchObject({ ok: false });
+  });
+
+  it('takes the agent fields the page edits and refuses a bad one by name', () => {
+    const edited = { ...full, agent: { model: 'opus', effort: 'high', mcpAllow: ['mcp__slack__slack_read_thread'], extraArgs: ['--verbose'], maxBudgetUsd: 2 } };
+    expect(parseSettingsPatch(JSON.stringify(edited))).toEqual({ ok: true, settings: edited });
+    expect(parseSettingsPatch(JSON.stringify({ ...full, agent: { ...full.agent, effort: 'later' } })))
+      .toMatchObject({ ok: false, message: 'agent.effort must be one of low|medium|high|xhigh|max' });
+    expect(parseSettingsPatch(JSON.stringify({ ...full, agent: { ...full.agent, mcpAllow: ['gcloud'] } })))
+      .toMatchObject({ ok: false, message: 'agent.mcpAllow must be an array of exact MCP tool names, like mcp__server__tool' });
   });
 });
 

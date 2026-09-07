@@ -6,6 +6,8 @@ export interface PromptContext {
   port: number;
   filter: string;
   alertWhen: string;
+  /** The MCP tools the agent is allowed, so it knows what it has beyond the checkout. */
+  mcpAllow: string[];
 }
 
 /**
@@ -14,7 +16,7 @@ export interface PromptContext {
  * a finished review from a deliberate skip.
  */
 export function composePrompt(ctx: PromptContext): string {
-  const { snapshot, worktreePath, port, filter, alertWhen } = ctx;
+  const { snapshot, worktreePath, port, filter, alertWhen, mcpAllow } = ctx;
   // The title, author and base come from the pull request, so they are the author's text, not the
   // reviewer's instructions; presented as data and collapsed to one line so nothing in them reads
   // as a new directive.
@@ -38,6 +40,16 @@ export function composePrompt(ctx: PromptContext): string {
     '',
   ];
 
+  if (mcpAllow.length > 0) {
+    lines.push(
+      'You may use these tools to read material the pull request refers to (a ticket, a document, a',
+      'thread):',
+      ...mcpAllow.map(name => `  ${name}`),
+      'Nothing else outside this checkout.',
+      '',
+    );
+  }
+
   if (filter.trim()) {
     lines.push(
       'Before reviewing, decide whether this pull request is one the reviewer wants to see, using',
@@ -52,10 +64,10 @@ export function composePrompt(ctx: PromptContext): string {
   }
 
   lines.push(
-    'Otherwise, prepare the review by following the diffity-review skill against this pull request:',
-    'start the review, read the diff and the project standards, leave inline findings on the lines',
-    'they belong to, add a short summary, set a reading-order walkthrough, and mark the review done.',
-    'Do not open a browser.',
+    'Otherwise, prepare the review by following the review instructions in your system prompt (the',
+    'diffity-review skill) against this pull request: start the review, read the diff and the project',
+    'standards, leave inline findings on the lines they belong to, add a short summary, set a',
+    'reading-order walkthrough, and mark the review done. Do not open a browser.',
     '',
   );
 
