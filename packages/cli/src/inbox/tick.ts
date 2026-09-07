@@ -1,6 +1,7 @@
 import type { PrRef, PrSnapshot } from '@diffity/github';
 import { reconcile } from './reconcile.js';
 import { isRetired, prId, runRecordOf, type InboxPr, type InboxStore, type RunOutcome } from './store.js';
+import { localHhMm } from './runs.js';
 import type { PrepareResult } from './prepare.js';
 
 /** The forge, as one tick needs it — one interface so a test can stand in for GitHub. */
@@ -25,8 +26,8 @@ export interface TickDeps {
   agentModel: string | null;
   /** Holds preparation back until then — a session limit is waited out, not retried. */
   pauseUntil(until: string): void;
-  /** True while preparation is held back; polling and reconciling carry on regardless. */
-  paused?(): boolean;
+  /** Until when preparation is held back, or null when it is not; polling carries on regardless. */
+  pausedUntil?(): string | null;
 }
 
 /**
@@ -80,10 +81,16 @@ export async function runTick(store: InboxStore, deps: TickDeps): Promise<void> 
   }
 
   // A pause is the reviewer's Claude limit, not the forge's: the poll above still ran, so the page
-  // is current, and only the agent runs wait.
-  if (deps.paused?.()) {
+  // is current, and only the agent runs wait. The reason goes back on every row held back, because
+  // the reconcile above has just cleared it — a queued row reads as plainly queued otherwise.
+  const pausedUntil = deps.pausedUntil?.() ?? null;
+  if (pausedUntil) {
+    const reason = `waiting: preparing paused until ${localHhMm(pausedUntil)}`;
+    for (const snapshot of toPrepare) {
+      store.setStatus(prId(snapshot), 'queued', reason);
+    }
     if (toPrepare.length > 0) {
-      deps.log(`${toPrepare.length} left queued: preparing is paused`);
+      deps.log(`${toPrepare.length} left queued: ${reason}`);
     }
     return;
   }

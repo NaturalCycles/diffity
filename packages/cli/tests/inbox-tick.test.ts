@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { InboxStore, prId } from '../src/inbox/store.js';
 import { runTick, type Forge, type TickDeps } from '../src/inbox/tick.js';
 import { buildView } from '../src/inbox/view.js';
+import { localHhMm } from '../src/inbox/runs.js';
 import type { PrRef, PrSnapshot } from '@diffity/github';
 import type { PrepareResult, RunLog } from '../src/inbox/prepare.js';
 
@@ -406,11 +407,18 @@ describe('runTick', () => {
 
   it('polls and reconciles while paused, but prepares nothing until it lifts', async () => {
     forge.set(snapshot());
-    await runTick(store, deps({ paused: () => true }));
+    const until = '2026-09-02T14:00:00.000Z';
+    const reason = `waiting: preparing paused until ${localHhMm(until)}`;
+    await runTick(store, deps({ pausedUntil: () => until }));
 
     expect(prepared).toEqual([]);
     expect(store.get('o/r#1')!.status).toBe('queued');
+    expect(store.get('o/r#1')!.statusReason).toBe(reason);
     expect(store.runs({})).toEqual([]);
+
+    // The reconcile clears a queued row's reason every tick, so the pause has to put it back.
+    await runTick(store, deps({ pausedUntil: () => until }));
+    expect(store.get('o/r#1')!.statusReason).toBe(reason);
 
     await runTick(store, deps());
     expect(prepared).toEqual(['o/r#1']);

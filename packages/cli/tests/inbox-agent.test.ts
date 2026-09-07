@@ -300,10 +300,27 @@ describe('rateLimitOf', () => {
     expect(at.getTime()).toBeGreaterThan(now.getTime());
   });
 
+  it('reads a time introduced with "at"', () => {
+    expect(rateLimitOf("You've hit your session limit \u00b7 resets at 2pm (Europe/Stockholm)", new Date('2026-09-07T09:00:00Z')))
+      .toEqual({ resetsAt: '2026-09-07T12:00:00.000Z' });
+    expect(rateLimitOf("You've hit your usage limit, resets at 06:30 (Europe/Stockholm)", new Date('2026-09-07T00:00:00Z')))
+      .toEqual({ resetsAt: '2026-09-07T04:30:00.000Z' });
+  });
+
+  it('counts forward from now when the message says how long is left', () => {
+    const now = new Date('2026-09-07T09:00:00Z');
+    expect(rateLimitOf("You've hit your session limit \u00b7 resets in 3 hours", now)).toEqual({ resetsAt: '2026-09-07T12:00:00.000Z' });
+    expect(rateLimitOf("You've hit your usage limit, resets in 45 minutes", now)).toEqual({ resetsAt: '2026-09-07T09:45:00.000Z' });
+    expect(rateLimitOf("You've hit your session limit \u00b7 resets in 1 hour 30 minutes", now)).toEqual({ resetsAt: '2026-09-07T10:30:00.000Z' });
+    expect(rateLimitOf("You've hit your session limit \u00b7 resets in 90 mins", now)).toEqual({ resetsAt: '2026-09-07T10:30:00.000Z' });
+    expect(rateLimitOf("You've hit your session limit \u00b7 resets in 1 hr", now)).toEqual({ resetsAt: '2026-09-07T10:00:00.000Z' });
+  });
+
   it('flags the limit with no time when the message names none it can read', () => {
     for (const text of [
       "You've hit your session limit",
       "You've hit your session limit \u00b7 resets soon",
+      "You've hit your session limit \u00b7 resets in a while",
       "You've hit your session limit \u00b7 resets 25:00",
       "You've hit your session limit \u00b7 resets 13pm",
     ]) {

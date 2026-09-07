@@ -257,9 +257,13 @@ export function realAttendantDeps(
           log(`the answering agent in ${worktree} did not finish within ${config.liveTimeoutMinutes} minutes`);
         }
         const { stats } = parseAgentOutput(stdout);
+        // Killing the agent through the signal — the daemon stopping, the reader leaving — closes
+        // the child like a clean exit, so only the signal itself tells that apart from an answer.
+        const stopped = signal.aborted;
         recordRun(runRecordOf({
           prId: pr.id, headSha: pr.headSha, phase: 'answer',
-          outcome: timedOut ? 'timeout' : stats?.isError ? 'failed' : 'answered',
+          outcome: stopped || stats?.isError ? 'failed' : timedOut ? 'timeout' : 'answered',
+          note: stopped ? 'stopped before it answered' : null,
           startedAt, endedAt: new Date().toISOString(), stats, configModel: config.agent.model,
         }));
         return { timedOut };

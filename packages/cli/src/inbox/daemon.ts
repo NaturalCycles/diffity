@@ -136,7 +136,7 @@ export async function runDaemon(
       store.pauseUntil(until);
       log(`preparing paused until ${localHhMm(until)} — Claude session limit`);
     },
-    paused: () => pausedUntil() !== null,
+    pausedUntil,
   };
 
   // A bump arriving mid-tick is served by another tick right after, not by the next poll.

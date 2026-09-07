@@ -44,19 +44,34 @@ export function parseAgentOutput(stdout: string): { text: string; stats: RunStat
 
 /**
  * Whether the run ended on the reviewer's Claude session limit, and when that limit lifts. The
- * message names a wall-clock time and sometimes a zone — "resets 2pm (Europe/Stockholm)", "resets
- * 14:30" — read here as the next moment that clock shows it. `resetsAt` is null when the text names
- * no time this understands, which leaves the caller to pick its own retry.
+ * message either names a wall-clock time, sometimes with a zone — "resets 2pm (Europe/Stockholm)",
+ * "resets at 14:30" — read here as the next moment that clock shows it, or names how long is left
+ * — "resets in 90 minutes" — counted from now. `resetsAt` is null when the text names no time this
+ * understands, which leaves the caller to pick its own retry.
  */
 export function rateLimitOf(text: string, now: Date): { resetsAt: string | null } | null {
   if (!/hit your (?:session|usage) limit/i.test(text)) {
     return null;
   }
-  return { resetsAt: resetsAt(text, now) };
+  return { resetsAt: resetsIn(text, now) ?? resetsAt(text, now) };
+}
+
+/** "resets in 3 hours", "resets in 45 minutes", "resets in 1 hour 30 minutes". */
+function resetsIn(text: string, now: Date): string | null {
+  const match = /resets\s+in\s+(?:(\d{1,3})\s*(?:hours|hour|hrs|hr|h)\b)?\s*(?:(\d{1,3})\s*(?:minutes|minute|mins|min|m)\b)?/i.exec(text);
+  if (!match) {
+    return null;
+  }
+  const hours = match[1] ? Number(match[1]) : 0;
+  const minutes = match[2] ? Number(match[2]) : 0;
+  if (hours === 0 && minutes === 0) {
+    return null;
+  }
+  return new Date(now.getTime() + hours * 3_600_000 + minutes * 60_000).toISOString();
 }
 
 function resetsAt(text: string, now: Date): string | null {
-  const match = /resets\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:\(\s*([A-Za-z0-9_+\-/]+)\s*\))?/i.exec(text);
+  const match = /resets\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:\(\s*([A-Za-z0-9_+\-/]+)\s*\))?/i.exec(text);
   if (!match) {
     return null;
   }

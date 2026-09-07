@@ -172,6 +172,29 @@ describe('realAttendantDeps', () => {
       turns: 3, costUsd: 0.4, durationMs: 90_000, outputTokens: 500,
     });
   });
+
+  it('logs an answer the daemon stopped as a failure rather than an answer', async () => {
+    mkdirSync(join(root, 'skills', 'diffity-live'), { recursive: true });
+    writeFileSync(join(root, 'skills', 'diffity-live', 'SKILL.md'), '---\nname: diffity-live\n---\n\nAnswer it.\n');
+    const bin = join(root, 'bin');
+    mkdirSync(bin, { recursive: true });
+    // Takes the prompt and then hangs, so the abort is what ends it — and a killed child closes
+    // as cleanly as one that answered.
+    writeFileSync(join(bin, 'claude'), '#!/bin/sh\ncat > /dev/null\nsleep 30\n', { mode: 0o755 });
+
+    const runs: RunRecord[] = [];
+    const deps = realAttendantDeps(process.execPath, join(root, 'index.js'), liveConfig(), () => join(root, 'live.log'), () => {}, run => runs.push(run));
+    const control = new AbortController();
+
+    await withStandInAgent(bin, async () => {
+      const answering = deps.answer(root, attendedPr(), 'the live prompt\n', control.signal);
+      setTimeout(() => control.abort(), 300);
+      await answering;
+    });
+
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ prId: 'o/r#4', phase: 'answer', outcome: 'failed', note: 'stopped before it answered' });
+  });
 });
 
 describe('startDiffityServer', () => {
