@@ -134,6 +134,18 @@ describe('preparePr', () => {
     expect(existsSync(dest)).toBe(false);
   });
 
+  it('leaves the number out when the budget came from somewhere the daemon cannot see', async () => {
+    // A `--max-budget-usd` in agent.extraArgs caps the run without maxBudgetUsd being set.
+    const result = await preparePr(snapshot(), { ...config(), agent: { ...agentConfig(), extraArgs: ['--max-budget-usd', '3'] } }, deps({
+      runAgent: () => Promise.resolve({
+        stdout: JSON.stringify({ type: 'result', subtype: 'error_max_budget_usd', result: '', is_error: true }),
+        timedOut: false,
+      }),
+    }));
+
+    expect(result.kind === 'failed' && result.reason).toBe('the agent hit its budget');
+  });
+
   it('removes the worktree when the agent skips', async () => {
     const dest = worktreePath(worktreesDir, snapshot());
     const result = await preparePr(snapshot(), config(), deps({

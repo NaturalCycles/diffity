@@ -136,7 +136,7 @@ export function inboxPage(): string {
         <option value="xhigh">xhigh</option>
         <option value="max">max</option>
       </select></label>
-      <label>Budget per run ($)<input id="agentMaxBudgetUsd" type="number" min="0" step="0.5" placeholder="uncapped"></label>
+      <label>Budget per run ($)<input id="agentMaxBudgetUsd" type="number" min="0.5" step="0.5" placeholder="uncapped"></label>
       <label class="check"><input id="live" type="checkbox"> Park a live agent on opened reviews</label>
     </div>
     <div class="settings-row">

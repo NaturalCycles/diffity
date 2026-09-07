@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { runAgent, startDiffityServer } from '../src/inbox/runtime.js';
+import { realAttendantDeps, runAgent, startDiffityServer } from '../src/inbox/runtime.js';
 
 let root: string;
 
@@ -87,6 +87,52 @@ describe('runAgent', () => {
 
   it('rejects when the command does not exist', async () => {
     await expect(runAgent(opts(['definitely-not-a-real-command-xyz']), root)).rejects.toThrow(/could not run/);
+  });
+});
+
+describe('realAttendantDeps', () => {
+  it('ships the live skill in the answering agent\'s system prompt', async () => {
+    // The agent runs with none of the reviewer's installed skills, so the skill the live prompt
+    // tells it to follow has to travel with the command. Read off a stand-in `claude` on PATH,
+    // which records the argv it was given.
+    mkdirSync(join(root, 'skills', 'diffity-live'), { recursive: true });
+    writeFileSync(join(root, 'skills', 'diffity-live', 'SKILL.md'), '---\nname: diffity-live\n---\n\n# Diffity Live Skill\n\nAnswer it.\n');
+    const entry = join(root, 'index.js');
+
+    const argvPath = join(root, 'argv.json');
+    const dump = join(root, 'dump.cjs');
+    writeFileSync(dump, `require('fs').writeFileSync(${JSON.stringify(argvPath)}, JSON.stringify(process.argv.slice(2)));\n`);
+    const bin = join(root, 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, 'claude'), `#!/bin/sh\nexec '${process.execPath}' '${dump}' "$@"\n`, { mode: 0o755 });
+
+    const config = {
+      pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', alertWhen: '',
+      agent: { model: null, effort: null, mcpAllow: [], extraArgs: [], maxBudgetUsd: null },
+      prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10,
+    };
+    const deps = realAttendantDeps(process.execPath, entry, config, () => join(root, 'live.log'), () => {});
+
+    const path = process.env.PATH;
+    const dataDir = process.env.DIFFITY_DATA_DIR;
+    process.env.PATH = `${bin}:${path ?? ''}`;
+    // An answer runs in the reviewer's own data directory, which here must not be their real one.
+    process.env.DIFFITY_DATA_DIR = join(root, 'data');
+    try {
+      await deps.answer(root, 'the live prompt\n', new AbortController().signal);
+    } finally {
+      process.env.PATH = path;
+      if (dataDir === undefined) {
+        delete process.env.DIFFITY_DATA_DIR;
+      } else {
+        process.env.DIFFITY_DATA_DIR = dataDir;
+      }
+    }
+
+    const argv = JSON.parse(readFileSync(argvPath, 'utf-8')) as string[];
+    const at = argv.indexOf('--append-system-prompt');
+    expect(at).toBeGreaterThan(-1);
+    expect(argv[at + 1]).toBe('# Diffity Live Skill\n\nAnswer it.\n');
   });
 });
 

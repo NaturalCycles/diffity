@@ -26,6 +26,8 @@ describe('the inbox page', () => {
     for (const effort of ['low', 'medium', 'high', 'xhigh', 'max']) {
       expect(html).toContain(`<option value="${effort}">`);
     }
+    // The daemon refuses a budget of 0, so the field must not let the browser submit one.
+    expect(html).toContain('id="agentMaxBudgetUsd" type="number" min="0.5"');
   });
 
   it('sends the agent block back with the settings, empty fields as null', () => {

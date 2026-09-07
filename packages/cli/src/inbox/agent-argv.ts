@@ -35,11 +35,14 @@ export function buildAgentArgv(opts: AgentArgvOpts): string[] {
     '--setting-sources', gated ? 'user' : '',
     ...(gated ? ['--settings', JSON.stringify(gateSettings(nodePath, entry))] : []),
     ...(systemPrompt ? ['--append-system-prompt', systemPrompt] : []),
-    '--disallowedTools', ...DISALLOWED_TOOLS,
     ...(agent.model ? ['--model', agent.model] : []),
     ...(agent.effort ? ['--effort', agent.effort] : []),
     ...(agent.maxBudgetUsd ? ['--max-budget-usd', String(agent.maxBudgetUsd)] : []),
     ...agent.extraArgs,
+    // Last, and only ever followed by its own values: `--disallowedTools` takes a variadic, so
+    // anything after it would be read as another denied tool. This list starts with `--`, which
+    // ends a variadic the reviewer's own extra args may have opened.
+    '--disallowedTools', ...DISALLOWED_TOOLS,
   ];
 }
 
@@ -60,15 +63,18 @@ export function shellQuote(path: string): string {
   return `'${path.replaceAll("'", "'\\''")}'`;
 }
 
+/** The skills the daemon puts in an agent's system prompt: the review pass's and the answer pass's. */
+export type InboxSkill = 'diffity-review' | 'diffity-live';
+
 /**
- * The diffity-review skill shipped beside this build, frontmatter stripped, for the drafting
- * agent's system prompt. Reading it here is what lets the agent run with no installed skills at
- * all; without the file it has to fall back on the reviewer's own.
+ * A skill shipped beside this build, frontmatter stripped, for the agent's system prompt. Reading
+ * it here is what lets the agent run with no installed skills at all; without the file it has to
+ * fall back on the reviewer's own.
  */
-export function reviewSkillBody(entry: string, log: (message: string) => void = console.warn): string | null {
-  const path = join(dirname(entry), 'skills', 'diffity-review', 'SKILL.md');
+export function skillBody(entry: string, name: InboxSkill, log: (message: string) => void = console.warn): string | null {
+  const path = join(dirname(entry), 'skills', name, 'SKILL.md');
   if (!existsSync(path)) {
-    log(`the diffity-review skill is not at ${path}; the review agent falls back on the skills you have installed`);
+    log(`the ${name} skill is not at ${path}; the agent falls back on the skills you have installed`);
     return null;
   }
   return stripFrontmatter(readFileSync(path, 'utf-8'));

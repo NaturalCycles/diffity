@@ -1,11 +1,11 @@
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { LiveRequest } from '@diffity/api';
-import { createWriteStream, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { createWriteStream, mkdirSync, readFileSync, rmSync, type WriteStream } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { ExportOpts, PrepareDeps, RunAgentOpts, ServerHandle } from './prepare.js';
 import type { InboxConfig } from './config.js';
-import { buildAgentArgv, reviewSkillBody } from './agent-argv.js';
+import { buildAgentArgv, skillBody } from './agent-argv.js';
 import { parseAgentOutput } from './agent-output.js';
 import { parseAwaitOutcome, type AttendantDeps } from './attendant.js';
 import { diffityDir } from '../registry.js';
@@ -32,7 +32,7 @@ export function realPrepareDeps(nodePath: string, entry: string, dataDirFor: (wo
       inflight.serverStop = () => { handle.stop(); inflight.serverStop = undefined; };
       return { port: handle.port, stop: () => { handle.stop(); inflight.serverStop = undefined; } };
     },
-    agentArgv: () => buildAgentArgv({ nodePath, entry, agent: config.agent, systemPrompt: reviewSkillBody(entry, log) }),
+    agentArgv: () => buildAgentArgv({ nodePath, entry, agent: config.agent, systemPrompt: skillBody(entry, 'diffity-review', log) }),
     runAgent: opts => runAgent(opts, dataDirFor(opts.cwd), config.agent.mcpAllow, inflight),
     exportBundle: opts => exportBundle(nodePath, entry, opts, dataDirFor(opts.worktree)),
     now: () => new Date().toISOString(),
@@ -114,6 +114,9 @@ function stopServer(pid: number | undefined): void {
 export function runAgent(opts: RunAgentOpts, dataDir: string, mcpAllow: string[] = [], inflight: Inflight = {}): Promise<{ stdout: string; timedOut: boolean }> {
   mkdirSync(dirname(opts.logPath), { recursive: true });
   const log = createWriteStream(opts.logPath, { flags: opts.appendLog ? 'a' : 'w' });
+  // The log is a convenience, not the contract: a path that cannot be opened or written must not
+  // raise an unhandled 'error' on the stream and take the daemon down mid-review.
+  log.on('error', () => { /* the run's own outcome is what the caller waits on */ });
   const [command, ...args] = opts.argv;
 
   return new Promise((resolve, reject) => {
@@ -159,11 +162,20 @@ export function runAgent(opts: RunAgentOpts, dataDir: string, mcpAllow: string[]
         if (stats) {
           log.write(`\n--- result ---\n${text}\n`);
         }
-        log.end();
-        resolve({ stdout, timedOut: false });
+        // Resolved only once the log is on disk: the caller hands that path straight to the store,
+        // and the reader may open it before the next line of the daemon runs.
+        endLog(log, () => resolve({ stdout, timedOut: false }));
       }
     });
   });
+}
+
+/** Closes the log and calls back once it is written — or once it has failed, which is not fatal. */
+function endLog(log: WriteStream, done: () => void): void {
+  let called = false;
+  const once = () => { if (!called) { called = true; done(); } };
+  log.once('error', once);
+  log.end(once);
 }
 
 /**
@@ -225,8 +237,9 @@ export function realAttendantDeps(nodePath: string, entry: string, config: Inbox
       signal.addEventListener('abort', onAbort, { once: true });
       try {
         const { timedOut } = await runAgent({
-          // No review skill in the system prompt: the live prompt is the whole job here.
-          argv: buildAgentArgv({ nodePath, entry, agent: config.agent, systemPrompt: null }),
+          // The live skill, not the review one: the live prompt tells the agent to follow it, and
+          // the agent runs with none of the reviewer's installed skills to find it in.
+          argv: buildAgentArgv({ nodePath, entry, agent: config.agent, systemPrompt: skillBody(entry, 'diffity-live', log) }),
           prompt, cwd: worktree, logPath: logPathFor(worktree),
           timeoutMs: config.liveTimeoutMinutes * 60_000, appendLog: true,
         }, diffityDir(), config.agent.mcpAllow, inflight);

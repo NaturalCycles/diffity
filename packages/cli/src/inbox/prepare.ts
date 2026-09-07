@@ -102,7 +102,10 @@ export async function preparePr(snapshot: PrSnapshot, config: InboxConfig, deps:
 
     if (stats?.subtype === 'error_max_budget_usd') {
       await removeWorktree(clone, dest);
-      return { kind: 'failed', reason: `the agent hit its budget of $${config.agent.maxBudgetUsd}`, worktree: null, logPath, stats };
+      // The cap can come from agent.extraArgs rather than agent.maxBudgetUsd, in which case the
+      // daemon does not know the number the agent hit.
+      const budget = config.agent.maxBudgetUsd;
+      return { kind: 'failed', reason: budget === null ? 'the agent hit its budget' : `the agent hit its budget of $${budget}`, worktree: null, logPath, stats };
     }
 
     const verdict = verdictOf(parsed.text);

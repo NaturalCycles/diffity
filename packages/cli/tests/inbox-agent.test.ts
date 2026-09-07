@@ -1,11 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
-import { buildAgentArgv, reviewSkillBody, shellQuote } from '../src/inbox/agent-argv.js';
+import { buildAgentArgv, shellQuote, skillBody } from '../src/inbox/agent-argv.js';
 import { parseAgentOutput } from '../src/inbox/agent-output.js';
 import { allowFromEnv, mcpGateDecision } from '../src/inbox/mcp-gate.js';
 import { DEFAULT_INBOX_CONFIG, type AgentConfig } from '../src/inbox/config.js';
+
+const DIST_ENTRY = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'index.js');
 
 function agent(over: Partial<AgentConfig> = {}): AgentConfig {
   return { ...DEFAULT_INBOX_CONFIG.agent, mcpAllow: [], extraArgs: [], ...over };
@@ -73,7 +77,14 @@ describe('buildAgentArgv', () => {
     expect(valueOf(built, '--max-budget-usd')).toBe('2.5');
     // One argv element, whatever its size, so the skill body needs no quoting of its own.
     expect(valueOf(built, '--append-system-prompt')).toBe('REVIEW INSTRUCTIONS');
-    expect(built.slice(-2)).toEqual(['--verbose', '--foo']);
+    expect(built.slice(built.indexOf('--verbose'), built.indexOf('--verbose') + 2)).toEqual(['--verbose', '--foo']);
+  });
+
+  it('keeps the extra args out of the deny list, whatever they are', () => {
+    // The deny list is variadic, so a value-shaped extra arg after it would be read as a tool.
+    const built = argv({ extraArgs: ['--add-dir', '/tmp/context'] });
+    expect(built.indexOf('--add-dir')).toBeLessThan(built.indexOf('--disallowedTools'));
+    expect(built.slice(built.indexOf('--disallowedTools') + 1)).not.toContain('/tmp/context');
   });
 });
 
@@ -84,7 +95,7 @@ describe('shellQuote', () => {
   });
 });
 
-describe('reviewSkillBody', () => {
+describe('skillBody', () => {
   let root: string;
 
   beforeEach(() => {
@@ -95,27 +106,39 @@ describe('reviewSkillBody', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it('reads the skill shipped beside the entry and strips its frontmatter', () => {
-    const skills = join(root, 'skills', 'diffity-review');
-    mkdirSync(skills, { recursive: true });
-    writeFileSync(join(skills, 'SKILL.md'), '---\nname: diffity-review\ndescription: Review\n---\n\n# Diffity Review Skill\n\nStep 0.\n');
+  function ship(name: string, body: string): void {
+    mkdirSync(join(root, 'skills', name), { recursive: true });
+    writeFileSync(join(root, 'skills', name, 'SKILL.md'), body);
+  }
 
-    expect(reviewSkillBody(join(root, 'index.js'))).toBe('# Diffity Review Skill\n\nStep 0.\n');
+  it('reads the skill shipped beside the entry and strips its frontmatter', () => {
+    ship('diffity-review', '---\nname: diffity-review\ndescription: Review\n---\n\n# Diffity Review Skill\n\nStep 0.\n');
+    ship('diffity-live', '---\nname: diffity-live\n---\n\n# Diffity Live Skill\n\nAnswer it.\n');
+
+    expect(skillBody(join(root, 'index.js'), 'diffity-review')).toBe('# Diffity Review Skill\n\nStep 0.\n');
+    expect(skillBody(join(root, 'index.js'), 'diffity-live')).toBe('# Diffity Live Skill\n\nAnswer it.\n');
   });
 
   it('leaves a body without frontmatter alone', () => {
-    const skills = join(root, 'skills', 'diffity-review');
-    mkdirSync(skills, { recursive: true });
-    writeFileSync(join(skills, 'SKILL.md'), '# No frontmatter\n');
-
-    expect(reviewSkillBody(join(root, 'index.js'))).toBe('# No frontmatter\n');
+    ship('diffity-review', '# No frontmatter\n');
+    expect(skillBody(join(root, 'index.js'), 'diffity-review')).toBe('# No frontmatter\n');
   });
 
-  it('warns and hands back nothing when the skill is not shipped', () => {
+  it('warns by name and hands back nothing when the skill is not shipped', () => {
     const warnings: string[] = [];
-    expect(reviewSkillBody(join(root, 'index.js'), message => { warnings.push(message); })).toBeNull();
-    expect(warnings).toHaveLength(1);
+    const log = (message: string) => { warnings.push(message); };
+    expect(skillBody(join(root, 'index.js'), 'diffity-review', log)).toBeNull();
+    expect(skillBody(join(root, 'index.js'), 'diffity-live', log)).toBeNull();
     expect(warnings[0]).toContain('diffity-review');
+    expect(warnings[1]).toContain('diffity-live');
+  });
+
+  it('is shipped with this build for both passes', () => {
+    // The daemon reads these from its own dist, so a build that stops shipping one would leave the
+    // agent with no instructions at all.
+    for (const name of ['diffity-review', 'diffity-live'] as const) {
+      expect(skillBody(DIST_ENTRY, name, () => {})).toContain('# Diffity');
+    }
   });
 });
 
@@ -148,6 +171,45 @@ describe('mcpGateDecision', () => {
       expect(decision.allow).toBe(false);
       expect(decision.allow === false && decision.message).toContain('could not be read');
     }
+  });
+});
+
+describe('diffity inbox mcp-gate', () => {
+  /** The hook as the agent runs it: the payload on stdin, the allowlist in the environment. */
+  function gate(payload: string, allow: string | undefined): Promise<{ code: number | null; stderr: string }> {
+    const env = { ...process.env };
+    if (allow === undefined) {
+      delete env.DIFFITY_MCP_ALLOW;
+    } else {
+      env.DIFFITY_MCP_ALLOW = allow;
+    }
+    return new Promise(resolve => {
+      const child = spawn(process.execPath, [DIST_ENTRY, 'inbox', 'mcp-gate'], { stdio: ['pipe', 'pipe', 'pipe'], env });
+      let stderr = '';
+      child.stderr.setEncoding('utf-8');
+      child.stderr.on('data', chunk => { stderr += chunk; });
+      child.stdin.end(payload);
+      child.on('close', code => resolve({ code, stderr }));
+    });
+  }
+
+  it('refuses an MCP tool that is not allowed, on its exit code and on stderr', async () => {
+    const { code, stderr } = await gate('{"tool_name":"mcp__x__y"}', 'mcp__a__b');
+    expect(code).toBe(2);
+    expect(stderr).toContain('the review agent may only use mcp__a__b; mcp__x__y is not allowed');
+  });
+
+  it('lets an allowed MCP tool and a built-in tool through', async () => {
+    expect((await gate('{"tool_name":"mcp__a__b"}', 'mcp__a__b')).code).toBe(0);
+    expect((await gate('{"tool_name":"Bash"}', 'mcp__a__b')).code).toBe(0);
+    expect((await gate('{"tool_name":"Bash"}', undefined)).code).toBe(0);
+  });
+
+  it('refuses everything MCP when the allowlist is empty, and a payload it cannot read', async () => {
+    expect((await gate('{"tool_name":"mcp__a__b"}', '')).code).toBe(2);
+    const unreadable = await gate('not json', 'mcp__a__b');
+    expect(unreadable.code).toBe(2);
+    expect(unreadable.stderr).toContain('could not be read');
   });
 });
 
