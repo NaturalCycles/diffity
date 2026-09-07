@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import type { PrSnapshot } from '@diffity/github';
+import { ciState, type CiState, type PrSnapshot } from '@diffity/github';
 import type { RunStats } from './agent-output.js';
 
 export const INBOX_STATUSES = [
@@ -34,6 +34,8 @@ export interface InboxPr {
   additions: number;
   deletions: number;
   changedFiles: number;
+  /** What CI said about the current head at the last poll; null on a row from before it was kept. */
+  ciState: CiState | null;
   /** The forge's own timestamps for the pull request; null on a row from before they were kept. */
   createdAt: string | null;
   updatedAt: string | null;
@@ -207,7 +209,8 @@ export class InboxStore {
         updated_at TEXT,
         bumped_at TEXT,
         summary TEXT,
-        alert TEXT
+        alert TEXT,
+        ci_state TEXT
       )
     `);
     this.db.exec(`
@@ -233,7 +236,7 @@ export class InboxStore {
     this.db.exec('CREATE INDEX IF NOT EXISTS inbox_runs_pr_started ON inbox_runs (pr_id, started_at)');
     this.db.exec('CREATE TABLE IF NOT EXISTS inbox_state (key TEXT PRIMARY KEY, value TEXT)');
     // A table from an earlier build gains the columns it lacks; a fresh one already has them.
-    for (const column of ['attempts INTEGER NOT NULL DEFAULT 0', 'created_at TEXT', 'updated_at TEXT', 'bumped_at TEXT', 'summary TEXT', 'alert TEXT']) {
+    for (const column of ['attempts INTEGER NOT NULL DEFAULT 0', 'created_at TEXT', 'updated_at TEXT', 'bumped_at TEXT', 'summary TEXT', 'alert TEXT', 'ci_state TEXT']) {
       try {
         this.db.exec(`ALTER TABLE inbox_prs ADD COLUMN ${column}`);
       } catch (err) {
@@ -268,8 +271,8 @@ export class InboxStore {
       INSERT INTO inbox_prs (
         id, owner, repo, number, title, url, author, is_draft, head_sha, base_ref,
         additions, deletions, changed_files, requested, status, status_reason, first_seen_at, last_seen_at,
-        created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', NULL, ?, ?, ?, ?)
+        created_at, updated_at, ci_state
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', NULL, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         title = excluded.title,
         url = excluded.url,
@@ -285,12 +288,13 @@ export class InboxStore {
         requested = excluded.requested,
         last_seen_at = excluded.last_seen_at,
         created_at = excluded.created_at,
-        updated_at = excluded.updated_at
+        updated_at = excluded.updated_at,
+        ci_state = excluded.ci_state
     `).run(
       id, snapshot.owner, snapshot.repo, snapshot.number, snapshot.title, snapshot.url, snapshot.author,
       snapshot.isDraft ? 1 : 0, snapshot.headSha, snapshot.baseRef,
       snapshot.additions, snapshot.deletions, snapshot.changedFiles, requested ? 1 : 0, now, now,
-      snapshot.createdAt || null, snapshot.updatedAt || null,
+      snapshot.createdAt || null, snapshot.updatedAt || null, ciState(snapshot.checks),
     );
     return this.get(id)!;
   }
@@ -423,6 +427,7 @@ interface Row {
   bumped_at: string | null;
   summary: string | null;
   alert: string | null;
+  ci_state: string | null;
 }
 
 function rowToPr(row: Row): InboxPr {
@@ -440,6 +445,7 @@ function rowToPr(row: Row): InboxPr {
     additions: row.additions,
     deletions: row.deletions,
     changedFiles: row.changed_files,
+    ciState: normaliseCiState(row.ci_state),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     requested: row.requested === 1,
@@ -501,6 +507,12 @@ function rowToRun(row: RunDbRow): RunRow {
 
 function round1(value: number): number {
   return Math.round(value * 10) / 10;
+}
+
+const CI_STATES: readonly string[] = ['passing', 'failing', 'running', 'none'];
+
+function normaliseCiState(value: string | null): CiState | null {
+  return value !== null && CI_STATES.includes(value) ? (value as CiState) : null;
 }
 
 /** A row from a build that knew other statuses is shown as needing work rather than crashing the list. */

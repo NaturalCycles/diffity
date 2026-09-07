@@ -79,6 +79,10 @@ export function inboxPage(): string {
   .open-hint { color: var(--accent); font-size: 12px; font-weight: 600; white-space: nowrap; }
   .empty { color: var(--muted); padding: 12px 2px; }
   .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ready); flex: none; }
+  .ci { flex: none; font-size: 9px; line-height: 1; }
+  .ci-passing { color: var(--ready); }
+  .ci-failing { color: var(--bad); }
+  .ci-running { color: var(--stale); }
   .foot { color: var(--muted); font-size: 11.5px; margin-top: 22px; }
   a { color: inherit; text-decoration: none; }
 </style>
@@ -119,6 +123,9 @@ export function inboxPage(): string {
     <label>Notify me if:
       <textarea id="alertWhen" rows="3" placeholder="e.g. there is a P1, or the change touches authentication (empty: every prepared review)"></textarea>
     </label>
+    <label>Alert me if a changed file matches (one glob per line):
+      <textarea id="alertPaths" rows="3" placeholder="e.g. packages/shared/src/model/** or **/dbref/**"></textarea>
+    </label>
     <label>MCP tools the review agent may use, one per line:
       <textarea id="agentMcpAllow" rows="3" placeholder="e.g. mcp__claude_ai_Atlassian__getJiraIssue (empty: no MCP servers at all)"></textarea>
     </label>
@@ -138,6 +145,7 @@ export function inboxPage(): string {
       </select></label>
       <label>Budget per run ($)<input id="agentMaxBudgetUsd" type="number" min="0.5" step="0.5" placeholder="uncapped"></label>
       <label class="check"><input id="live" type="checkbox"> Park a live agent on opened reviews</label>
+      <label class="check"><input id="waitForCi" type="checkbox"> Hold a pull request until its CI has passed</label>
     </div>
     <div class="settings-row">
       <button id="save" type="button">Save</button>
@@ -159,6 +167,14 @@ export function inboxPage(): string {
     const hours = minutes / 60;
     if (hours < 36) return Math.round(hours) + ' h ago';
     return Math.round(hours / 24) + ' d ago';
+  }
+
+  /** What CI made of the head, as one glyph; nothing when nothing has reported. */
+  function ciDot(r) {
+    const labels = { passing: 'CI passing', failing: 'CI failing', running: 'CI running' };
+    return labels[r.ciState]
+      ? '<span class="ci ci-' + r.ciState + '" title="' + labels[r.ciState] + '">&#9679;</span>'
+      : '';
   }
 
   function metaLine(parts, hover) {
@@ -203,6 +219,7 @@ export function inboxPage(): string {
     row.innerHTML =
       '<span class="dot"></span>' +
       '<span class="size">' + sizeLabel(r) + '</span>' +
+      ciDot(r) +
       '<span class="title"><div><span class="repo">' + esc(r.repo) + '#' + r.number + '</span> ' +
       '<span class="name">' + esc(r.title) + '</span></div>' +
       metaLine(['by ' + esc(r.author), r.changedFiles + ' file(s)', esc(r.summary || ''), spendLabel(r), times(r)],
@@ -218,6 +235,7 @@ export function inboxPage(): string {
     row.className = 'row';
     row.innerHTML =
       '<span class="size">' + sizeLabel(r) + '</span>' +
+      ciDot(r) +
       '<span class="title"><div><span class="repo">' + esc(r.repo) + '#' + r.number + '</span> ' +
       '<span class="name">' + esc(r.title) + '</span></div>' +
       metaLine([esc(r.statusReason || ''), times(r)], r.statusReason || '') + '</span>' +
@@ -338,8 +356,10 @@ export function inboxPage(): string {
       settings = await res.json();
       el('filter').value = settings.filter;
       el('alertWhen').value = settings.alertWhen;
+      el('alertPaths').value = (settings.alertPaths || []).join('\\n');
       for (const key of ['maxPrepared', 'pollMinutes', 'prepareTimeoutMinutes', 'liveTimeoutMinutes']) el(key).value = settings[key];
       el('live').checked = settings.live;
+      el('waitForCi').checked = settings.waitForCi;
       const agent = settings.agent || {};
       el('agentModel').value = agent.model || '';
       el('agentEffort').value = agent.effort || '';
@@ -355,11 +375,13 @@ export function inboxPage(): string {
     const next = {
       filter: el('filter').value,
       alertWhen: el('alertWhen').value,
+      alertPaths: el('alertPaths').value.split('\\n').map(line => line.trim()).filter(Boolean),
       maxPrepared: Number(el('maxPrepared').value),
       pollMinutes: Number(el('pollMinutes').value),
       prepareTimeoutMinutes: Number(el('prepareTimeoutMinutes').value),
       liveTimeoutMinutes: Number(el('liveTimeoutMinutes').value),
       live: el('live').checked,
+      waitForCi: el('waitForCi').checked,
       agent: {
         model: el('agentModel').value.trim() || null,
         effort: el('agentEffort').value || null,

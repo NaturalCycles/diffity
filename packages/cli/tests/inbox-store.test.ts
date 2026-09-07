@@ -14,7 +14,7 @@ function snapshot(): PrSnapshot {
   return {
     owner: 'o', repo: 'r', number: 1, title: 'T', url: 'https://github.com/o/r/pull/1',
     author: 'alice', isBot: false, isDraft: false, state: 'OPEN', headSha: 'aaa', baseRef: 'main',
-    additions: 1, deletions: 0, changedFiles: 1, createdAt: 'now', updatedAt: 'now',
+    additions: 1, deletions: 0, changedFiles: 1, createdAt: 'now', updatedAt: 'now', checks: [], files: [],
   };
 }
 
@@ -67,6 +67,26 @@ describe('InboxStore migration', () => {
     const pr = store.observe({ ...snapshot(), createdAt: '2026-09-01T08:00:00Z', updatedAt: '2026-09-02T10:00:00Z' }, true, 'now');
     expect(pr.createdAt).toBe('2026-09-01T08:00:00Z');
     expect(pr.updatedAt).toBe('2026-09-02T10:00:00Z');
+    store.close();
+  });
+
+  it('keeps what CI said about the head, on a table that predates the column', () => {
+    const seed = new DatabaseSync(path);
+    seed.exec(`CREATE TABLE inbox_prs (
+      id TEXT PRIMARY KEY, owner TEXT NOT NULL, repo TEXT NOT NULL, number INTEGER NOT NULL,
+      title TEXT NOT NULL, url TEXT NOT NULL, author TEXT NOT NULL, is_draft INTEGER NOT NULL,
+      head_sha TEXT NOT NULL, base_ref TEXT NOT NULL, additions INTEGER NOT NULL, deletions INTEGER NOT NULL,
+      changed_files INTEGER NOT NULL, requested INTEGER NOT NULL, status TEXT NOT NULL, status_reason TEXT,
+      attempts INTEGER NOT NULL DEFAULT 0, prepared_head_sha TEXT, prepared_at TEXT, bundle_path TEXT,
+      worktree_path TEXT, log_path TEXT, first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL)`);
+    seed.close();
+
+    const store = new InboxStore(path);
+    expect(store.observe(snapshot(), true, 'now').ciState).toBe('none');
+    expect(store.observe({ ...snapshot(), checks: [{ name: 'check-job', status: 'failure' }] }, true, 'now').ciState).toBe('failing');
+    // A new commit with its checks still going: what the page shows follows the head.
+    expect(store.observe({ ...snapshot(), headSha: 'bbb', checks: [{ name: 'check-job', status: 'pending' }] }, true, 'now').ciState).toBe('running');
+    expect(store.get('o/r#1')!.ciState).toBe('running');
     store.close();
   });
 

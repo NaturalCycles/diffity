@@ -1,3 +1,4 @@
+import type { CiState } from '@diffity/github';
 import { isRetired, type InboxPr, type InboxStore, type RunTotals } from './store.js';
 import { costOf, minutesOf, runDetail } from './runs.js';
 import { BUMPABLE } from './open.js';
@@ -24,6 +25,8 @@ export interface InboxRow {
   changedFiles: number;
   additions: number;
   deletions: number;
+  /** What CI said about the current head, for the card's dot; null when nothing is known. */
+  ciState: CiState | null;
   createdAt: string | null;
   updatedAt: string | null;
   /** A prepared review whose head has since moved: openable, but out of date. */
@@ -105,6 +108,7 @@ function toRow(pr: InboxPr, openBase: string, store: InboxStore): InboxRow {
     changedFiles: pr.changedFiles,
     additions: pr.additions,
     deletions: pr.deletions,
+    ciState: pr.ciState,
     createdAt: pr.createdAt,
     updatedAt: pr.updatedAt,
     stale,

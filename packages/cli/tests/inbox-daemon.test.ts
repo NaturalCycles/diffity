@@ -44,7 +44,7 @@ function seedRegistry(pid: number): void {
 function config(port: number) {
   return {
     pollMinutes: 5, port, reposDir: join(root, 'repos'), worktreesDir: join(root, 'inbox', 'worktrees'),
-    filter: '', alertWhen: '', agent: agentConfig(), prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10,
+    filter: '', alertWhen: '', alertPaths: [], agent: agentConfig(), waitForCi: false, prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10,
   };
 }
 
@@ -118,7 +118,7 @@ describe('runDaemon singleton and reclaim ordering', () => {
     const snap: PrSnapshot = {
       owner: 'o', repo: 'r', number: 1, title: 'T', url: 'https://github.com/o/r/pull/1', author: 'alice', isBot: false,
       isDraft: false, state: 'OPEN', headSha: 'aaa', baseRef: 'main', additions: 1, deletions: 0, changedFiles: 1,
-      createdAt: 'now', updatedAt: 'now',
+      createdAt: 'now', updatedAt: 'now', checks: [], files: [],
     };
     store.observe(snap, true, 'now');
     let searches = 0;
@@ -157,7 +157,7 @@ describe('runDaemon singleton and reclaim ordering', () => {
     const snap: PrSnapshot = {
       owner: 'o', repo: 'r', number: 1, title: 'T', url: 'https://github.com/o/r/pull/1', author: 'alice', isBot: false,
       isDraft: false, state: 'OPEN', headSha: 'aaa', baseRef: 'main', additions: 1, deletions: 0, changedFiles: 1,
-      createdAt: 'now', updatedAt: 'now',
+      createdAt: 'now', updatedAt: 'now', checks: [], files: [],
     };
     store.observe(snap, true, 'now');
     store.pauseUntil(new Date(Date.now() + 60_000).toISOString());

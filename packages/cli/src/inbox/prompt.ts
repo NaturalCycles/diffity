@@ -1,4 +1,4 @@
-import type { PrSnapshot } from '@diffity/github';
+import type { PrCheck, PrSnapshot } from '@diffity/github';
 
 export interface PromptContext {
   snapshot: PrSnapshot;
@@ -29,6 +29,10 @@ export function composePrompt(ctx: PromptContext): string {
     `  Author: ${oneLine(snapshot.author)}`,
     `  Repository: ${snapshot.owner}/${snapshot.repo}, base ${oneLine(snapshot.baseRef)}`,
     `Size: +${snapshot.additions} -${snapshot.deletions} across ${snapshot.changedFiles} file(s)`,
+    ciLine(snapshot.checks),
+    'Do not install dependencies, build, typecheck, lint or run tests: CI has done that, and this',
+    'checkout is the author\'s code. Reason from the source. If a check failed or is still running,',
+    'say so in the summary.',
     '',
     'A diffity review session for this pull request is already running. The checkout is at:',
     `  ${worktreePath}`,
@@ -91,6 +95,32 @@ export function composePrompt(ctx: PromptContext): string {
   );
 
   return lines.join('\n') + '\n';
+}
+
+/**
+ * What CI made of this head, as one line: every check that ran with its verdict, and a count for
+ * the ones a workflow condition skipped — a repository can skip dozens, and their names say
+ * nothing the review needs.
+ */
+function ciLine(checks: PrCheck[]): string {
+  if (checks.length === 0) {
+    return 'CI has not reported for this head.';
+  }
+  // Check names are the repository's text — a workflow's own expression, sometimes — so they are
+  // held to one line and a length, like the title and the author above.
+  const reported = checks.filter(check => check.status !== 'skipped')
+    .map(check => `${checkName(check.name)} ${check.status.toUpperCase()}`);
+  const skipped = checks.length - reported.length;
+  if (skipped > 0) {
+    reported.push(`${skipped} more skipped`);
+  }
+  return `CI at this head: ${reported.join(' \u00b7 ')}`;
+}
+
+const MAX_CHECK_NAME = 80;
+
+function checkName(name: string): string {
+  return oneLine(name).slice(0, MAX_CHECK_NAME);
 }
 
 /**

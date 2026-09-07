@@ -43,7 +43,14 @@ export interface InboxConfig {
    * empty means every prepared review is worth a notification.
    */
   alertWhen: string;
+  /**
+   * Globs against the pull request's changed paths. A pull request touching one of them is marked
+   * as needing the reviewer now, alongside whatever the agent made of `alertWhen`.
+   */
+  alertPaths: string[];
   agent: AgentConfig;
+  /** Whether a pull request waits for its CI to pass before an agent is spent on it. */
+  waitForCi: boolean;
   prepareTimeoutMinutes: number;
   /**
    * How many prepared reviews may wait for the reviewer at once. Each preparation spends an agent
@@ -66,7 +73,9 @@ export const DEFAULT_INBOX_CONFIG: InboxConfig = {
   worktreesDir: '~/.diffity/inbox/worktrees',
   filter: '',
   alertWhen: '',
+  alertPaths: [],
   agent: { model: null, effort: null, mcpAllow: [], extraArgs: [], maxBudgetUsd: null },
+  waitForCi: false,
   prepareTimeoutMinutes: 30,
   maxPrepared: 5,
   live: true,
@@ -98,7 +107,7 @@ export function parseInboxConfig(raw: unknown, source = 'inbox config'): InboxCo
     throw new Error(`${source} must be a JSON object`);
   }
   const obj = raw as Record<string, unknown>;
-  const config: InboxConfig = { ...DEFAULT_INBOX_CONFIG, agent: defaultAgent() };
+  const config: InboxConfig = { ...DEFAULT_INBOX_CONFIG, alertPaths: [], agent: defaultAgent() };
 
   if (obj.prepare !== undefined) {
     throw new Error(`${source}: "prepare" was replaced by the "agent" block — delete it (the built-in command applies) and put extra flags in agent.extraArgs`);
@@ -127,8 +136,20 @@ export function parseInboxConfig(raw: unknown, source = 'inbox config'): InboxCo
     }
     config.alertWhen = obj.alertWhen;
   }
+  if (obj.alertPaths !== undefined) {
+    if (!Array.isArray(obj.alertPaths) || !obj.alertPaths.every(glob => typeof glob === 'string' && glob.trim() !== '')) {
+      throw new Error(`${source}: alertPaths must be an array of non-empty globs`);
+    }
+    config.alertPaths = (obj.alertPaths as string[]).map(glob => glob.trim());
+  }
   if (obj.agent !== undefined) {
     config.agent = parseAgentConfig(obj.agent, source);
+  }
+  if (obj.waitForCi !== undefined) {
+    if (typeof obj.waitForCi !== 'boolean') {
+      throw new Error(`${source}: waitForCi must be true or false`);
+    }
+    config.waitForCi = obj.waitForCi;
   }
   if (obj.prepareTimeoutMinutes !== undefined) {
     config.prepareTimeoutMinutes = positive(obj.prepareTimeoutMinutes, 'prepareTimeoutMinutes', source);
@@ -193,7 +214,7 @@ function parseAgentConfig(raw: unknown, source: string): AgentConfig {
 }
 
 /** The settings the inbox page edits, kept in the config file beside the keys only the file holds. */
-export type InboxSettings = Pick<InboxConfig, 'filter' | 'alertWhen' | 'maxPrepared' | 'pollMinutes' | 'live' | 'liveTimeoutMinutes' | 'prepareTimeoutMinutes' | 'agent'>;
+export type InboxSettings = Pick<InboxConfig, 'filter' | 'alertWhen' | 'alertPaths' | 'maxPrepared' | 'pollMinutes' | 'live' | 'liveTimeoutMinutes' | 'prepareTimeoutMinutes' | 'waitForCi' | 'agent'>;
 
 /**
  * Writes the page-editable settings into the config file, leaving every other key as the reviewer

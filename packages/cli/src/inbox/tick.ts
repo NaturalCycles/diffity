@@ -1,4 +1,5 @@
 import type { PrRef, PrSnapshot } from '@diffity/github';
+import { alertForPaths } from './paths-alert.js';
 import { reconcile } from './reconcile.js';
 import { isRetired, prId, runRecordOf, type InboxPr, type InboxStore, type RunOutcome } from './store.js';
 import { localHhMm } from './runs.js';
@@ -22,6 +23,10 @@ export interface TickDeps {
   shouldContinue?(): boolean;
   /** How many prepared reviews may wait for the reviewer at once; the rest of the queue waits. */
   maxPrepared: number;
+  /** Whether a pull request waits for its CI to pass before an agent is spent on it. */
+  waitForCi: boolean;
+  /** The changed paths that make a review worth the reviewer's attention now. */
+  alertPaths: string[];
   /** `agent.model`, recorded for a run that did not report which models it spent on. */
   agentModel: string | null;
   /** Holds preparation back until then — a session limit is waited out, not retried. */
@@ -50,7 +55,7 @@ export async function runTick(store: InboxStore, deps: TickDeps): Promise<void> 
     }
     const existing = store.get(prId(ref));
     const pr = store.observe(snapshot, true, deps.now());
-    const transition = reconcile({ existing, snapshot, requested: true, viewerLogin });
+    const transition = reconcile({ existing, snapshot, requested: true, viewerLogin, waitForCi: deps.waitForCi });
     if (transition) {
       store.setStatus(pr.id, transition.status, transition.reason);
       if (transition.prepare) {
@@ -158,7 +163,8 @@ async function prepareOne(store: InboxStore, snapshot: PrSnapshot, deps: TickDep
         logPath: result.logPath,
         at: result.at,
         summary: result.summary,
-        alert: result.alert,
+        // The agent's judgement first; the reviewer's own paths stand in when it raised nothing.
+        alert: result.alert ?? alertForPaths(snapshot.files, deps.alertPaths),
       });
       deps.log(`prepared ${id}`);
       return;

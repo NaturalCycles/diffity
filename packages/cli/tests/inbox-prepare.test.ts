@@ -29,14 +29,14 @@ function snapshot(): PrSnapshot {
   return {
     owner: 'o', repo: 'demo', number: 4, title: 'A change', url: 'https://github.com/o/demo/pull/4',
     author: 'alice', isBot: false, isDraft: false, state: 'OPEN', headSha: head, baseRef: 'main',
-    additions: 1, deletions: 0, changedFiles: 1, createdAt: 'now', updatedAt: 'now',
+    additions: 1, deletions: 0, changedFiles: 1, createdAt: 'now', updatedAt: 'now', checks: [], files: [],
   };
 }
 
 function config(): InboxConfig {
   return {
-    pollMinutes: 5, port: 0, reposDir, worktreesDir, filter: '', alertWhen: '',
-    agent: agentConfig(), prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10,
+    pollMinutes: 5, port: 0, reposDir, worktreesDir, filter: '', alertWhen: '', alertPaths: [],
+    agent: agentConfig(), waitForCi: false, prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10,
   };
 }
 

@@ -1,4 +1,4 @@
-import type { PrSnapshot } from '@diffity/github';
+import { ciState, type PrCheck, type PrSnapshot } from '@diffity/github';
 import type { InboxPr, InboxStatus } from './store.js';
 
 /** How many times preparation is retried at one head before the pull request is left as failed. */
@@ -20,7 +20,15 @@ export interface ReconcileInput {
   /** Whether this poll's search listed the PR as awaiting the reviewer. */
   requested: boolean;
   viewerLogin: string | null;
+  /**
+   * Whether a pull request waits for its CI before an agent is spent on it; absent is off, as the
+   * config's default is.
+   */
+  waitForCi?: boolean;
 }
+
+/** The mark of a CI hold on a row, so the next poll re-decides it instead of leaving it settled. */
+const CI_FAILED = 'CI failed:';
 
 /**
  * The status a pull request should move to, given what the forge now says and what the inbox
@@ -33,6 +41,48 @@ export interface ReconcileInput {
  * apart. Everything else asked of the reviewer is queued.
  */
 export function reconcile(input: ReconcileInput): Transition | null {
+  const transition = decide(input);
+  return transition && input.waitForCi ? heldForCi(transition, input) : transition;
+}
+
+/**
+ * What CI does to a transition that was about to spend an agent: a run still going is waited for,
+ * a failure is left to the author. A pull request the reviewer bumped is prepared regardless — the
+ * ↑ overrides this as it overrides the filter — and a review already prepared for an older head
+ * stays openable while its refresh waits.
+ */
+function heldForCi(transition: Transition, input: ReconcileInput): Transition {
+  const { existing, snapshot } = input;
+  if (!transition.prepare || !snapshot || existing?.bumpedAt) {
+    return transition;
+  }
+  const refresh = existing?.status === 'prepared' || existing?.status === 'stale';
+  switch (ciState(snapshot.checks)) {
+    case 'running': {
+      const running = snapshot.checks.filter(check => check.status === 'pending').length;
+      return { status: refresh ? 'stale' : 'queued', reason: `waiting: CI running (${running} checks)`, prepare: false };
+    }
+    case 'failing':
+      return { status: refresh ? 'stale' : 'skipped', reason: ciFailedReason(snapshot.checks), prepare: false };
+    default:
+      // Nothing has reported for this head, or everything that did passed: review it.
+      return transition;
+  }
+}
+
+/** Which checks failed, by name — three of them, and a count for the rest. */
+function ciFailedReason(checks: PrCheck[]): string {
+  const failed = checks.filter(check => check.status === 'failure').map(check => oneLine(check.name));
+  const named = failed.slice(0, 3).join(', ');
+  return `${CI_FAILED} ${failed.length > 3 ? `${named} and ${failed.length - 3} more` : named}`;
+}
+
+/** A check name is the repository's own text; a newline in it would break the row it explains. */
+function oneLine(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+function decide(input: ReconcileInput): Transition | null {
   const { existing, snapshot, requested, viewerLogin } = input;
 
   // Listed by search but the detail view failed this tick: keep the row as it is and try next time.
@@ -77,8 +127,10 @@ export function reconcile(input: ReconcileInput): Transition | null {
   }
 
   // A settled skip stays settled until its head moves; re-running the filter on every poll would
-  // just spend the same tokens on the same answer.
-  if (existing && existing.status === 'skipped' && existing.headSha === snapshot.headSha) {
+  // just spend the same tokens on the same answer. A CI failure is not the reviewer's verdict on
+  // the pull request, though: it is re-decided every poll, and green checks put it back in the queue.
+  if (existing && existing.status === 'skipped' && existing.headSha === snapshot.headSha
+    && !existing.statusReason?.startsWith(CI_FAILED)) {
     return null;
   }
 
