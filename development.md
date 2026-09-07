@@ -141,8 +141,10 @@ npx tsx scripts/inbox-compare.ts NaturalCycles/NCBackend3#14550 --effort medium 
 The baseline is the newest bundle for that pull request under `~/.diffity/inbox/bundles`
 (`--bundles-dir` to look elsewhere, `--head <sha>` to pick an older one). The candidate gets a
 scratch worktree and its own diffity data directory under a fresh temp directory (`--scratch` to
-name it), so nothing is written into `~/.diffity` and a running `diffity inbox` is undisturbed. One
-invocation is one agent run, and it takes as long as a real preparation — up to half an hour.
+name it), so nothing is written into `~/.diffity` and a running `diffity inbox` is undisturbed. The
+worktree is removed afterwards unless `--keep` is passed, which leaves it in place so the
+candidate's own review can be opened in the browser. One invocation is one agent run, and it takes
+as long as a real preparation — up to half an hour.
 
 A worktree can only be cut at whatever `refs/pull/<n>/head` points at, so the script refuses,
 before spending the run, when the pull request has moved past the baseline's head.
