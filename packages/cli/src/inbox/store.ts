@@ -42,6 +42,8 @@ export interface InboxPr {
   statusReason: string | null;
   /** How many times preparation has failed at the current head, reset when the head moves. */
   attempts: number;
+  /** When the reviewer asked for this one next — ahead of the queue, past the cap, filter set aside. */
+  bumpedAt: string | null;
   /** The head the prepared review is for; older than headSha means the review is stale. */
   preparedHeadSha: string | null;
   preparedAt: string | null;
@@ -109,11 +111,12 @@ export class InboxStore {
         first_seen_at TEXT NOT NULL,
         last_seen_at TEXT NOT NULL,
         created_at TEXT,
-        updated_at TEXT
+        updated_at TEXT,
+        bumped_at TEXT
       )
     `);
     // A table from an earlier build gains the columns it lacks; a fresh one already has them.
-    for (const column of ['attempts INTEGER NOT NULL DEFAULT 0', 'created_at TEXT', 'updated_at TEXT']) {
+    for (const column of ['attempts INTEGER NOT NULL DEFAULT 0', 'created_at TEXT', 'updated_at TEXT', 'bumped_at TEXT']) {
       try {
         this.db.exec(`ALTER TABLE inbox_prs ADD COLUMN ${column}`);
       } catch (err) {
@@ -179,6 +182,16 @@ export class InboxStore {
     this.db.prepare('UPDATE inbox_prs SET status = ?, status_reason = ? WHERE id = ?').run(status, reason, id);
   }
 
+  /** The reviewer wants this one prepared next, whatever verdict it had and however full the pile is. */
+  bump(id: string, now: string): void {
+    this.db.prepare("UPDATE inbox_prs SET status = 'queued', status_reason = 'bumped by the reviewer', bumped_at = ? WHERE id = ?").run(now, id);
+  }
+
+  /** The bump is spent once a preparation for it has run, whatever it came to. */
+  clearBump(id: string): void {
+    this.db.prepare('UPDATE inbox_prs SET bumped_at = NULL WHERE id = ?').run(id);
+  }
+
   /** Records a failed attempt at the current head; the count gates how many more are worth trying. */
   failAttempt(id: string, reason: string): void {
     this.db.prepare('UPDATE inbox_prs SET status = ?, status_reason = ?, attempts = attempts + 1 WHERE id = ?')
@@ -232,6 +245,7 @@ interface Row {
   last_seen_at: string;
   created_at: string | null;
   updated_at: string | null;
+  bumped_at: string | null;
 }
 
 function rowToPr(row: Row): InboxPr {
@@ -255,6 +269,7 @@ function rowToPr(row: Row): InboxPr {
     status: normaliseStatus(row.status),
     statusReason: row.status_reason,
     attempts: row.attempts,
+    bumpedAt: row.bumped_at,
     preparedHeadSha: row.prepared_head_sha,
     preparedAt: row.prepared_at,
     bundlePath: row.bundle_path,

@@ -13,7 +13,7 @@ import { repoHash } from './open-session.js';
 import { InboxStore } from './store.js';
 import { runTick, type Forge } from './tick.js';
 import { buildView } from './view.js';
-import { resolveDismiss, resolveOpen } from './open.js';
+import { resolveBump, resolveDismiss, resolveOpen } from './open.js';
 import { openPreparedSession, realOpenSessionDeps, type OpenSessionDeps } from './open-session.js';
 import { inboxPage } from './page.js';
 
@@ -70,7 +70,7 @@ export async function runDaemon(
   const prepareDeps: PrepareDeps = realPrepareDeps(nodePath, entry, inboxDataDir, inflight);
   const deps = {
     forge: options.forge ?? realForge,
-    prepare: (snapshot: Parameters<typeof preparePr>[0]) => preparePr(snapshot, config, prepareDeps),
+    prepare: (snapshot: Parameters<typeof preparePr>[0], opts: { bumped: boolean }) => preparePr(snapshot, config, prepareDeps, opts),
     removeWorktree: (worktree: string, repo: string) => reclaimWorktree(config, worktree, repo),
     log,
     now: () => new Date().toISOString(),
@@ -78,6 +78,8 @@ export async function runDaemon(
     maxPrepared: config.maxPrepared,
   };
 
+  // A bump arriving mid-tick is served by another tick right after, not by the next poll.
+  let tickWanted = false;
   const tick = async () => {
     if (ticking || stopping) {
       return;
@@ -89,7 +91,15 @@ export async function runDaemon(
       log(`tick failed: ${err instanceof Error ? err.message : err}`);
     } finally {
       ticking = false;
+      if (tickWanted && !stopping) {
+        tickWanted = false;
+        void tick();
+      }
     }
+  };
+  const requestTick = () => {
+    tickWanted = ticking;
+    void tick();
   };
 
   if (options.once) {
@@ -106,7 +116,7 @@ export async function runDaemon(
   const attendants: AttendantHost = options.attendants ?? new Attendants(
     realAttendantDeps(nodePath, entry, config, worktree => join(logsDir(), `${basename(worktree)}.live.log`), log),
   );
-  const server = await bindInboxServer(store, config, log, openDeps, config.live ? attendants : null);
+  const server = await bindInboxServer(store, config, log, openDeps, config.live ? attendants : null, requestTick);
   reclaimLeftoverServers(log);
   const timer = setInterval(() => void tick(), config.pollMinutes * 60_000);
   void tick();
@@ -157,7 +167,7 @@ function reclaimLeftoverServers(log: (message: string) => void): void {
   }
 }
 
-export function startInboxServer(store: InboxStore, config: InboxConfig, log: (message: string) => void, openDeps: OpenSessionDeps, attendants: AttendantHost | null = null): Server {
+export function startInboxServer(store: InboxStore, config: InboxConfig, log: (message: string) => void, openDeps: OpenSessionDeps, attendants: AttendantHost | null = null, onBump: (() => void) | null = null): Server {
   const server = createServer((req, res) => {
     // The whole handler is guarded: an unhandled throw here (a malformed percent-escape, say) would
     // otherwise have no catch and take the long-running daemon down with it.
@@ -198,6 +208,13 @@ export function startInboxServer(store: InboxStore, config: InboxConfig, log: (m
         const id = stateChangingId(req, res, '/dismiss/');
         if (id !== null) {
           handleDismiss(store, config, id, log, res);
+        }
+        return;
+      }
+      if (req.method === 'POST' && url.startsWith('/prepare/')) {
+        const id = stateChangingId(req, res, '/prepare/');
+        if (id !== null) {
+          handleBump(store, id, onBump, log, res);
         }
         return;
       }
@@ -271,6 +288,21 @@ function stateChangingId(req: IncomingMessage, res: ServerResponse, prefix: stri
   }
 }
 
+/** Puts a pull request at the front of the queue and asks for a tick, so it is prepared now. */
+function handleBump(store: InboxStore, id: string, onBump: (() => void) | null, log: (message: string) => void, res: ServerResponse): void {
+  const resolution = resolveBump(store, id);
+  if (!resolution.ok) {
+    res.writeHead(resolution.status, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end(resolution.message);
+    return;
+  }
+  store.bump(resolution.pr.id, new Date().toISOString());
+  log(`${id} bumped to the front of the queue`);
+  res.writeHead(204);
+  res.end();
+  onBump?.();
+}
+
 /** Marks a pull request as one the reviewer will not review, and reclaims its worktree. */
 function handleDismiss(store: InboxStore, config: InboxConfig, id: string, log: (message: string) => void, res: ServerResponse): void {
   const resolution = resolveDismiss(store, id);
@@ -311,7 +343,7 @@ function isLocalHost(host: string | undefined, port: number | undefined): boolea
 }
 
 /** Resolves once the port is held; a clash exits through the server's own error handler first. */
-function bindInboxServer(store: InboxStore, config: InboxConfig, log: (message: string) => void, openDeps: OpenSessionDeps, attendants: AttendantHost | null): Promise<Server> {
-  const server = startInboxServer(store, config, log, openDeps, attendants);
+function bindInboxServer(store: InboxStore, config: InboxConfig, log: (message: string) => void, openDeps: OpenSessionDeps, attendants: AttendantHost | null, onBump: () => void): Promise<Server> {
+  const server = startInboxServer(store, config, log, openDeps, attendants, onBump);
   return new Promise(resolve => server.once('listening', () => resolve(server)));
 }

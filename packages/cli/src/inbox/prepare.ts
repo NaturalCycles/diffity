@@ -55,7 +55,12 @@ export function logsDir(): string {
  * The server is always stopped and, on a skip or a failure, the worktree is removed; a prepared
  * review keeps its worktree so opening it is instant.
  */
-export async function preparePr(snapshot: PrSnapshot, config: InboxConfig, deps: PrepareDeps): Promise<PrepareResult> {
+export interface PrepareOpts {
+  /** The reviewer asked for this one by name, so the filter does not get a say. */
+  bumped?: boolean;
+}
+
+export async function preparePr(snapshot: PrSnapshot, config: InboxConfig, deps: PrepareDeps, opts: PrepareOpts = {}): Promise<PrepareResult> {
   const dest = worktreePath(config.worktreesDir, snapshot);
   const clone = cloneDir(config.reposDir, snapshot.repo);
   const logPath = join(logsDir(), `${snapshot.owner}-${snapshot.repo}-${snapshot.number}.log`);
@@ -73,7 +78,7 @@ export async function preparePr(snapshot: PrSnapshot, config: InboxConfig, deps:
     server = await deps.startServer(dest, diffRef);
     const { stdout, timedOut } = await deps.runAgent({
       argv: config.prepare,
-      prompt: composePrompt({ snapshot, worktreePath: dest, port: server.port, filter: config.filter }),
+      prompt: composePrompt({ snapshot, worktreePath: dest, port: server.port, filter: opts.bumped ? '' : config.filter }),
       cwd: dest,
       logPath,
       timeoutMs: config.prepareTimeoutMinutes * 60_000,

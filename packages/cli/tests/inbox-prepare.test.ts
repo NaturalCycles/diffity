@@ -63,10 +63,13 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
+let prompts: string[] = [];
+
 function deps(over: Partial<PrepareDeps> = {}): PrepareDeps {
   return {
     startServer: () => Promise.resolve({ port: 5555, stop: () => {} }),
-    runAgent: ({ cwd }) => {
+    runAgent: ({ cwd, prompt }) => {
+      prompts.push(prompt);
       // The worktree exists and holds the checked-out file by the time the agent runs.
       expect(existsSync(join(cwd, 'a.ts'))).toBe(true);
       return Promise.resolve({ stdout: 'reviewing\nPREPARED\n', timedOut: false });
@@ -164,5 +167,16 @@ describe('the inbox JSON server', () => {
     expect(view.ready[0].openUrl).toBe('http://localhost:5390/open/o%2Fdemo%234');
     expect(view.ready[0].stale).toBe(false);
     store.close();
+  });
+
+  it('sets the filter aside for a bumped pull request', async () => {
+    prompts = [];
+    const withFilter = { ...config(), filter: 'Skip payments-focused PRs' };
+    await preparePr(snapshot(), withFilter, deps());
+    expect(prompts[0]).toContain('Skip payments-focused PRs');
+
+    prompts = [];
+    await preparePr(snapshot(), withFilter, deps(), { bumped: true });
+    expect(prompts[0]).not.toContain('Skip payments-focused PRs');
   });
 });

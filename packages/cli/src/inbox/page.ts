@@ -37,6 +37,9 @@ export function inboxPage(): string {
   .dismiss { flex: none; width: 38px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
     color: var(--muted); font-size: 16px; cursor: pointer; }
   .dismiss:hover { color: var(--bad); border-color: var(--bad); }
+  .bump { flex: none; width: 38px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
+    color: var(--muted); font-size: 16px; cursor: pointer; }
+  .bump:hover { color: var(--accent); border-color: var(--accent); }
   .row.open { cursor: pointer; }
   .row.open:hover { border-color: var(--accent); }
   .size { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px;
@@ -133,18 +136,38 @@ export function inboxPage(): string {
     return row;
   }
 
-  function withDismiss(row, r) {
-    if (!r.dismissUrl) return row;
+  function withActions(row, r) {
+    if (!r.dismissUrl && !r.prepareUrl) return row;
     const wrap = document.createElement('div');
     wrap.className = 'entry';
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'dismiss';
-    button.title = 'Dismiss this version of the pull request; new commits bring it back';
-    button.textContent = '\\u00d7';
-    button.onclick = () => dismiss(r, wrap);
-    wrap.append(row, button);
+    wrap.append(row);
+    if (r.prepareUrl) {
+      const up = document.createElement('button');
+      up.type = 'button';
+      up.className = 'bump';
+      up.title = 'Prepare this one next: ahead of the queue, past the limit, filter set aside';
+      up.textContent = '\\u2191';
+      up.onclick = () => bump(r);
+      wrap.append(up);
+    }
+    if (r.dismissUrl) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'dismiss';
+      button.title = 'Dismiss this version of the pull request; new commits bring it back';
+      button.textContent = '\\u00d7';
+      button.onclick = () => dismiss(r, wrap);
+      wrap.append(button);
+    }
     return wrap;
+  }
+
+  async function bump(r) {
+    const res = await fetch(r.prepareUrl, { method: 'POST' });
+    if (!res.ok) {
+      el('status').textContent = 'could not bump ' + r.repo + '#' + r.number + ': ' + await res.text();
+    }
+    refresh();
   }
 
   async function dismiss(r, entry) {
@@ -171,11 +194,11 @@ export function inboxPage(): string {
     try {
       const res = await fetch('/api/inbox', { cache: 'no-store' });
       const view = await res.json();
-      fill('ready-section', 'ready', view.ready, r => withDismiss(readyRow(r), r));
-      fill('working-section', 'working', view.working, r => withDismiss(plainRow(r, 'work', r.status), r));
+      fill('ready-section', 'ready', view.ready, r => withActions(readyRow(r), r));
+      fill('working-section', 'working', view.working, r => withActions(plainRow(r, 'work', r.bumped ? 'bumped' : r.status), r));
       fill('other-section', 'other', view.other, r => {
         const bad = r.status === 'failed';
-        return withDismiss(plainRow(r, bad ? 'bad' : 'work', r.status), r);
+        return withActions(plainRow(r, bad ? 'bad' : 'work', r.status), r);
       });
       const total = view.ready.length + view.working.length + view.other.length;
       el('all-empty').hidden = total > 0;
