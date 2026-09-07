@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type { PrRef } from '@diffity/github';
@@ -18,9 +19,16 @@ export function worktreePath(worktreesDir: string, ref: PrRef): string {
 /**
  * Off the event loop on purpose: a fetch or a worktree add on a large clone takes as long as it
  * takes, and the daemon's own server has to keep answering the inbox page and its opens meanwhile.
+ *
+ * Hooks off. A checkout's hook scripts are the pull request author's code, and this process holds
+ * the reviewer's credentials — the opposite of the stripped environment the agent gets. They also
+ * turned every worktree add into an install and a build. Git looks for hooks in the named
+ * directory; a path that is not one has none.
  */
 async function runGit(cwd: string, args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync('git', args, { cwd, encoding: 'utf-8', maxBuffer: 16 * 1024 * 1024 });
+  const { stdout } = await execFileAsync('git', ['-c', 'core.hooksPath=/dev/null', ...args], {
+    cwd, encoding: 'utf-8', maxBuffer: 16 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+  });
   return stdout.trim();
 }
 
@@ -47,17 +55,23 @@ export async function prepareWorktree(clone: string, dest: string, ref: PrRef, b
   const diffRef = await runGit(clone, ['rev-parse', 'FETCH_HEAD']);
 
   if (existsSync(join(dest, '.git'))) {
-    await runGit(dest, ['checkout', '--detach', '--force', head]);
-  } else {
     try {
-      await runGit(clone, ['worktree', 'add', '--detach', '--force', dest, head]);
-    } catch (err) {
-      // A directory git no longer tracks (after `worktree prune`) blocks `add`; clear and retry.
+      await runGit(dest, ['checkout', '--detach', '--force', head]);
+      return { head, diffRef };
+    } catch {
+      // A directory whose registration in the clone is gone is not a worktree any more, whatever
+      // its .git file says; it is cleared and cut again below.
       await removeWorktree(clone, dest);
-      await runGit(clone, ['worktree', 'add', '--detach', '--force', dest, head]);
-      if (!existsSync(join(dest, '.git'))) {
-        throw err;
-      }
+    }
+  }
+  try {
+    await runGit(clone, ['worktree', 'add', '--detach', '--force', dest, head]);
+  } catch (err) {
+    // A leftover directory blocks `add`; clear it and retry once.
+    await removeWorktree(clone, dest);
+    await runGit(clone, ['worktree', 'add', '--detach', '--force', dest, head]);
+    if (!existsSync(join(dest, '.git'))) {
+      throw err;
     }
   }
   return { head, diffRef };
@@ -78,14 +92,26 @@ async function requireMatchingOrigin(clone: string, ref: PrRef): Promise<void> {
   }
 }
 
-/** Removes the worktree, forcing past a dirty tree — a prepared review leaves none, but a killed agent might. */
+/**
+ * Removes the worktree, forcing past a dirty tree — a prepared review leaves none, but a killed agent
+ * might. The directory is the daemon's own, so it goes whatever git made of it: one git no longer
+ * tracks, or never finished cutting, is deleted outright, and a registration git may still hold for
+ * the path is pruned so the path can be cut again.
+ */
 export async function removeWorktree(clone: string, dest: string): Promise<void> {
-  if (!existsSync(clone) || !existsSync(dest)) {
-    return;
+  if (existsSync(clone) && existsSync(dest)) {
+    try {
+      await runGit(clone, ['worktree', 'remove', '--force', dest]);
+    } catch {
+      // Not a worktree git knows; the directory is dealt with below.
+    }
   }
-  try {
-    await runGit(clone, ['worktree', 'remove', '--force', dest]);
-  } catch {
-    // A worktree git no longer tracks is already as gone as this needs it to be.
+  await rm(dest, { recursive: true, force: true });
+  if (existsSync(clone)) {
+    try {
+      await runGit(clone, ['worktree', 'prune']);
+    } catch {
+      // Nothing to prune is not a failure.
+    }
   }
 }
