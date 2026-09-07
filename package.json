@@ -19,7 +19,7 @@
     "link-dev": "tsx scripts/link-dev.ts",
     "dev": "tsx scripts/dev.ts",
     "test:scripts": "vitest run scripts",
-    "typecheck": "npm run typecheck -w @diffity/parser && npm run typecheck -w @diffity/api && npm run typecheck -w @diffity/git && npm run typecheck -w @diffity/github && npm run typecheck -w @diffity/ui && npm run typecheck -w @naturalcycles/diffity"
+    "typecheck": "npm run typecheck -w @diffity/parser && npm run typecheck -w @diffity/api && npm run typecheck -w @diffity/git && npm run typecheck -w @diffity/github && npm run typecheck -w @diffity/ui && npm run typecheck -w @naturalcycles/diffity && tsc -p tsconfig.scripts.json"
   },
   "keywords": [
     "git",

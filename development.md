@@ -126,6 +126,44 @@ npm run test:watch -w @diffity/parser
 npm run test:watch -w @diffity/ui
 ```
 
+## Comparing review models
+
+`scripts/inbox-compare.ts` re-prepares a pull request the inbox has already reviewed, with a
+different model or effort, and puts the two sets of findings side by side. It is how a change to
+`agent.model` is decided: by what the candidate finds, not by what it costs.
+
+```bash
+npm run build   # the script runs the built CLI, so build first
+npx tsx scripts/inbox-compare.ts NaturalCycles/NCBackend3#14550 --model opus
+npx tsx scripts/inbox-compare.ts NaturalCycles/NCBackend3#14550 --effort medium --out /tmp/14550.md
+```
+
+The baseline is the newest bundle for that pull request under `~/.diffity/inbox/bundles`
+(`--bundles-dir` to look elsewhere, `--head <sha>` to pick an older one). The candidate gets a
+scratch worktree and its own diffity data directory under a fresh temp directory (`--scratch` to
+name it), so nothing is written into `~/.diffity` and a running `diffity inbox` is undisturbed. The
+worktree is removed afterwards unless `--keep` is passed, which leaves it in place so the
+candidate's own review can be opened in the browser. One invocation is one agent run, and it takes
+as long as a real preparation — up to half an hour.
+
+The candidate is pinned to the baseline's head, so a pull request that has moved on since — or has
+merged — can still be compared. An earlier head usually comes along with the pull request's own
+ref; when it does not, it is fetched by sha, which the forge serves for any commit reachable from a
+ref it advertises. A head that was force-pushed away is gone for good, and the run is refused with
+`the baseline's head <sha> is no longer reachable from origin`.
+
+Reading the table: each severity row is `baseline count | reproduced, new`. *Reproduced* means a
+candidate finding landed on the same file with an overlapping line range — a one-line finding
+counts as its line give or take two. *New* counts candidate findings no baseline finding covers;
+some are real, some are noise, which is what the finding list underneath is for. The `cost / time`
+row is the candidate's own run: two models are not comparable on the baseline's, which predates
+the run log. Exit code 0 is a completed comparison, 2 a candidate that skipped or failed, 1 a
+usage error. `--json` prints the same numbers as one object.
+
+The baseline bundles were prepared by the old pipeline, which loaded the reviewer's own settings,
+skills and MCP servers and let the agent run the repository's toolchain. A difference between the
+columns is therefore prompt *and* model, not model alone.
+
 ## CLI Usage (for reference while developing)
 
 ```bash

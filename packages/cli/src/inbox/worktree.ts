@@ -38,8 +38,11 @@ async function runGit(cwd: string, args: string[]): Promise<string> {
  * diff against — the fetched base, so a diffity session over the worktree shows the same change as
  * the pull request without asking the forge anything. Idempotent and self-healing: an existing
  * worktree, even one a killed agent left dirty, is forced to the new head rather than re-created.
+ *
+ * `pinHead` cuts the worktree at that commit instead of wherever the pull request has got to,
+ * which is how a review is re-run against the head an earlier one was written at.
  */
-export async function prepareWorktree(clone: string, dest: string, ref: PrRef, baseRef: string): Promise<{ head: string; diffRef: string }> {
+export async function prepareWorktree(clone: string, dest: string, ref: PrRef, baseRef: string, pinHead?: string): Promise<{ head: string; diffRef: string }> {
   if (!existsSync(clone)) {
     throw new Error(`No local clone at ${clone}. Clone ${ref.owner}/${ref.repo} there first.`);
   }
@@ -49,7 +52,9 @@ export async function prepareWorktree(clone: string, dest: string, ref: PrRef, b
   await requireMatchingOrigin(clone, ref);
 
   await runGit(clone, ['fetch', 'origin', `refs/pull/${ref.number}/head`]);
-  const head = await runGit(clone, ['rev-parse', 'FETCH_HEAD']);
+  const head = pinHead === undefined
+    ? await runGit(clone, ['rev-parse', 'FETCH_HEAD'])
+    : await reachable(clone, pinHead);
   // `refs/heads/` so a tag sharing the branch's name cannot be fetched in its place.
   await runGit(clone, ['fetch', 'origin', `refs/heads/${baseRef}`]);
   const diffRef = await runGit(clone, ['rev-parse', 'FETCH_HEAD']);
@@ -75,6 +80,25 @@ export async function prepareWorktree(clone: string, dest: string, ref: PrRef, b
     }
   }
   return { head, diffRef };
+}
+
+/**
+ * The pinned commit, as a full sha, with the object in the clone. Fetching the pull request's ref
+ * usually brings it along already — an earlier head is an ancestor of a later one unless the branch
+ * was rewritten — and otherwise the forge serves any commit reachable from a ref it advertises, so
+ * it is asked for by sha. A force-push is what puts a commit out of reach for good.
+ */
+async function reachable(clone: string, pinHead: string): Promise<string> {
+  try {
+    await runGit(clone, ['cat-file', '-e', `${pinHead}^{commit}`]);
+  } catch {
+    try {
+      await runGit(clone, ['fetch', 'origin', pinHead]);
+    } catch {
+      throw new Error(`the baseline's head ${pinHead.slice(0, 12)} is no longer reachable from origin (force-pushed?)`);
+    }
+  }
+  return runGit(clone, ['rev-parse', pinHead]);
 }
 
 /** The clone must actually be the pull request's repository, not another of the same name. */
