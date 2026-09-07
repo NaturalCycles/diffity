@@ -24,9 +24,16 @@ export function inboxPage(): string {
   body { margin: 0; background: var(--bg); color: var(--ink);
     font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
   header { display: flex; align-items: baseline; gap: 12px; padding: 20px 24px 8px; }
-  .bell { margin-left: auto; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--ink);
+  .tools { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  .bell { border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--ink);
     font: inherit; font-size: 12px; padding: 4px 10px; cursor: pointer; }
   .bell:hover { border-color: var(--accent); }
+  .reload { border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--ink);
+    font: inherit; font-size: 15px; line-height: 1; width: 28px; height: 28px; cursor: pointer; }
+  .reload:hover { border-color: var(--accent); }
+  .reload:disabled { cursor: default; color: var(--muted); border-color: var(--line); }
+  .reload.spinning { animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
   .badge.alert { color: var(--bad); border: 1px solid var(--bad); }
   .settings { margin-top: 28px; border-top: 1px solid var(--line); padding-top: 14px; }
   .settings summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
@@ -79,7 +86,11 @@ export function inboxPage(): string {
 <header>
   <h1>diffity inbox</h1>
   <span class="sub" id="status">loading…</span>
-  <button class="bell" id="bell" type="button" hidden>🔔 Notify me when a review is ready</button>
+  <span class="tools">
+    <button class="bell" id="bell" type="button" hidden
+      title="Announces a review the moment it turns prepared. What gets announced is in Settings, at the bottom of the page.">Turn on notifications</button>
+    <button class="reload" id="reload" type="button" title="Poll GitHub now">&#x27F3;</button>
+  </span>
 </header>
 <main>
   <section id="ready-section" hidden>
@@ -258,7 +269,30 @@ export function inboxPage(): string {
   function showBell() {
     const bell = el('bell');
     bell.hidden = !('Notification' in window) || Notification.permission !== 'default';
-    bell.onclick = async () => { await Notification.requestPermission(); showBell(); };
+    bell.onclick = async () => {
+      const granted = await Notification.requestPermission() === 'granted';
+      showBell();
+      // The next poll writes over this line, which is as long as the note needs to stay.
+      el('foot').textContent = granted
+        ? 'Notifications on \\u00b7 what gets announced is in Settings, at the bottom of the page'
+        : 'Notifications stay off \\u00b7 allow them in the browser to turn them on';
+    };
+  }
+
+  function showReload(ticking) {
+    const button = el('reload');
+    button.disabled = ticking;
+    button.classList.toggle('spinning', ticking);
+    button.title = ticking ? 'Polling GitHub\\u2026' : 'Poll GitHub now';
+  }
+
+  async function pollNow() {
+    showReload(true);
+    const res = await fetch('/api/tick', { method: 'POST' });
+    if (!res.ok) {
+      el('status').textContent = 'could not start a poll: ' + await res.text();
+    }
+    refresh();
   }
 
   async function loadSettings() {
@@ -309,13 +343,15 @@ export function inboxPage(): string {
       const total = view.ready.length + view.working.length + view.other.length + view.dismissed.length;
       el('all-empty').hidden = total > 0;
       el('status').textContent = view.ready.length + ' ready \\u00b7 ' + view.working.length + ' queued';
-      el('foot').textContent = 'Updated ' + new Date().toLocaleTimeString();
+      showReload(view.ticking === true);
+      el('foot').textContent = 'Updated ' + new Date().toLocaleTimeString() + (view.lastPollAt ? ' \\u00b7 last poll ' + ago(view.lastPollAt) : '');
     } catch (err) {
       el('status').textContent = 'the inbox daemon is not responding';
     }
   }
 
   el('save').onclick = saveSettings;
+  el('reload').onclick = pollNow;
   showBell();
   loadSettings();
   refresh();

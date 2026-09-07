@@ -47,6 +47,22 @@ export interface DaemonOptions {
   configPath?: string;
 }
 
+/** What the page may ask of the daemon beyond the store: park agents, tick, settings, and how the tick is doing. */
+export interface ServerHooks {
+  attendants?: AttendantHost | null;
+  /** A bump wants a tick now, or right after the one in flight. */
+  onBump?: (() => void) | null;
+  /** The page's ⟳: the same tick, asked for by hand. */
+  onTick?: (() => void) | null;
+  settings?: SettingsHost | null;
+  status?: () => DaemonStatus;
+}
+
+export interface DaemonStatus {
+  ticking: boolean;
+  lastPollAt: string | null;
+}
+
 /** The settings as the page reads and writes them: the running config, persisted when a path is known. */
 export interface SettingsHost {
   get(): InboxSettings;
@@ -95,6 +111,7 @@ export async function runDaemon(
 ): Promise<DaemonHandle> {
   let stopping = false;
   let ticking = false;
+  let lastPollAt: string | null = null;
 
   const inflight: Inflight = {};
   const prepareDeps: PrepareDeps = realPrepareDeps(nodePath, entry, inboxDataDir, inflight);
@@ -122,6 +139,7 @@ export async function runDaemon(
       log(`tick failed: ${err instanceof Error ? err.message : err}`);
     } finally {
       ticking = false;
+      lastPollAt = new Date().toISOString();
       if (tickWanted && !stopping) {
         tickWanted = false;
         void tick();
@@ -155,7 +173,9 @@ export async function runDaemon(
     timer = setInterval(() => void tick(), config.pollMinutes * 60_000);
   };
   const settings = settingsHost(config, options.configPath, armPoll);
-  const server = await bindInboxServer(store, config, log, openDeps, attendants, requestTick, settings);
+  const server = await bindInboxServer(store, config, log, openDeps, {
+    attendants, onBump: requestTick, onTick: requestTick, settings, status: () => ({ ticking, lastPollAt }),
+  });
   reclaimLeftoverServers(log);
   armPoll();
   void tick();
@@ -208,7 +228,10 @@ function reclaimLeftoverServers(log: (message: string) => void): void {
   }
 }
 
-export function startInboxServer(store: InboxStore, config: InboxConfig, log: (message: string) => void, openDeps: OpenSessionDeps, attendants: AttendantHost | null = null, onBump: (() => void) | null = null, settings: SettingsHost | null = null): Server {
+export function startInboxServer(store: InboxStore, config: InboxConfig, log: (message: string) => void, openDeps: OpenSessionDeps, hooks: ServerHooks = {}): Server {
+  const attendants = hooks.attendants ?? null;
+  const onBump = hooks.onBump ?? null;
+  const settings = hooks.settings ?? null;
   const server = createServer((req, res) => {
     // The whole handler is guarded: an unhandled throw here (a malformed percent-escape, say) would
     // otherwise have no catch and take the long-running daemon down with it.
@@ -263,8 +286,19 @@ export function startInboxServer(store: InboxStore, config: InboxConfig, log: (m
         });
         return;
       }
+      if (req.method === 'POST' && url === '/api/tick') {
+        if (req.headers['sec-fetch-site'] === 'cross-site') {
+          res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('forbidden');
+          return;
+        }
+        hooks.onTick?.();
+        res.writeHead(204);
+        res.end();
+        return;
+      }
       if (req.method === 'GET' && (url === '/api/inbox' || url === '/api/inbox/')) {
-        const view = buildView(store, openBase, new Date().toISOString());
+        const view = { ...buildView(store, openBase, new Date().toISOString()), ...(hooks.status?.() ?? { ticking: false, lastPollAt: null }) };
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(view));
         return;
@@ -434,7 +468,7 @@ function isLocalHost(host: string | undefined, port: number | undefined): boolea
 }
 
 /** Resolves once the port is held; a clash exits through the server's own error handler first. */
-function bindInboxServer(store: InboxStore, config: InboxConfig, log: (message: string) => void, openDeps: OpenSessionDeps, attendants: AttendantHost | null, onBump: () => void, settings: SettingsHost): Promise<Server> {
-  const server = startInboxServer(store, config, log, openDeps, attendants, onBump, settings);
+function bindInboxServer(store: InboxStore, config: InboxConfig, log: (message: string) => void, openDeps: OpenSessionDeps, hooks: ServerHooks): Promise<Server> {
+  const server = startInboxServer(store, config, log, openDeps, hooks);
   return new Promise(resolve => server.once('listening', () => resolve(server)));
 }

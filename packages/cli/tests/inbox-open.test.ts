@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { resolveDismiss, resolveOpen } from '../src/inbox/open.js';
 import { openPreparedSession, baseRefOf, ensureServer, repoHash, serverArgs, type OpenSessionDeps } from '../src/inbox/open-session.js';
-import { startInboxServer, settingsHost, type AttendantHost } from '../src/inbox/daemon.js';
+import { startInboxServer, settingsHost, type AttendantHost, type ServerHooks } from '../src/inbox/daemon.js';
 import { InboxStore } from '../src/inbox/store.js';
 import { readRegistry, registerInstance } from '../src/registry.js';
 import type { PrSnapshot } from '@diffity/github';
@@ -215,9 +215,9 @@ describe('the inbox server routes', () => {
     importBundle: () => {},
   };
 
-  async function serve(store: InboxStore, logs: string[] = [], attendants: AttendantHost | null = null, onBump: (() => void) | null = null, configPath?: string) {
+  async function serve(store: InboxStore, logs: string[] = [], attendants: AttendantHost | null = null, onBump: (() => void) | null = null, configPath?: string, extra: Partial<ServerHooks> = {}) {
     const config = { pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', alertWhen: '', prepare: ['x'], prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10 };
-    const server = startInboxServer(store, config, m => logs.push(m), stubOpen, attendants, onBump, settingsHost(config, configPath));
+    const server = startInboxServer(store, config, m => logs.push(m), stubOpen, { attendants, onBump, settings: settingsHost(config, configPath), ...extra });
     await new Promise(resolve => server.on('listening', resolve));
     const { port } = server.address() as { port: number };
     return { port, server };
@@ -363,6 +363,34 @@ describe('the inbox server routes', () => {
       expect(bad.status).toBe(400);
       const driveBy = await rawStatus(port, 'POST', '/api/settings', { Host: `127.0.0.1:${port}`, 'Sec-Fetch-Site': 'cross-site' });
       expect(driveBy).toBe(403);
+    } finally {
+      server.close();
+      store.close();
+    }
+  });
+
+  it('polls now on POST /api/tick and tells the page how the tick is doing', async () => {
+    const store = preparedStore();
+    let ticks = 0;
+    let ticking = false;
+    const { port, server } = await serve(store, [], null, null, undefined, {
+      onTick: () => { ticks++; ticking = true; },
+      status: () => ({ ticking, lastPollAt: ticking ? null : '2026-09-07T10:00:00Z' }),
+    });
+    try {
+      const before = await (await fetch(`http://127.0.0.1:${port}/api/inbox`)).json();
+      expect(before.ticking).toBe(false);
+      expect(before.lastPollAt).toBe('2026-09-07T10:00:00Z');
+
+      const res = await fetch(`http://127.0.0.1:${port}/api/tick`, { method: 'POST' });
+      expect(res.status).toBe(204);
+      expect(ticks).toBe(1);
+      const during = await (await fetch(`http://127.0.0.1:${port}/api/inbox`)).json();
+      expect(during.ticking).toBe(true);
+
+      const driveBy = await rawStatus(port, 'POST', '/api/tick', { Host: `127.0.0.1:${port}`, 'Sec-Fetch-Site': 'cross-site' });
+      expect(driveBy).toBe(403);
+      expect(ticks).toBe(1);
     } finally {
       server.close();
       store.close();

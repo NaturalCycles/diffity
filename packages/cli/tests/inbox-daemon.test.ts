@@ -94,10 +94,14 @@ describe('runDaemon singleton and reclaim ordering', () => {
     const store = new InboxStore(join(root, 'inbox', 'inbox.sqlite'));
     const handle = await runDaemon(store, config(6004), process.execPath, 'unused-entry', () => {}, { forge: emptyForge });
     try {
+      await settle();
       const res = await fetch('http://127.0.0.1:6004/api/inbox');
       const body = await res.json();
       expect(res.status).toBe(200);
       expect(body).toHaveProperty('ready');
+      // The first tick has run by now: not ticking, and it says when it polled.
+      expect(body.ticking).toBe(false);
+      expect(typeof body.lastPollAt).toBe('string');
     } finally {
       await handle.stop();
     }
