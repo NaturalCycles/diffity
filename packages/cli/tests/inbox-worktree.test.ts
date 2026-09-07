@@ -83,6 +83,17 @@ describe('prepareWorktree', () => {
 });
 
 describe('removeWorktree', () => {
+  it('refuses to delete a repository of its own, or the clone', async () => {
+    const repo = join(root, 'worktrees', 'somebody-elses-repo');
+    execFileSync('git', ['init', '-q', repo], { stdio: 'pipe' });
+    writeFileSync(join(repo, 'precious.txt'), 'keep\n');
+    await expect(removeWorktree(clone, repo)).rejects.toThrow(/refusing to delete/);
+    expect(existsSync(join(repo, 'precious.txt'))).toBe(true);
+
+    await expect(removeWorktree(clone, clone)).rejects.toThrow(/refusing to delete/);
+    expect(existsSync(join(clone, 'a.ts'))).toBe(true);
+  });
+
   it('removes a worktree git knows, and a directory it does not', async () => {
     await prepareWorktree(clone, dest, ref, 'main');
     await removeWorktree(clone, dest);

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync, statSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -93,13 +93,36 @@ async function requireMatchingOrigin(clone: string, ref: PrRef): Promise<void> {
 }
 
 /**
+ * Only what a linked worktree or its debris can be is deleted: a directory whose `.git` is a file
+ * (the pointer a linked worktree carries) or absent. A `.git` directory is a repository in its own
+ * right — the clone, or something a misconfigured worktreesDir points at — and is never touched.
+ */
+function isDisposable(clone: string, dest: string): boolean {
+  try {
+    if (existsSync(clone) && realpathSync(clone) === realpathSync(dest)) {
+      return false;
+    }
+    const gitEntry = join(dest, '.git');
+    return !existsSync(gitEntry) || statSync(gitEntry).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Removes the worktree, forcing past a dirty tree — a prepared review leaves none, but a killed agent
  * might. The directory is the daemon's own, so it goes whatever git made of it: one git no longer
  * tracks, or never finished cutting, is deleted outright, and a registration git may still hold for
  * the path is pruned so the path can be cut again.
  */
 export async function removeWorktree(clone: string, dest: string): Promise<void> {
-  if (existsSync(clone) && existsSync(dest)) {
+  if (!existsSync(dest)) {
+    return;
+  }
+  if (!isDisposable(clone, dest)) {
+    throw new Error(`${dest} is a repository of its own, not a worktree cut by the inbox; refusing to delete it.`);
+  }
+  if (existsSync(clone)) {
     try {
       await runGit(clone, ['worktree', 'remove', '--force', dest]);
     } catch {
