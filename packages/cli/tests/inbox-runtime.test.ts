@@ -1,8 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
-import { realAttendantDeps, runAgent, startDiffityServer } from '../src/inbox/runtime.js';
+
+const ENTRY = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'index.js');
+import { realAttendantDeps, realPrepareDeps, runAgent, startDiffityServer } from '../src/inbox/runtime.js';
+import { generalCommentIdOf, threadsToValidate } from '../src/inbox/validate.js';
 import type { AttendedPr } from '../src/inbox/attendant.js';
 import type { InboxConfig } from '../src/inbox/config.js';
 import type { RunRecord } from '../src/inbox/store.js';
@@ -14,7 +19,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  rmSync(root, { recursive: true, force: true });
+  // A test that started a real diffity server may still be losing it: the process writes to its
+  // data directory until the signal lands, and a plain rm walks into what it is still writing.
+  rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 function attendedPr(): AttendedPr {
@@ -25,6 +32,7 @@ function liveConfig(): InboxConfig {
   return {
     pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', alertWhen: '', alertPaths: [],
     agent: { model: 'the-configured-model', effort: null, mcpAllow: [], extraArgs: [], maxBudgetUsd: null },
+    validate: { model: null, timeoutMinutes: 15, maxBudgetUsd: null },
     waitForCi: false, prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10,
   };
 }
@@ -150,6 +158,30 @@ describe('realAttendantDeps', () => {
     expect(argv[at + 1]).toBe('# Diffity Live Skill\n\nAnswer it.\n');
   });
 
+  it('answers with the checking model when one is set, and logs it as the model asked for', async () => {
+    // A question is about a finding, so the pass that checks findings is the one that answers.
+    mkdirSync(join(root, 'skills', 'diffity-live'), { recursive: true });
+    writeFileSync(join(root, 'skills', 'diffity-live', 'SKILL.md'), '---\nname: diffity-live\n---\n\nAnswer it.\n');
+    const argvPath = join(root, 'argv.json');
+    const dump = join(root, 'dump.cjs');
+    writeFileSync(dump, `require('fs').writeFileSync(${JSON.stringify(argvPath)}, JSON.stringify(process.argv.slice(2)));\n`);
+    const bin = join(root, 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, 'claude'), `#!/bin/sh\nexec '${process.execPath}' '${dump}' "$@"\n`, { mode: 0o755 });
+
+    const config = { ...liveConfig(), validate: { model: 'the-checking-model', timeoutMinutes: 15, maxBudgetUsd: 9 } };
+    const runs: RunRecord[] = [];
+    const deps = realAttendantDeps(process.execPath, join(root, 'index.js'), config, () => join(root, 'live.log'), () => {}, run => runs.push(run));
+
+    await withStandInAgent(bin, () => deps.answer(root, attendedPr(), 'the live prompt\n', new AbortController().signal).then(() => {}));
+
+    const argv = JSON.parse(readFileSync(argvPath, 'utf-8')) as string[];
+    expect(argv[argv.indexOf('--model') + 1]).toBe('the-checking-model');
+    // The answer keeps the drafting budget: validate.maxBudgetUsd is for the checking pass only.
+    expect(argv).not.toContain('--max-budget-usd');
+    expect(runs[0]).toMatchObject({ phase: 'answer', model: 'the-checking-model' });
+  });
+
   it('logs the answer as a run against the pull request it was asked about', async () => {
     mkdirSync(join(root, 'skills', 'diffity-live'), { recursive: true });
     writeFileSync(join(root, 'skills', 'diffity-live', 'SKILL.md'), '---\nname: diffity-live\n---\n\nAnswer it.\n');
@@ -217,6 +249,64 @@ describe('startDiffityServer', () => {
     ).rejects.toThrow(/did not start/);
   });
 });
+
+describe('the real listThreads', () => {
+  it('reads the findings a diffity session over the worktree holds', async () => {
+    const repo = join(root, 'repo');
+    const dataDir = join(root, 'pr-data');
+    execFileSync('git', ['init', '-b', 'main', repo], { stdio: 'pipe' });
+    execFileSync('git', ['config', 'user.email', 't@t'], { cwd: repo, stdio: 'pipe' });
+    execFileSync('git', ['config', 'user.name', 'T'], { cwd: repo, stdio: 'pipe' });
+    writeFileSync(join(repo, 'a.ts'), 'const a = 1;\n');
+    execFileSync('git', ['add', '.'], { cwd: repo, stdio: 'pipe' });
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: repo, stdio: 'pipe' });
+    execFileSync('git', ['checkout', '-q', '-b', 'work'], { cwd: repo, stdio: 'pipe' });
+    writeFileSync(join(repo, 'a.ts'), 'const a = 1;\nconst token = leak();\n');
+    execFileSync('git', ['commit', '-qam', 'change'], { cwd: repo, stdio: 'pipe' });
+
+    const server = await startDiffityServer(process.execPath, ENTRY, repo, 'main', dataDir, 20_000);
+    try {
+      const agent = (args: string[]) => execFileSync(process.execPath, [ENTRY, '--repo', repo, 'agent', ...args], {
+        stdio: 'pipe', env: { ...process.env, DIFFITY_DATA_DIR: dataDir },
+      });
+      agent(['comment', '--file', 'a.ts', '--line', '2', '--body', 'P1: this leaks the token']);
+      agent(['general-comment', '--body', 'Looks risky, 1 P1']);
+
+      const deps = realPrepareDeps(process.execPath, ENTRY, () => dataDir, liveConfig(), () => {});
+      const threads = await deps.listThreads(repo);
+
+      const finding = threads.find(thread => thread.filePath === 'a.ts');
+      expect(finding).toBeDefined();
+      expect(finding).toMatchObject({ startLine: 2, endLine: 2, side: 'new', status: 'open' });
+      expect(finding!.threadId).toMatch(/\w/);
+      expect(finding!.comments[0]).toMatchObject({ body: 'P1: this leaks the token' });
+      expect(finding!.comments[0].id).toMatch(/\w/);
+      expect(threadsToValidate(threads).map(thread => thread.threadId)).toEqual([finding!.threadId]);
+      expect(generalCommentIdOf(threads)).toMatch(/\w/);
+    } finally {
+      server.stop();
+      await gone(dataDir);
+    }
+  }, 40_000);
+});
+
+/** Waits for the server registered in a data directory to be gone, so its files stop moving. */
+async function gone(dataDir: string, waitMs = 10_000): Promise<void> {
+  const registry = join(dataDir, 'registry.json');
+  const deadline = Date.now() + waitMs;
+  while (Date.now() < deadline) {
+    const rows = (() => {
+      try { return JSON.parse(readFileSync(registry, 'utf-8')) as { pid: number }[]; } catch { return []; }
+    })();
+    const alive = rows.filter(row => {
+      try { process.kill(row.pid, 0); return true; } catch { return false; }
+    });
+    if (alive.length === 0) {
+      return;
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+}
 
 // Helpers kept below the tests they serve.
 import { writeFileSync } from 'node:fs';

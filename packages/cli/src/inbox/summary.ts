@@ -16,11 +16,15 @@ export function severityOf(body: string): string {
   return match[1] ? match[1].toUpperCase() : match[2].toLowerCase();
 }
 
-/** "1 P1 · 2 P2", counting each finding thread by the severity it opens with; the general summary is not a finding. */
-export function summarizeFindings(threads: Pick<BundleThread, 'filePath' | 'comments'>[]): string {
+/**
+ * "1 P1 · 2 P2", counting each finding thread by the severity it opens with. The general summary is
+ * not a finding, and a thread the checking pass dismissed or resolved is not one the reviewer has
+ * left to act on.
+ */
+export function summarizeFindings(threads: Pick<BundleThread, 'filePath' | 'status' | 'comments'>[]): string {
   const counts = new Map<string, number>();
   for (const thread of threads) {
-    if (thread.filePath === GENERAL_THREAD_FILE_PATH) {
+    if (thread.filePath === GENERAL_THREAD_FILE_PATH || thread.status !== 'open') {
       continue;
     }
     const finding = thread.comments.find(comment => comment.kind === 'review') ?? thread.comments[0];

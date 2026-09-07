@@ -65,6 +65,7 @@ function deps(over: Partial<TickDeps> = {}): TickDeps {
     waitForCi: false,
     alertPaths: [],
     agentModel: 'the-configured-model',
+    validateModel: 'the-checking-model',
     pauseUntil: until => { pauses.push(until); },
     ...over,
   };
@@ -81,6 +82,7 @@ beforeEach(() => {
     kind: 'prepared', headSha: snap.headSha, bundlePath: `/b/${snap.number}.json`,
     worktree: `/wt/${snap.number}`, logPath: `/l/${snap.number}.log`, at: '2026-09-02T12:00:00.000Z',
     summary: '1 P2', alert: snap.number === 2 ? 'touches auth' : null, run: run(),
+    validation: 'not-needed', validateRun: null,
   });
 });
 
@@ -404,11 +406,56 @@ describe('runTick', () => {
     expect(store.runs({}).map(row => row.outcome)).toEqual(['timeout', 'skipped']);
   });
 
+  it('logs the pass that checked the draft beside the one that drafted it', async () => {
+    forge.set(snapshot());
+    const logged: string[] = [];
+    prepareResult = snap => ({
+      kind: 'prepared', headSha: snap.headSha, bundlePath: '/b.json', worktree: '/wt', logPath: '/l.log',
+      at: '2026-09-02T12:00:00.000Z', summary: '1 P1', alert: null, run: run(),
+      validation: 'validated',
+      validateRun: {
+        startedAt: '2026-09-02T12:00:00.000Z', endedAt: '2026-09-02T12:03:00.000Z',
+        stats: null, outcome: 'validated', note: null,
+      },
+    });
+    await runTick(store, deps({ log: message => { logged.push(message); } }));
+
+    const runs = store.runs({});
+    expect(runs.map(row => [row.phase, row.outcome, row.model])).toEqual([
+      ['validate', 'validated', 'the-checking-model'],
+      ['prepare', 'prepared', 'claude-x'],
+    ]);
+    expect(runs.find(row => row.phase === 'validate')).toMatchObject({ headSha: 'aaa', durationMs: 180_000, note: null });
+    expect(logged.some(line => line.includes('unchecked'))).toBe(false);
+  });
+
+  it('logs an unchecked draft with the reason, and still marks it prepared', async () => {
+    forge.set(snapshot());
+    const logged: string[] = [];
+    prepareResult = snap => ({
+      kind: 'prepared', headSha: snap.headSha, bundlePath: '/b.json', worktree: '/wt', logPath: '/l.log',
+      at: '2026-09-02T12:00:00.000Z', summary: '1 P1 \u00b7 unchecked', alert: null, run: run(),
+      validation: 'unchecked',
+      validateRun: {
+        startedAt: '2026-09-02T12:00:00.000Z', endedAt: '2026-09-02T12:15:00.000Z', stats: null,
+        outcome: 'timeout', note: 'the checking agent did not finish within 15 minutes',
+      },
+    });
+    await runTick(store, deps({ log: message => { logged.push(message); } }));
+
+    expect(store.get('o/r#1')?.status).toBe('prepared');
+    expect(store.get('o/r#1')?.summary).toBe('1 P1 \u00b7 unchecked');
+    expect(store.runs({}).find(row => row.phase === 'validate'))
+      .toMatchObject({ outcome: 'timeout', note: 'the checking agent did not finish within 15 minutes' });
+    expect(logged).toContain('o/r#1: the drafted findings went unchecked \u2014 the checking agent did not finish within 15 minutes');
+  });
+
   it('records the configured model when the run did not say which it used', async () => {
     forge.set(snapshot());
     prepareResult = snap => ({
       kind: 'prepared', headSha: snap.headSha, bundlePath: '/b.json', worktree: '/wt', logPath: '/l.log',
       at: '2026-09-02T12:00:00.000Z', summary: null, alert: null, run: run({ stats: null }),
+      validation: 'not-needed', validateRun: null,
     });
     await runTick(store, deps());
 

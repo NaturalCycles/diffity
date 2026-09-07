@@ -4,16 +4,22 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { preparePr, type PrepareDeps } from '../src/inbox/prepare.js';
+import type { ReviewThread } from '../src/inbox/validate.js';
 import { worktreePath } from '../src/inbox/worktree.js';
 import { startInboxServer } from '../src/inbox/daemon.js';
 import { InboxStore } from '../src/inbox/store.js';
 import { buildView } from '../src/inbox/view.js';
-import type { AgentConfig, InboxConfig } from '../src/inbox/config.js';
+import type { AgentConfig, InboxConfig, ValidateConfig } from '../src/inbox/config.js';
 import type { PrSnapshot } from '@diffity/github';
 
 /** The built-in agent settings, fresh each call so a test cannot leak into the next. */
 function agentConfig(): AgentConfig {
   return { model: null, effort: null, mcpAllow: [], extraArgs: [], maxBudgetUsd: null };
+}
+
+/** The second pass off, as it ships; a test that wants it names its own model. */
+function validateConfig(): ValidateConfig {
+  return { model: null, timeoutMinutes: 15, maxBudgetUsd: null };
 }
 
 let root: string;
@@ -36,7 +42,7 @@ function snapshot(): PrSnapshot {
 function config(): InboxConfig {
   return {
     pollMinutes: 5, port: 0, reposDir, worktreesDir, filter: '', alertWhen: '', alertPaths: [],
-    agent: agentConfig(), waitForCi: false, prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10,
+    agent: agentConfig(), validate: validateConfig(), waitForCi: false, prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10,
   };
 }
 
@@ -68,16 +74,43 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
+beforeEach(() => {
+  prompts = [];
+  argvs = [];
+  logs = [];
+  timeouts = [];
+});
+
 let prompts: string[] = [];
 let argvs: string[][] = [];
+let logs: string[] = [];
+let timeouts: number[] = [];
+
+/** A drafted P1 finding, as `listThreads` reports one. */
+function draftedThread(over: Partial<ReviewThread> = {}): ReviewThread {
+  return {
+    threadId: 't1', filePath: 'a.ts', startLine: 1, endLine: 1, side: 'new', status: 'open',
+    comments: [{ id: 'c1', body: 'P1: this leaks the token' }],
+    ...over,
+  };
+}
+
+/** The second pass on, with a model and a budget of its own. */
+function checking(): InboxConfig {
+  return { ...config(), validate: { model: 'the-checking-model', timeoutMinutes: 15, maxBudgetUsd: 2 } };
+}
 
 function deps(over: Partial<PrepareDeps> = {}): PrepareDeps {
   return {
     startServer: () => Promise.resolve({ port: 5555, stop: () => {} }),
     agentArgv: () => ['claude', '-p', '--output-format', 'json'],
-    runAgent: ({ cwd, prompt, argv }) => {
+    validateArgv: () => ['claude', '-p', '--model', 'the-checking-model'],
+    listThreads: () => Promise.resolve([]),
+    runAgent: ({ cwd, prompt, argv, logPath, timeoutMs }) => {
       prompts.push(prompt);
       argvs.push(argv);
+      logs.push(logPath);
+      timeouts.push(timeoutMs);
       // The worktree exists and holds the checked-out file by the time the agent runs.
       expect(existsSync(join(cwd, 'a.ts'))).toBe(true);
       return Promise.resolve({ stdout: 'reviewing\nPREPARED\n', timedOut: false });
@@ -221,6 +254,133 @@ describe('preparePr', () => {
       .toEqual(['rate-limit', 'waiting: Claude session limit, retrying in 30 minutes', null]);
   });
 
+  it('does not run a second pass when no model is set for it', async () => {
+    let listed = 0;
+    const result = await preparePr(snapshot(), config(), deps({ listThreads: () => { listed++; return Promise.resolve([]); } }));
+
+    expect(result.kind === 'prepared' && [result.validation, result.validateRun]).toEqual(['not-needed', null]);
+    expect(argvs).toEqual([['claude', '-p', '--output-format', 'json']]);
+    // The threads are not even read: nothing would be done with them.
+    expect(listed).toBe(0);
+  });
+
+  it('does not run a second pass when the draft found no P1 or P2', async () => {
+    const result = await preparePr(snapshot(), checking(), deps({
+      listThreads: () => Promise.resolve([draftedThread({ comments: [{ id: 'c1', body: 'P3: a nit' }] })]),
+    }));
+
+    expect(result.kind === 'prepared' && result.validation).toBe('not-needed');
+    expect(argvs).toHaveLength(1);
+  });
+
+  it('checks the P1 and P2 findings with the checking command, and takes VALIDATED for done', async () => {
+    const result = await preparePr(snapshot(), checking(), deps({
+      listThreads: () => Promise.resolve([
+        draftedThread(),
+        draftedThread({ threadId: 'g', filePath: '__general__', comments: [{ id: 'gc', body: 'Looks good, 1 P1' }] }),
+      ]),
+      runAgent: ({ argv, prompt, logPath, timeoutMs }) => {
+        argvs.push(argv);
+        prompts.push(prompt);
+        logs.push(logPath);
+        timeouts.push(timeoutMs);
+        return Promise.resolve({ stdout: argvs.length === 1 ? 'reviewing\nPREPARED\n' : 'checked it\nVALIDATED\n', timedOut: false });
+      },
+      exportBundle: ({ outPath }) => {
+        mkdirSync(dirname(outPath), { recursive: true });
+        writeFileSync(outPath, JSON.stringify({ threads: [{ filePath: 'a.ts', status: 'open', comments: [{ body: 'P1: bad', kind: 'review' }] }] }));
+      },
+    }));
+
+    expect(result.kind === 'prepared' && result.validation).toBe('validated');
+    expect(result.kind === 'prepared' && result.validateRun?.outcome).toBe('validated');
+    expect(result.kind === 'prepared' && result.validateRun?.note).toBeNull();
+    // The summary is the bundle's own: a checked draft says nothing about having been checked.
+    expect(result.kind === 'prepared' && result.summary).toBe('1 P1');
+    expect(argvs[1]).toEqual(['claude', '-p', '--model', 'the-checking-model']);
+    expect(prompts[1]).toContain('--- thread t1');
+    expect(prompts[1]).toContain('    comment c1');
+    expect(prompts[1]).toContain('its comment id is\n  gc');
+    // Its own log beside the drafting agent's, and its own timeout.
+    expect(logs[1]).toBe(logs[0].replace(/\.log$/, '.validate.log'));
+    expect(timeouts).toEqual([30 * 60_000, 15 * 60_000]);
+  });
+
+  it('drops a finding the checking pass dismissed from the summary the card shows', async () => {
+    const result = await preparePr(snapshot(), checking(), deps({
+      listThreads: () => Promise.resolve([draftedThread()]),
+      runAgent: ({ argv }) => {
+        argvs.push(argv);
+        return Promise.resolve({ stdout: argvs.length === 1 ? 'PREPARED\n' : 'VALIDATED\n', timedOut: false });
+      },
+      // The bundle keeps a dismissed thread, so the count has to read its status.
+      exportBundle: ({ outPath }) => {
+        mkdirSync(dirname(outPath), { recursive: true });
+        writeFileSync(outPath, JSON.stringify({ threads: [
+          { filePath: 'a.ts', status: 'dismissed', comments: [{ body: 'P1: this does not hold', kind: 'review' }] },
+          { filePath: 'a.ts', status: 'open', comments: [{ body: 'P3: a nit', kind: 'review' }] },
+        ] }));
+      },
+    }));
+
+    expect(result.kind === 'prepared' && result.summary).toBe('1 P3');
+  });
+
+  it('keeps the draft and marks it unchecked when the checking agent times out', async () => {
+    const result = await preparePr(snapshot(), checking(), deps({
+      listThreads: () => Promise.resolve([draftedThread()]),
+      runAgent: ({ argv }) => {
+        argvs.push(argv);
+        return argvs.length === 1
+          ? Promise.resolve({ stdout: 'PREPARED\n', timedOut: false })
+          : Promise.resolve({ stdout: '', timedOut: true });
+      },
+      exportBundle: ({ outPath }) => {
+        mkdirSync(dirname(outPath), { recursive: true });
+        writeFileSync(outPath, JSON.stringify({ threads: [{ filePath: 'a.ts', status: 'open', comments: [{ body: 'P1: bad', kind: 'review' }] }] }));
+      },
+    }));
+
+    expect(result.kind).toBe('prepared');
+    if (result.kind !== 'prepared') return;
+    expect(result.validation).toBe('unchecked');
+    expect(result.summary).toBe('1 P1 \u00b7 unchecked');
+    expect(result.validateRun?.outcome).toBe('timeout');
+    expect(result.validateRun?.note).toContain('did not finish within 15 minutes');
+    // The draft is still on disk, and the worktree still there to open.
+    expect(existsSync(result.bundlePath)).toBe(true);
+    expect(existsSync(result.worktree)).toBe(true);
+  });
+
+  it('marks the draft unchecked on a verdictless run, a budget, a session limit, and a broken listing', async () => {
+    const checked = async (over: Partial<PrepareDeps>) => {
+      const result = await preparePr(snapshot(), checking(), deps({ listThreads: () => Promise.resolve([draftedThread()]), ...over }));
+      return result.kind === 'prepared' ? [result.validation, result.validateRun?.outcome, result.validateRun?.note] : ['not prepared'];
+    };
+    const secondRun = (stdout: string) => ({
+      runAgent: ({ argv }: { argv: string[] }) => {
+        argvs.push(argv);
+        return Promise.resolve({ stdout: argvs.length === 1 ? 'PREPARED\n' : stdout, timedOut: false });
+      },
+    });
+
+    argvs = [];
+    expect(await checked(secondRun('had a look and stopped\n')))
+      .toEqual(['unchecked', 'failed', 'the checking agent ended without VALIDATED']);
+
+    argvs = [];
+    expect(await checked(secondRun(JSON.stringify({ type: 'result', subtype: 'error_max_budget_usd', result: '', is_error: true }))))
+      .toEqual(['unchecked', 'failed', 'the checking agent hit its budget of $2']);
+
+    argvs = [];
+    expect(await checked(secondRun("You've hit your session limit \u00b7 resets 2pm\n")))
+      .toEqual(['unchecked', 'failed', 'the checking agent hit the Claude session limit']);
+
+    argvs = [];
+    expect(await checked({ listThreads: () => Promise.reject(new Error('no session')) }))
+      .toEqual(['unchecked', 'failed', 'the findings could not be checked: no session']);
+  });
+
   it('always stops the diffity server, even on a failure', async () => {
     let stopped = 0;
     await preparePr(snapshot(), config(), deps({
@@ -295,6 +455,34 @@ describe('the inbox JSON server', () => {
     store.close();
   });
 
+  it('lists the checking pass beside the drafting one on the card\'s hover', async () => {
+    const store = new InboxStore(':memory:');
+    store.observe({ ...snapshot(), headSha: 'aaa' }, true, 'now');
+    store.markPrepared('o/demo#4', { headSha: 'aaa', bundlePath: '/b.json', worktreePath: '/wt', logPath: '/l', at: 'now', summary: '1 P1', alert: null });
+    const base = {
+      prId: 'o/demo#4', headSha: 'aaa', inputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0, note: null,
+    };
+    store.recordRun({
+      ...base, phase: 'prepare', model: 'claude-draft', startedAt: '2026-09-07T12:00:00.000Z',
+      endedAt: '2026-09-07T12:08:00.000Z', durationMs: 480_000, turns: 12, costUsd: 1.2,
+      outputTokens: 27_000, outcome: 'prepared',
+    });
+    store.recordRun({
+      ...base, phase: 'validate', model: 'claude-check', startedAt: '2026-09-07T12:08:00.000Z',
+      endedAt: '2026-09-07T12:11:00.000Z', durationMs: 180_000, turns: 4, costUsd: 0.8,
+      outputTokens: 3000, outcome: 'validated',
+    });
+
+    const spend = buildView(store, 'http://localhost:5390', 'now').ready[0].spend;
+
+    expect(spend).toEqual({
+      minutes: 11,
+      costUsd: 2,
+      detail: 'prepare \u00b7 claude-draft \u00b7 12 turns \u00b7 out 27k \u00b7 read 0\nvalidate \u00b7 claude-check \u00b7 4 turns \u00b7 out 3k \u00b7 read 0',
+    });
+    store.close();
+  });
+
   it('sets the filter aside for a bumped pull request', async () => {
     prompts = [];
     const withFilter = { ...config(), filter: 'Skip payments-focused PRs' };
@@ -312,8 +500,8 @@ describe('the inbox JSON server', () => {
       exportBundle: ({ outPath }) => {
         mkdirSync(dirname(outPath), { recursive: true });
         writeFileSync(outPath, JSON.stringify({ threads: [
-          { filePath: 'a.ts', comments: [{ body: 'P1: bad', kind: 'review' }] },
-          { filePath: 'a.ts', comments: [{ body: 'P2: meh', kind: 'review' }] },
+          { filePath: 'a.ts', status: 'open', comments: [{ body: 'P1: bad', kind: 'review' }] },
+          { filePath: 'a.ts', status: 'open', comments: [{ body: 'P2: meh', kind: 'review' }] },
         ] }));
       },
     }));

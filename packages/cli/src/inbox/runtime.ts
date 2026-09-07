@@ -9,6 +9,7 @@ import { buildAgentArgv, skillBody } from './agent-argv.js';
 import { parseAgentOutput } from './agent-output.js';
 import { parseAwaitOutcome, type AttendantDeps } from './attendant.js';
 import { runRecordOf, type RunRecord } from './store.js';
+import { parseThreadList, type ReviewThread } from './validate.js';
 import { diffityDir } from '../registry.js';
 
 /**
@@ -34,7 +35,15 @@ export function realPrepareDeps(nodePath: string, entry: string, dataDirFor: (wo
       return { port: handle.port, stop: () => { handle.stop(); inflight.serverStop = undefined; } };
     },
     agentArgv: () => buildAgentArgv({ nodePath, entry, agent: config.agent, systemPrompt: skillBody(entry, 'diffity-review', log) }),
+    // No review skill: this pass checks findings that are already written, and is told how in its
+    // prompt rather than sent to review the diff again.
+    validateArgv: () => buildAgentArgv({
+      nodePath, entry,
+      agent: { ...config.agent, model: config.validate.model, maxBudgetUsd: config.validate.maxBudgetUsd },
+      systemPrompt: null,
+    }),
     runAgent: opts => runAgent(opts, dataDirFor(opts.cwd), config.agent.mcpAllow, inflight),
+    listThreads: worktree => listThreads(nodePath, entry, worktree, dataDirFor(worktree)),
     exportBundle: opts => exportBundle(nodePath, entry, opts, dataDirFor(opts.worktree)),
     now: () => new Date().toISOString(),
   };
@@ -245,11 +254,13 @@ export function realAttendantDeps(
       const onAbort = () => inflight.agentKill?.();
       signal.addEventListener('abort', onAbort, { once: true });
       const startedAt = new Date().toISOString();
+      // A question is about a finding, which is the checking model's job when one is set.
+      const model = config.validate.model ?? config.agent.model;
       try {
         const { stdout, timedOut } = await runAgent({
           // The live skill, not the review one: the live prompt tells the agent to follow it, and
           // the agent runs with none of the reviewer's installed skills to find it in.
-          argv: buildAgentArgv({ nodePath, entry, agent: config.agent, systemPrompt: skillBody(entry, 'diffity-live', log) }),
+          argv: buildAgentArgv({ nodePath, entry, agent: { ...config.agent, model }, systemPrompt: skillBody(entry, 'diffity-live', log) }),
           prompt, cwd: worktree, logPath: logPathFor(worktree),
           timeoutMs: config.liveTimeoutMinutes * 60_000, appendLog: true,
         }, diffityDir(), config.agent.mcpAllow, inflight);
@@ -264,7 +275,7 @@ export function realAttendantDeps(
           prId: pr.id, headSha: pr.headSha, phase: 'answer',
           outcome: stopped || stats?.isError ? 'failed' : timedOut ? 'timeout' : 'answered',
           note: stopped ? 'stopped before it answered' : null,
-          startedAt, endedAt: new Date().toISOString(), stats, configModel: config.agent.model,
+          startedAt, endedAt: new Date().toISOString(), stats, configModel: model,
         }));
         return { timedOut };
       } finally {
@@ -288,6 +299,17 @@ function killGroup(pid: number | undefined, signal: NodeJS.Signals): void {
   try { process.kill(-pid, signal); } catch {
     try { process.kill(pid, signal); } catch { /* already gone */ }
   }
+}
+
+/** Every thread of the prepared session, read out of the pull request's own diffity data directory. */
+async function listThreads(nodePath: string, entry: string, worktree: string, dataDir: string): Promise<ReviewThread[]> {
+  const { stdout } = await promisify(execFile)(
+    nodePath,
+    [entry, '--repo', worktree, 'agent', 'list', '--json'],
+    // A review's findings, bodies and all, come back on stdout; the 1 MB default is not enough.
+    { env: { ...process.env, DIFFITY_DATA_DIR: dataDir }, maxBuffer: 64 * 1024 * 1024 },
+  );
+  return parseThreadList(stdout);
 }
 
 async function exportBundle(nodePath: string, entry: string, opts: ExportOpts, dataDir: string): Promise<void> {

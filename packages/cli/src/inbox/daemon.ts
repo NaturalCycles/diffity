@@ -78,7 +78,7 @@ export function settingsHost(config: InboxConfig, configPath: string | undefined
       filter: config.filter, alertWhen: config.alertWhen, alertPaths: config.alertPaths,
       maxPrepared: config.maxPrepared, pollMinutes: config.pollMinutes,
       live: config.live, liveTimeoutMinutes: config.liveTimeoutMinutes, prepareTimeoutMinutes: config.prepareTimeoutMinutes,
-      waitForCi: config.waitForCi, agent: config.agent,
+      waitForCi: config.waitForCi, agent: config.agent, validate: config.validate,
     }),
     update: settings => {
       // The config object is the one the tick, the prepares and the opens read from, so the change
@@ -135,6 +135,7 @@ export async function runDaemon(
     get waitForCi() { return config.waitForCi; },
     get alertPaths() { return config.alertPaths; },
     get agentModel() { return config.agent.model; },
+    get validateModel() { return config.validate.model; },
     pauseUntil: (until: string) => {
       store.pauseUntil(until);
       log(`preparing paused until ${localHhMm(until)} — Claude session limit`);

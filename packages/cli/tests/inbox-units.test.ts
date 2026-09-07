@@ -60,6 +60,25 @@ describe('parseInboxConfig', () => {
     expect(() => parseInboxConfig({ agent: { maxBudgetUsd: 0 } })).toThrow(/agent\.maxBudgetUsd must be a positive number/);
   });
 
+  it('takes the validate block, and refuses each field by name', () => {
+    expect(parseInboxConfig({}).validate).toEqual({ model: null, timeoutMinutes: 15, maxBudgetUsd: null });
+    expect(parseInboxConfig({ validate: { model: 'opus', timeoutMinutes: 20, maxBudgetUsd: 3 } }).validate)
+      .toEqual({ model: 'opus', timeoutMinutes: 20, maxBudgetUsd: 3 });
+    // An explicit null is off and uncapped, not a type error.
+    expect(parseInboxConfig({ validate: { model: null, maxBudgetUsd: null } }).validate).toEqual(DEFAULT_INBOX_CONFIG.validate);
+
+    expect(() => parseInboxConfig({ validate: [] })).toThrow(/validate must be a JSON object/);
+    expect(() => parseInboxConfig({ validate: { model: '' } })).toThrow(/validate\.model must be a non-empty string/);
+    expect(() => parseInboxConfig({ validate: { timeoutMinutes: 0 } })).toThrow(/validate\.timeoutMinutes must be a positive number/);
+    expect(() => parseInboxConfig({ validate: { maxBudgetUsd: 0 } })).toThrow(/validate\.maxBudgetUsd must be a positive number/);
+  });
+
+  it('hands out a fresh validate block, so one parsed config cannot change another', () => {
+    parseInboxConfig({}).validate.model = 'opus';
+    expect(parseInboxConfig({}).validate.model).toBeNull();
+    expect(DEFAULT_INBOX_CONFIG.validate.model).toBeNull();
+  });
+
   it('hands out a fresh agent block, so one parsed config cannot change another', () => {
     const first = parseInboxConfig({});
     first.agent.mcpAllow.push('mcp__a__b');
@@ -82,6 +101,7 @@ describe('parseInboxConfig', () => {
         filter: 'skip payments', alertWhen: 'a P1', alertPaths: ['packages/shared/**'], maxPrepared: 3, pollMinutes: 7,
         live: false, liveTimeoutMinutes: 4, prepareTimeoutMinutes: 20, waitForCi: true,
         agent: { model: 'opus', effort: 'high', mcpAllow: [], extraArgs: [], maxBudgetUsd: null },
+        validate: { model: null, timeoutMinutes: 15, maxBudgetUsd: null },
       };
       saveInboxSettings(path, settings);
       const raw = JSON.parse(readFileSync(path, 'utf-8'));
@@ -217,18 +237,33 @@ describe('composePrompt alerts', () => {
 
 describe('summarizeFindings', () => {
   const c = (body: string, kind: 'review' | 'aside' = 'review') => ({ body, kind, author: { name: 'Agent', type: 'agent' as const }, createdAt: '' });
+  const open = (filePath: string, ...comments: ReturnType<typeof c>[]) => ({ filePath, status: 'open' as const, comments });
+
   it('counts finding threads by the severity they open with, in order, leaving the summary out', () => {
     expect(summarizeFindings([
-      { filePath: 'a.ts', comments: [c('P2: one'), c('reply', 'aside')] },
-      { filePath: 'b.ts', comments: [c('P1: two')] },
-      { filePath: 'c.ts', comments: [c('p2: lower case counts')] },
-      { filePath: 'd.ts', comments: [c('[must-fix] old vocabulary')] },
-      { filePath: 'e.ts', comments: [c('no label at all')] },
-      { filePath: '__general__', comments: [c('Overall fine.')] },
+      open('a.ts', c('P2: one'), c('reply', 'aside')),
+      open('b.ts', c('P1: two')),
+      open('c.ts', c('p2: lower case counts')),
+      open('d.ts', c('[must-fix] old vocabulary')),
+      open('e.ts', c('no label at all')),
+      open('__general__', c('Overall fine.')),
     ])).toBe('1 P1 \u00b7 2 P2 \u00b7 1 must-fix \u00b7 1 other');
-    expect(summarizeFindings([{ filePath: '__general__', comments: [c('Nothing found.')] }])).toBe('no findings');
+    expect(summarizeFindings([open('__general__', c('Nothing found.'))])).toBe('no findings');
     expect(severityOf('  P3: nit')).toBe('P3');
     expect(severityOf('[question] why?')).toBe('question');
+  });
+
+  it('leaves out a finding the checking pass settled, so the card counts only what is left', () => {
+    expect(summarizeFindings([
+      { filePath: 'a.ts', status: 'dismissed', comments: [c('P1: this does not hold')] },
+      { filePath: 'b.ts', status: 'resolved', comments: [c('P2: already answered')] },
+      open('c.ts', c('P3: a nit')),
+    ])).toBe('1 P3');
+
+    expect(summarizeFindings([
+      { filePath: 'a.ts', status: 'dismissed', comments: [c('P1: this does not hold')] },
+      { filePath: 'b.ts', status: 'dismissed', comments: [c('P2: nor this')] },
+    ])).toBe('no findings');
   });
 });
 
@@ -237,6 +272,7 @@ describe('parseSettingsPatch', () => {
     filter: 'a', alertWhen: 'b', alertPaths: ['src/**'], maxPrepared: 2, pollMinutes: 3, live: false,
     liveTimeoutMinutes: 5, prepareTimeoutMinutes: 15, waitForCi: false,
     agent: { model: null, effort: null, mcpAllow: [], extraArgs: [], maxBudgetUsd: null },
+    validate: { model: null, timeoutMinutes: 15, maxBudgetUsd: null },
   };
   it('takes every editable key, validated as the config file is, and refuses anything else by name', () => {
     expect(parseSettingsPatch(JSON.stringify(full))).toEqual({ ok: true, settings: full });
@@ -247,6 +283,15 @@ describe('parseSettingsPatch', () => {
     expect(parseSettingsPatch(JSON.stringify({ ...full, filter: 'x'.repeat(5000) }))).toMatchObject({ ok: false });
     expect(parseSettingsPatch('nope')).toMatchObject({ ok: false });
     expect(parseSettingsPatch('[]')).toMatchObject({ ok: false });
+  });
+
+  it('takes the validate fields the page edits and refuses a bad one by name', () => {
+    const edited = { ...full, validate: { model: 'opus', timeoutMinutes: 20, maxBudgetUsd: 3 } };
+    expect(parseSettingsPatch(JSON.stringify(edited))).toEqual({ ok: true, settings: edited });
+    expect(parseSettingsPatch(JSON.stringify({ ...full, validate: undefined })))
+      .toMatchObject({ ok: false, message: 'validate is missing' });
+    expect(parseSettingsPatch(JSON.stringify({ ...full, validate: { ...full.validate, timeoutMinutes: 0 } })))
+      .toMatchObject({ ok: false, message: 'validate.timeoutMinutes must be a positive number' });
   });
 
   it('takes the agent fields the page edits and refuses a bad one by name', () => {
