@@ -1,4 +1,5 @@
 import { isRetired, type InboxPr, type InboxStore } from './store.js';
+import { BUMPABLE } from './open.js';
 
 /** One row as the inbox surface shows it: what it is, what was done, and whether it needs a look. */
 export interface InboxRow {
@@ -18,6 +19,10 @@ export interface InboxRow {
   /** A prepared review whose head has since moved: openable, but out of date. */
   stale: boolean;
   preparedAt: string | null;
+  /** The findings by severity, once prepared. */
+  summary: string | null;
+  /** The agent's reason this one needs the reviewer now, when it raised one. */
+  alert: string | null;
   openUrl: string | null;
   /** Where a POST dismisses it; null while it is being prepared, and once it is retired. */
   dismissUrl: string | null;
@@ -31,8 +36,10 @@ export interface InboxView {
   ready: InboxRow[];
   /** Being prepared or waiting to be. */
   working: InboxRow[];
-  /** Skipped, retired or failed — shown for the record, with the reason. */
+  /** Skipped, drafts or failed — shown for the record, with the reason. */
   other: InboxRow[];
+  /** Set aside by the reviewer; listed so a bump can bring one back. */
+  dismissed: InboxRow[];
   generatedAt: string;
 }
 
@@ -42,15 +49,16 @@ export function buildView(store: InboxStore, openBase: string, now: string): Inb
     .sort((a, b) => diffSize(a) - diffSize(b));
   const working = rows.filter(row => row.status === 'queued' || row.status === 'preparing')
     .sort((a, b) => Number(b.bumped) - Number(a.bumped));
-  const other = rows.filter(row => !ready.includes(row) && !working.includes(row) && !isRetired(row.status));
-  return { ready, working, other, generatedAt: now };
+  const dismissed = rows.filter(row => row.status === 'dismissed');
+  const other = rows.filter(row => !ready.includes(row) && !working.includes(row) && !dismissed.includes(row) && !isRetired(row.status));
+  return { ready, working, other, dismissed, generatedAt: now };
 }
 
 function toRow(pr: InboxPr, openBase: string): InboxRow {
   const stale = pr.status === 'stale'
     || (pr.status === 'prepared' && pr.preparedHeadSha != null && pr.preparedHeadSha !== pr.headSha);
   const openable = pr.status === 'prepared' || pr.status === 'stale';
-  const bumpable = pr.status === 'queued' || pr.status === 'skipped' || pr.status === 'failed';
+  const bumpable = BUMPABLE.has(pr.status);
   return {
     id: pr.id,
     number: pr.number,
@@ -67,8 +75,10 @@ function toRow(pr: InboxPr, openBase: string): InboxRow {
     updatedAt: pr.updatedAt,
     stale,
     preparedAt: pr.preparedAt,
+    summary: pr.summary,
+    alert: pr.alert,
     openUrl: openable ? `${openBase}/open/${encodeURIComponent(pr.id)}` : null,
-    dismissUrl: pr.status === 'preparing' || isRetired(pr.status) ? null : `${openBase}/dismiss/${encodeURIComponent(pr.id)}`,
+    dismissUrl: pr.status === 'preparing' || pr.status === 'dismissed' || isRetired(pr.status) ? null : `${openBase}/dismiss/${encodeURIComponent(pr.id)}`,
     prepareUrl: bumpable && pr.bumpedAt === null ? `${openBase}/prepare/${encodeURIComponent(pr.id)}` : null,
     bumped: pr.bumpedAt !== null,
   };

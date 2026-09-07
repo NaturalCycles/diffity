@@ -5,6 +5,7 @@ export interface PromptContext {
   worktreePath: string;
   port: number;
   filter: string;
+  alertWhen: string;
 }
 
 /**
@@ -13,7 +14,7 @@ export interface PromptContext {
  * a finished review from a deliberate skip.
  */
 export function composePrompt(ctx: PromptContext): string {
-  const { snapshot, worktreePath, port, filter } = ctx;
+  const { snapshot, worktreePath, port, filter, alertWhen } = ctx;
   // The title, author and base come from the pull request, so they are the author's text, not the
   // reviewer's instructions; presented as data and collapsed to one line so nothing in them reads
   // as a new directive.
@@ -56,6 +57,23 @@ export function composePrompt(ctx: PromptContext): string {
     'they belong to, add a short summary, set a reading-order walkthrough, and mark the review done.',
     'Do not open a browser.',
     '',
+  );
+
+  if (alertWhen.trim()) {
+    lines.push(
+      'Once the review is prepared, decide whether this pull request needs the reviewer\'s attention',
+      'now rather than in turn, using their own words:',
+      '',
+      indent(alertWhen.trim()),
+      '',
+      'If it does, print exactly one line, before the final line below:',
+      '  ALERT: <short reason>',
+      'If it does not, print nothing about it.',
+      '',
+    );
+  }
+
+  lines.push(
     'When the review is prepared, print exactly one final line and stop:',
     '  PREPARED',
   );
@@ -63,9 +81,12 @@ export function composePrompt(ctx: PromptContext): string {
   return lines.join('\n') + '\n';
 }
 
-/** What the agent's run amounted to, read from the last verdict line it printed. */
+/**
+ * What the agent's run amounted to, read from the last verdict line it printed; a prepared review
+ * carries the alert the agent raised on the way, if any.
+ */
 export type Verdict =
-  | { kind: 'prepared' }
+  | { kind: 'prepared'; alert: string | null }
   | { kind: 'skipped'; reason: string }
   | { kind: 'none' };
 
@@ -75,7 +96,7 @@ export function verdictOf(stdout: string): Verdict {
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i];
     if (line === 'PREPARED') {
-      return { kind: 'prepared' };
+      return { kind: 'prepared', alert: alertBefore(lines, i) };
     }
     const skip = /^SKIP:\s*(.*)$/.exec(line);
     if (skip) {
@@ -83,6 +104,17 @@ export function verdictOf(stdout: string): Verdict {
     }
   }
   return { kind: 'none' };
+}
+
+/** The agent's ALERT line, if it printed one on the way to PREPARED; the last one counts. */
+function alertBefore(lines: string[], preparedAt: number): string | null {
+  for (let i = preparedAt - 1; i >= 0; i--) {
+    const alert = /^ALERT:\s*(.*)$/.exec(lines[i]);
+    if (alert) {
+      return alert[1].trim() || 'no reason given';
+    }
+  }
+  return null;
 }
 
 function indent(text: string): string {

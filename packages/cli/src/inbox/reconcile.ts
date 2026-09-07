@@ -40,17 +40,17 @@ export function reconcile(input: ReconcileInput): Transition | null {
     return null;
   }
 
-  // A dismissal is the reviewer's word on this version of the pull request; a new head is a new
-  // change, and the poll takes it from the top.
-  if (existing?.status === 'dismissed' && existing.headSha === snapshot.headSha) {
-    return null;
-  }
-
   if (!requested) {
     if (snapshot.state === 'MERGED') return settled('done', 'merged');
     if (snapshot.state === 'CLOSED') return settled('done', 'closed');
     // Open, but no longer in the review-requested search: the request was withdrawn or already met.
     return settled('hidden', 'review no longer requested');
+  }
+
+  // A dismissal is the reviewer's word on this version of the pull request; a new head is a new
+  // change, and the poll takes it from the top.
+  if (existing?.status === 'dismissed' && existing.headSha === snapshot.headSha) {
+    return null;
   }
 
   if (snapshot.isDraft) {

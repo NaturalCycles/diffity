@@ -1,8 +1,9 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { MAX_SETTINGS_TEXT, parseSettingsPatch } from './settings.js';
 import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { getViewerLogin, searchReviewRequested, viewPr } from '@diffity/github';
-import type { InboxConfig } from './config.js';
+import { saveInboxSettings, type InboxConfig, type InboxSettings } from './config.js';
 import { inboxDir } from './paths.js';
 import { logsDir, preparePr, type PrepareDeps } from './prepare.js';
 import { realAttendantDeps, realPrepareDeps, type Inflight } from './runtime.js';
@@ -42,6 +43,35 @@ export interface DaemonOptions {
   openDeps?: OpenSessionDeps;
   /** Who parks on an opened review; defaults to the real attendants. Tests override it. */
   attendants?: AttendantHost;
+  /** Where the page's settings are written; without it they change the running daemon only. */
+  configPath?: string;
+}
+
+/** The settings as the page reads and writes them: the running config, persisted when a path is known. */
+export interface SettingsHost {
+  get(): InboxSettings;
+  update(settings: InboxSettings): void;
+}
+
+export function settingsHost(config: InboxConfig, configPath: string | undefined, onPollChanged: () => void = () => {}): SettingsHost {
+  return {
+    get: () => ({
+      filter: config.filter, alertWhen: config.alertWhen, maxPrepared: config.maxPrepared, pollMinutes: config.pollMinutes,
+      live: config.live, liveTimeoutMinutes: config.liveTimeoutMinutes, prepareTimeoutMinutes: config.prepareTimeoutMinutes,
+    }),
+    update: settings => {
+      // The config object is the one the tick, the prepares and the opens read from, so the change
+      // takes effect from the next of each; only the poll timer has to be told.
+      const pollChanged = settings.pollMinutes !== config.pollMinutes;
+      Object.assign(config, settings);
+      if (configPath) {
+        saveInboxSettings(configPath, settings);
+      }
+      if (pollChanged) {
+        onPollChanged();
+      }
+    },
+  };
 }
 
 /** What the open route asks of the attendants: park on this worktree, unless already there. */
@@ -75,7 +105,8 @@ export async function runDaemon(
     log,
     now: () => new Date().toISOString(),
     shouldContinue: () => !stopping,
-    maxPrepared: config.maxPrepared,
+    // Read at each tick, not copied: the page can change it while the daemon runs.
+    get maxPrepared() { return config.maxPrepared; },
   };
 
   // A bump arriving mid-tick is served by another tick right after, not by the next poll.
@@ -116,16 +147,26 @@ export async function runDaemon(
   const attendants: AttendantHost = options.attendants ?? new Attendants(
     realAttendantDeps(nodePath, entry, config, worktree => join(logsDir(), `${basename(worktree)}.live.log`), log),
   );
-  const server = await bindInboxServer(store, config, log, openDeps, config.live ? attendants : null, requestTick);
+  let timer: NodeJS.Timeout | undefined;
+  const armPoll = () => {
+    if (timer) {
+      clearInterval(timer);
+    }
+    timer = setInterval(() => void tick(), config.pollMinutes * 60_000);
+  };
+  const settings = settingsHost(config, options.configPath, armPoll);
+  const server = await bindInboxServer(store, config, log, openDeps, attendants, requestTick, settings);
   reclaimLeftoverServers(log);
-  const timer = setInterval(() => void tick(), config.pollMinutes * 60_000);
+  armPoll();
   void tick();
 
   return {
     port: config.port,
     stop: () => new Promise<void>(resolve => {
       stopping = true;
-      clearInterval(timer);
+      if (timer) {
+        clearInterval(timer);
+      }
       // Kill whatever a prepare has running right now — the detached diffity server and the agent
       // and its group — so nothing outlives the daemon.
       inflight.agentKill?.();
@@ -167,7 +208,7 @@ function reclaimLeftoverServers(log: (message: string) => void): void {
   }
 }
 
-export function startInboxServer(store: InboxStore, config: InboxConfig, log: (message: string) => void, openDeps: OpenSessionDeps, attendants: AttendantHost | null = null, onBump: (() => void) | null = null): Server {
+export function startInboxServer(store: InboxStore, config: InboxConfig, log: (message: string) => void, openDeps: OpenSessionDeps, attendants: AttendantHost | null = null, onBump: (() => void) | null = null, settings: SettingsHost | null = null): Server {
   const server = createServer((req, res) => {
     // The whole handler is guarded: an unhandled throw here (a malformed percent-escape, say) would
     // otherwise have no catch and take the long-running daemon down with it.
@@ -191,6 +232,37 @@ export function startInboxServer(store: InboxStore, config: InboxConfig, log: (m
         res.end(inboxPage());
         return;
       }
+      if (settings && req.method === 'GET' && url === '/api/settings') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(settings.get()));
+        return;
+      }
+      if (settings && req.method === 'POST' && url === '/api/settings') {
+        if (req.headers['sec-fetch-site'] === 'cross-site') {
+          res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('forbidden');
+          return;
+        }
+        void readBody(req, MAX_SETTINGS_TEXT * 4).then(body => {
+          const patch = parseSettingsPatch(body);
+          if (!patch.ok) {
+            res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+            res.end(patch.message);
+            return;
+          }
+          settings.update(patch.settings);
+          log('settings saved from the page');
+          res.writeHead(204);
+          res.end();
+        }).catch(err => {
+          log(`settings could not be saved: ${err instanceof Error ? err.message : err}`);
+          if (!res.headersSent) {
+            res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+          }
+          res.end('could not save');
+        });
+        return;
+      }
       if (req.method === 'GET' && (url === '/api/inbox' || url === '/api/inbox/')) {
         const view = buildView(store, openBase, new Date().toISOString());
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -200,7 +272,7 @@ export function startInboxServer(store: InboxStore, config: InboxConfig, log: (m
       if (req.method === 'GET' && url.startsWith('/open/')) {
         const id = stateChangingId(req, res, '/open/');
         if (id !== null) {
-          void handleOpen(store, id, openDeps, attendants, log, res).catch(err => log(`open failed: ${err instanceof Error ? err.message : err}`));
+          void handleOpen(store, config, id, openDeps, attendants, log, res).catch(err => log(`open failed: ${err instanceof Error ? err.message : err}`));
         }
         return;
       }
@@ -241,7 +313,7 @@ export function startInboxServer(store: InboxStore, config: InboxConfig, log: (m
 }
 
 /** Brings a prepared review up as a live session, parks an agent on it, and redirects the browser to it. */
-async function handleOpen(store: InboxStore, id: string, openDeps: OpenSessionDeps, attendants: AttendantHost | null, log: (message: string) => void, res: ServerResponse): Promise<void> {
+async function handleOpen(store: InboxStore, config: InboxConfig, id: string, openDeps: OpenSessionDeps, attendants: AttendantHost | null, log: (message: string) => void, res: ServerResponse): Promise<void> {
   try {
     const resolution = resolveOpen(store, id);
     if (!resolution.ok) {
@@ -255,7 +327,9 @@ async function handleOpen(store: InboxStore, id: string, openDeps: OpenSessionDe
       log(`opened ${id} but its findings did not import: ${importError}`);
     }
     const { pr } = resolution;
-    attendants?.ensure(pr.worktreePath!, { id: pr.id, url: pr.url, title: pr.title, author: pr.author });
+    if (config.live) {
+      attendants?.ensure(pr.worktreePath!, { id: pr.id, url: pr.url, title: pr.title, author: pr.author });
+    }
     res.writeHead(302, { Location: url });
     res.end();
   } catch (err) {
@@ -337,13 +411,30 @@ export async function reclaimWorktree(config: InboxConfig, worktree: string, rep
   await removeWorktree(cloneDir(config.reposDir, repo), worktree);
 }
 
+/** The request body as text, refusing one past the limit rather than buffering it. */
+function readBody(req: IncomingMessage, limit: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    req.setEncoding('utf-8');
+    req.on('data', (chunk: string) => {
+      body += chunk;
+      if (body.length > limit) {
+        reject(new Error('body too large'));
+        req.destroy();
+      }
+    });
+    req.on('end', () => resolve(body));
+    req.on('error', reject);
+  });
+}
+
 /** A request whose Host is this loopback server's own address (localhost or 127.0.0.1, right port). */
 function isLocalHost(host: string | undefined, port: number | undefined): boolean {
   return port != null && (host === `localhost:${port}` || host === `127.0.0.1:${port}`);
 }
 
 /** Resolves once the port is held; a clash exits through the server's own error handler first. */
-function bindInboxServer(store: InboxStore, config: InboxConfig, log: (message: string) => void, openDeps: OpenSessionDeps, attendants: AttendantHost | null, onBump: () => void): Promise<Server> {
-  const server = startInboxServer(store, config, log, openDeps, attendants, onBump);
+function bindInboxServer(store: InboxStore, config: InboxConfig, log: (message: string) => void, openDeps: OpenSessionDeps, attendants: AttendantHost | null, onBump: () => void, settings: SettingsHost): Promise<Server> {
+  const server = startInboxServer(store, config, log, openDeps, attendants, onBump, settings);
   return new Promise(resolve => server.once('listening', () => resolve(server)));
 }

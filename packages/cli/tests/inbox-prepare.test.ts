@@ -30,7 +30,7 @@ function snapshot(): PrSnapshot {
 
 function config(): InboxConfig {
   return {
-    pollMinutes: 5, port: 0, reposDir, worktreesDir, filter: '',
+    pollMinutes: 5, port: 0, reposDir, worktreesDir, filter: '', alertWhen: '',
     prepare: ['unused'], prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10,
   };
 }
@@ -139,7 +139,7 @@ describe('the inbox JSON server', () => {
   it('answers /api/inbox with the current view', async () => {
     const store = new InboxStore(':memory:');
     store.observe({ ...snapshot(), headSha: 'aaa' }, true, 'now');
-    store.markPrepared('o/demo#4', { headSha: 'aaa', bundlePath: '/b.json', worktreePath: '/wt', logPath: '/l', at: 'now' });
+    store.markPrepared('o/demo#4', { headSha: 'aaa', bundlePath: '/b.json', worktreePath: '/wt', logPath: '/l', at: 'now', summary: null, alert: null });
     const noOpenDeps = { baseRefOf: () => 'x', ensureServer: () => Promise.resolve(1), importBundle: () => {} };
     const server = startInboxServer(store, { ...config(), port: 0 }, () => {}, noOpenDeps);
     await new Promise(resolve => server.on('listening', resolve));
@@ -162,7 +162,7 @@ describe('the inbox JSON server', () => {
   it('shapes a prepared row as ready and openable', () => {
     const store = new InboxStore(':memory:');
     store.observe({ ...snapshot(), headSha: 'aaa' }, true, 'now');
-    store.markPrepared('o/demo#4', { headSha: 'aaa', bundlePath: '/b', worktreePath: '/wt', logPath: '/l', at: 'now' });
+    store.markPrepared('o/demo#4', { headSha: 'aaa', bundlePath: '/b', worktreePath: '/wt', logPath: '/l', at: 'now', summary: null, alert: null });
     const view = buildView(store, 'http://localhost:5390', 'now');
     expect(view.ready[0].openUrl).toBe('http://localhost:5390/open/o%2Fdemo%234');
     expect(view.ready[0].stale).toBe(false);
@@ -178,5 +178,21 @@ describe('the inbox JSON server', () => {
     prompts = [];
     await preparePr(snapshot(), withFilter, deps(), { bumped: true });
     expect(prompts[0]).not.toContain('Skip payments-focused PRs');
+  });
+
+  it('reads the findings summary from the bundle it wrote and keeps the agent\'s alert', async () => {
+    const result = await preparePr(snapshot(), config(), deps({
+      runAgent: () => Promise.resolve({ stdout: 'reviewing\nALERT: touches auth\nPREPARED\n', timedOut: false }),
+      exportBundle: ({ outPath }) => {
+        mkdirSync(dirname(outPath), { recursive: true });
+        writeFileSync(outPath, JSON.stringify({ threads: [
+          { filePath: 'a.ts', comments: [{ body: 'P1: bad', kind: 'review' }] },
+          { filePath: 'a.ts', comments: [{ body: 'P2: meh', kind: 'review' }] },
+        ] }));
+      },
+    }));
+    expect(result.kind).toBe('prepared');
+    expect(result.kind === 'prepared' && result.summary).toBe('1 P1 \u00b7 1 P2');
+    expect(result.kind === 'prepared' && result.alert).toBe('touches auth');
   });
 });

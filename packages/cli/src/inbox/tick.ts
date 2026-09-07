@@ -134,6 +134,8 @@ async function prepareOne(store: InboxStore, snapshot: PrSnapshot, deps: TickDep
         worktreePath: result.worktree,
         logPath: result.logPath,
         at: result.at,
+        summary: result.summary,
+        alert: result.alert,
       });
       deps.log(`prepared ${id}`);
       return;

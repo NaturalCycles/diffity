@@ -3,6 +3,7 @@ import type { PrSnapshot } from '@diffity/github';
 import type { InboxConfig } from './config.js';
 import { inboxDir } from './paths.js';
 import { composePrompt, verdictOf } from './prompt.js';
+import { summarizeBundleFile } from './summary.js';
 import { cloneDir, prepareWorktree, removeWorktree, worktreePath } from './worktree.js';
 
 /** A running diffity server for a worktree, and the way to stop it again. */
@@ -36,7 +37,7 @@ export interface PrepareDeps {
 }
 
 export type PrepareResult =
-  | { kind: 'prepared'; headSha: string; bundlePath: string; worktree: string; logPath: string; at: string }
+  | { kind: 'prepared'; headSha: string; bundlePath: string; worktree: string; logPath: string; at: string; summary: string | null; alert: string | null }
   | { kind: 'skipped'; reason: string; logPath: string }
   | { kind: 'failed'; reason: string; worktree: string | null; logPath: string | null };
 
@@ -78,7 +79,7 @@ export async function preparePr(snapshot: PrSnapshot, config: InboxConfig, deps:
     server = await deps.startServer(dest, diffRef);
     const { stdout, timedOut } = await deps.runAgent({
       argv: config.prepare,
-      prompt: composePrompt({ snapshot, worktreePath: dest, port: server.port, filter: opts.bumped ? '' : config.filter }),
+      prompt: composePrompt({ snapshot, worktreePath: dest, port: server.port, filter: opts.bumped ? '' : config.filter, alertWhen: config.alertWhen }),
       cwd: dest,
       logPath,
       timeoutMs: config.prepareTimeoutMinutes * 60_000,
@@ -108,7 +109,7 @@ export async function preparePr(snapshot: PrSnapshot, config: InboxConfig, deps:
       return { kind: 'failed', reason: `the review was prepared but its bundle could not be written: ${err instanceof Error ? err.message : err}`, worktree: dest, logPath };
     }
 
-    return { kind: 'prepared', headSha: head, bundlePath, worktree: dest, logPath, at: deps.now() };
+    return { kind: 'prepared', headSha: head, bundlePath, worktree: dest, logPath, at: deps.now(), summary: summarizeBundleFile(bundlePath), alert: verdict.alert };
   } catch (err) {
     return { kind: 'failed', reason: err instanceof Error ? err.message : String(err), worktree: dest, logPath };
   } finally {
