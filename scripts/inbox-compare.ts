@@ -6,12 +6,10 @@
  * what it costs. One agent run per invocation; everything it writes stays in a scratch directory.
  */
 
-import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { promisify } from 'node:util';
 import { GENERAL_THREAD_FILE_PATH, parseReviewBundle, type BundleThread, type ReviewBundle } from '@diffity/api';
 import { viewPr } from '@diffity/github';
 import type { RunStats } from '../packages/cli/src/inbox/agent-output.js';
@@ -386,20 +384,6 @@ function readBaseline(options: Options): { path: string; bundle: ReviewBundle } 
   return newest;
 }
 
-/**
- * The head `refs/pull/<n>/head` points at, fetched into the clone. This is the only head a
- * worktree can be cut at, so it decides whether the baseline's head is still reachable as a
- * checkout — and it is asked before an agent run is spent rather than after.
- */
-async function fetchPrHead(clone: string, number: number): Promise<string> {
-  const git = (args: string[]) => promisify(execFile)('git', ['-c', 'core.hooksPath=/dev/null', ...args], {
-    cwd: clone, encoding: 'utf-8', env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
-  });
-  await git(['fetch', 'origin', `refs/pull/${number}/head`]);
-  const { stdout } = await git(['rev-parse', 'FETCH_HEAD']);
-  return stdout.trim();
-}
-
 function prName(ref: PrRefSpec): string {
   return `${ref.owner}/${ref.repo}#${ref.number}`;
 }
@@ -438,18 +422,6 @@ async function main(): Promise<number> {
   const short = head.slice(0, 12);
   console.error(`🔍 ${prName(options.ref)} · baseline ${basename(baseline.path)} of ${baseline.bundle.createdAt}`);
 
-  let current: string;
-  try {
-    current = await fetchPrHead(clone, options.ref.number);
-  } catch (err) {
-    console.error(`⏭ ${clone} could not fetch refs/pull/${options.ref.number}/head: ${err instanceof Error ? err.message : err}`);
-    return 2;
-  }
-  if (!sameHead(current, head)) {
-    console.error(`⏭ the pull request's head is now ${current.slice(0, 12)}, and a worktree can only be cut at that one; re-run against a bundle at that head, or pick another pull request.`);
-    return 2;
-  }
-
   const snapshot = await viewPr(options.ref);
   if (!snapshot) {
     console.error(`⏭ gh could not read ${prName(options.ref)}`);
@@ -485,7 +457,7 @@ async function main(): Promise<number> {
   const ticker = setInterval(() => console.error(`   … ${elapsed().toFixed(0)} min`), 60_000);
   let result: PrepareResult;
   try {
-    result = await preparePr({ ...snapshot, headSha: head }, config, deps, { bumped: true });
+    result = await preparePr({ ...snapshot, headSha: head }, config, deps, { bumped: true, pinHead: head });
   } finally {
     clearInterval(ticker);
   }

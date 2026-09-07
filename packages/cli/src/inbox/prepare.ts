@@ -94,6 +94,11 @@ export function logsDir(): string {
 export interface PrepareOpts {
   /** The reviewer asked for this one by name, so the filter does not get a say. */
   bumped?: boolean;
+  /**
+   * Review this commit rather than wherever the pull request has got to. Only a comparison against
+   * an earlier review sets it; the daemon always takes the current head.
+   */
+  pinHead?: string;
 }
 
 export async function preparePr(snapshot: PrSnapshot, config: InboxConfig, deps: PrepareDeps, opts: PrepareOpts = {}): Promise<PrepareResult> {
@@ -107,7 +112,7 @@ export async function preparePr(snapshot: PrSnapshot, config: InboxConfig, deps:
   let head: string;
   let diffRef: string;
   try {
-    ({ head, diffRef } = await prepareWorktree(clone, dest, snapshot, snapshot.baseRef));
+    ({ head, diffRef } = await prepareWorktree(clone, dest, snapshot, snapshot.baseRef, opts.pinHead));
   } catch (err) {
     return { kind: 'failed', failure: 'worktree', reason: err instanceof Error ? err.message : String(err), worktree: null, logPath: null, run };
   }

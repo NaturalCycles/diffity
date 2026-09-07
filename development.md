@@ -146,8 +146,11 @@ worktree is removed afterwards unless `--keep` is passed, which leaves it in pla
 candidate's own review can be opened in the browser. One invocation is one agent run, and it takes
 as long as a real preparation — up to half an hour.
 
-A worktree can only be cut at whatever `refs/pull/<n>/head` points at, so the script refuses,
-before spending the run, when the pull request has moved past the baseline's head.
+The candidate is pinned to the baseline's head, so a pull request that has moved on since — or has
+merged — can still be compared. An earlier head usually comes along with the pull request's own
+ref; when it does not, it is fetched by sha, which the forge serves for any commit reachable from a
+ref it advertises. A head that was force-pushed away is gone for good, and the run is refused with
+`the baseline's head <sha> is no longer reachable from origin`.
 
 Reading the table: each severity row is `baseline count | reproduced, new`. *Reproduced* means a
 candidate finding landed on the same file with an overlapping line range — a one-line finding

@@ -483,6 +483,25 @@ describe('the inbox JSON server', () => {
     store.close();
   });
 
+  it('reviews a pinned head the pull request has moved past', async () => {
+    // A second push, so the snapshot's head is no longer where the pull request points.
+    const upstream = join(root, 'remotes', 'o', 'demo');
+    writeFileSync(join(upstream, 'b.ts'), 'const b = 2;\n');
+    git(upstream, ['add', '.']);
+    git(upstream, ['commit', '-m', 'more']);
+    git(upstream, ['update-ref', 'refs/pull/4/head', 'HEAD']);
+    const moved = git(upstream, ['rev-parse', 'HEAD']);
+
+    const result = await preparePr(snapshot(), config(), deps(), { pinHead: head });
+
+    expect(result.kind).toBe('prepared');
+    if (result.kind !== 'prepared') return;
+    expect(result.headSha).toBe(head);
+    expect(result.headSha).not.toBe(moved);
+    expect(existsSync(join(result.worktree, 'b.ts'))).toBe(false);
+    expect(result.bundlePath).toContain(head.slice(0, 12));
+  });
+
   it('sets the filter aside for a bumped pull request', async () => {
     prompts = [];
     const withFilter = { ...config(), filter: 'Skip payments-focused PRs' };

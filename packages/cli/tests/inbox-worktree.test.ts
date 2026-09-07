@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { prepareWorktree, removeWorktree } from '../src/inbox/worktree.js';
 
 let root: string;
+let upstream: string;
 let clone: string;
 let dest: string;
 let head: string;
@@ -17,7 +18,7 @@ function git(cwd: string, args: string[]): string {
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'diffity-worktree-'));
-  const upstream = join(root, 'remotes', 'o', 'demo');
+  upstream = join(root, 'remotes', 'o', 'demo');
   execFileSync('git', ['init', '-b', 'main', upstream], { stdio: 'pipe' });
   git(upstream, ['config', 'user.email', 't@t']);
   git(upstream, ['config', 'user.name', 'T']);
@@ -79,6 +80,63 @@ describe('prepareWorktree', () => {
     expect(cut.head).toBe(head);
     expect(existsSync(join(dest, 'debris.txt'))).toBe(false);
     expect(git(dest, ['rev-parse', 'HEAD'])).toBe(head);
+  });
+
+  describe('with a pinned head', () => {
+    /** A second push on the pull request, leaving the head captured in `head` behind. */
+    function pushOnTop(): string {
+      writeFileSync(join(upstream, 'b.ts'), 'const b = 2;\n');
+      git(upstream, ['add', '.']);
+      git(upstream, ['commit', '-m', 'more']);
+      git(upstream, ['update-ref', `refs/pull/${ref.number}/head`, 'HEAD']);
+      return git(upstream, ['rev-parse', 'HEAD']);
+    }
+
+    it('cuts the worktree at an earlier head the pull request has moved past', async () => {
+      const moved = pushOnTop();
+
+      const cut = await prepareWorktree(clone, dest, ref, 'main', head);
+
+      expect(cut.head).toBe(head);
+      expect(git(dest, ['rev-parse', 'HEAD'])).toBe(head);
+      // The later commit's file is not in the tree, so the review is about the pinned code.
+      expect(existsSync(join(dest, 'b.ts'))).toBe(false);
+      expect(moved).not.toBe(head);
+    });
+
+    it('takes the pull request as it stands when nothing is pinned', async () => {
+      const moved = pushOnTop();
+
+      const cut = await prepareWorktree(clone, dest, ref, 'main');
+
+      expect(cut.head).toBe(moved);
+      expect(existsSync(join(dest, 'b.ts'))).toBe(true);
+    });
+
+    it('asks origin by sha for a pinned commit the clone has never fetched', async () => {
+      // What GitHub allows: any commit reachable from a ref it advertises can be asked for by sha.
+      git(upstream, ['config', 'uploadpack.allowReachableSHA1InWant', 'true']);
+      // On a branch of its own, made after the clone, so no fetch of main or the pull ref brings it.
+      git(upstream, ['checkout', '-q', '-b', 'other']);
+      writeFileSync(join(upstream, 'c.ts'), 'const c = 3;\n');
+      git(upstream, ['add', '.']);
+      git(upstream, ['commit', '-m', 'elsewhere']);
+      const elsewhere = git(upstream, ['rev-parse', 'HEAD']);
+      expect(() => git(clone, ['cat-file', '-e', `${elsewhere}^{commit}`])).toThrow();
+
+      const cut = await prepareWorktree(clone, dest, ref, 'main', elsewhere);
+
+      expect(cut.head).toBe(elsewhere);
+      expect(existsSync(join(dest, 'c.ts'))).toBe(true);
+    });
+
+    it('says so when the pinned head is gone from origin', async () => {
+      const forcePushedAway = 'deadbeef'.repeat(5);
+
+      await expect(prepareWorktree(clone, dest, ref, 'main', forcePushedAway))
+        .rejects.toThrow(/the baseline's head deadbeefdead is no longer reachable from origin \(force-pushed\?\)/);
+      expect(existsSync(dest)).toBe(false);
+    });
   });
 });
 
