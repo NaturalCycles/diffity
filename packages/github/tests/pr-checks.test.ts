@@ -23,6 +23,7 @@ describe('parseChecks', () => {
       run('lint', 'COMPLETED', 'NEUTRAL'),
       run('build', 'COMPLETED', 'TIMED_OUT'),
       run('release', 'COMPLETED', 'CANCELLED'),
+      run('docs', 'COMPLETED', 'STALE'),
       context('vercel', 'SUCCESS'),
       context('legacy', 'ERROR'),
       context('waiting', 'PENDING'),
@@ -33,11 +34,24 @@ describe('parseChecks', () => {
       { name: 'integration-test-job', status: 'skipped' },
       { name: 'lint', status: 'neutral' },
       { name: 'build', status: 'failure' },
-      { name: 'release', status: 'failure' },
+      { name: 'release', status: 'neutral' },
+      { name: 'docs', status: 'neutral' },
       { name: 'vercel', status: 'success' },
       { name: 'legacy', status: 'failure' },
       { name: 'waiting', status: 'pending' },
     ]);
+  });
+
+  it('lets a re-run\'s success outrank the attempt that was cancelled or superseded', () => {
+    // A cancelled or stale run decided nothing, so the run that did decide is the head's verdict.
+    for (const undecided of ['CANCELLED', 'STALE']) {
+      const checks = parseChecks([run('check-job', 'COMPLETED', undecided), run('check-job', 'COMPLETED', 'SUCCESS')]);
+      expect(checks).toEqual([{ name: 'check-job', status: 'success' }]);
+      expect(ciState(checks)).toBe('passing');
+    }
+    // A real failure still outranks a success at the same name: something is wrong with the code.
+    expect(parseChecks([run('check-job', 'COMPLETED', 'TIMED_OUT'), run('check-job', 'COMPLETED', 'SUCCESS')]))
+      .toEqual([{ name: 'check-job', status: 'failure' }]);
   });
 
   it('keeps one entry per name, at its worst report', () => {
@@ -83,7 +97,9 @@ describe('ciState', () => {
   it('is one word for the whole set of checks', () => {
     expect(ciState([])).toBe('none');
     expect(ciState([{ name: 'a', status: 'success' }, { name: 'b', status: 'skipped' }])).toBe('passing');
-    expect(ciState([{ name: 'a', status: 'skipped' }, { name: 'b', status: 'neutral' }])).toBe('passing');
+    // Nothing here decided anything, so there is nothing to call green.
+    expect(ciState([{ name: 'a', status: 'skipped' }, { name: 'b', status: 'neutral' }])).toBe('none');
+    expect(ciState(parseChecks([run('check-job', 'COMPLETED', 'CANCELLED')]))).toBe('none');
     expect(ciState([{ name: 'a', status: 'success' }, { name: 'b', status: 'pending' }])).toBe('running');
     // A failure outranks a run still going: there is already something to fix.
     expect(ciState([{ name: 'a', status: 'pending' }, { name: 'b', status: 'failure' }])).toBe('failing');

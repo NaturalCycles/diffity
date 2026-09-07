@@ -175,7 +175,11 @@ function checkStatus(entry: Record<string, unknown>): PrCheck['status'] {
       return 'success';
     case 'SKIPPED':
       return 'skipped';
+    // A run that was cancelled or superseded never decided anything, so it must not outrank the
+    // re-run of the same check that did: neutral loses to that run's success.
     case 'NEUTRAL':
+    case 'CANCELLED':
+    case 'STALE':
       return 'neutral';
     case 'PENDING':
     case 'EXPECTED':
@@ -208,15 +212,19 @@ export function parseFiles(raw: unknown): PrFile[] {
   return files;
 }
 
-/** What CI amounts to for a head: one word for the whole set of checks. */
+/**
+ * What CI amounts to for a head: one word for the whole set of checks. Nothing passed unless
+ * something actually ran — a set with no verdict in it at all, skipped or undecided, is as good as
+ * no checks.
+ */
 export function ciState(checks: PrCheck[]): CiState {
-  if (checks.length === 0) {
-    return 'none';
-  }
   if (checks.some(check => check.status === 'failure')) {
     return 'failing';
   }
-  return checks.some(check => check.status === 'pending') ? 'running' : 'passing';
+  if (checks.some(check => check.status === 'pending')) {
+    return 'running';
+  }
+  return checks.some(check => check.status === 'success') ? 'passing' : 'none';
 }
 
 function isPrState(value: unknown): value is PrState {

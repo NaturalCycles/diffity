@@ -111,6 +111,9 @@ function ciLine(checks: PrCheck[]): string {
   const reported = checks.filter(check => check.status !== 'skipped')
     .map(check => `${checkName(check.name)} ${check.status.toUpperCase()}`);
   const skipped = checks.length - reported.length;
+  if (reported.length === 0) {
+    return `CI at this head: ${skipped} checks skipped, none ran`;
+  }
   if (skipped > 0) {
     reported.push(`${skipped} more skipped`);
   }

@@ -172,6 +172,14 @@ describe('composePrompt', () => {
     expect(prompt).toContain('If a check failed or is still running,\nsay so in the summary.');
   });
 
+  it('says so plainly when every check was skipped', () => {
+    const prompt = composePrompt({
+      snapshot: { ...snapshot, checks: [{ name: 'a', status: 'skipped' }, { name: 'b', status: 'skipped' }] },
+      worktreePath: '/wt', port: 5555, filter: '', alertWhen: '', mcpAllow: [],
+    });
+    expect(prompt).toContain('CI at this head: 2 checks skipped, none ran');
+  });
+
   it('says CI has not reported when nothing has, and still forbids the toolchain', () => {
     const prompt = composePrompt({ snapshot, worktreePath: '/wt', port: 5555, filter: '', alertWhen: '', mcpAllow: [] });
     expect(prompt).toContain('CI has not reported for this head.');
