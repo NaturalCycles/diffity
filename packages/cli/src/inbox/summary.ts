@@ -13,9 +13,7 @@ export function severityOf(body: string): string {
   if (!match) {
     return 'other';
   }
-  return (match[1] ?? match[2]).toUpperCase() === match[1]?.toUpperCase() && match[1]
-    ? match[1].toUpperCase()
-    : match[2].toLowerCase();
+  return match[1] ? match[1].toUpperCase() : match[2].toLowerCase();
 }
 
 /** "1 P1 · 2 P2", counting each finding thread by the severity it opens with; the general summary is not a finding. */
