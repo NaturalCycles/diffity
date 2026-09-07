@@ -15,7 +15,7 @@ function existing(over: Partial<InboxPr> = {}): InboxPr {
   return {
     id: 'o/r#1', owner: 'o', repo: 'r', number: 1, title: 'A change', url: 'https://github.com/o/r/pull/1',
     author: 'alice', isDraft: false, headSha: 'aaa', baseRef: 'main', additions: 10, deletions: 2, changedFiles: 3,
-    createdAt: null, updatedAt: null, bumpedAt: null, requested: true, status: 'prepared', statusReason: null, attempts: 0, preparedHeadSha: 'aaa', preparedAt: '2026-09-02T09:00:00Z',
+    createdAt: null, updatedAt: null, bumpedAt: null, summary: null, alert: null, requested: true, status: 'prepared', statusReason: null, attempts: 0, preparedHeadSha: 'aaa', preparedAt: '2026-09-02T09:00:00Z',
     bundlePath: '/b.json', worktreePath: '/wt', logPath: '/l.log', firstSeenAt: 'x', lastSeenAt: 'y', ...over,
   };
 }
@@ -87,10 +87,13 @@ describe('reconcile', () => {
     expect(reconcile({ existing: { ...failing, attempts: 3 }, snapshot: snapshot({ headSha: 'ddd' }), requested: true, viewerLogin: 'me' })!.prepare).toBe(true);
   });
 
-  it('keeps a dismissed pull request dismissed at that head, and takes new commits from the top', () => {
+  it('keeps a dismissed pull request dismissed at that head, retires it with the request, and takes new commits from the top', () => {
     const dismissed = existing({ status: 'dismissed', statusReason: 'dismissed by the reviewer' });
     expect(reconcile({ existing: dismissed, snapshot: snapshot(), requested: true, viewerLogin: 'me' })).toBeNull();
-    expect(reconcile({ existing: dismissed, snapshot: snapshot(), requested: false, viewerLogin: 'me' })).toBeNull();
+    expect(reconcile({ existing: dismissed, snapshot: snapshot(), requested: false, viewerLogin: 'me' }))
+      .toEqual({ status: 'hidden', reason: 'review no longer requested', prepare: false });
+    expect(reconcile({ existing: dismissed, snapshot: snapshot({ state: 'MERGED' }), requested: false, viewerLogin: 'me' }))
+      .toEqual({ status: 'done', reason: 'merged', prepare: false });
     expect(reconcile({ existing: dismissed, snapshot: snapshot({ headSha: 'bbb' }), requested: true, viewerLogin: 'me' }))
       .toEqual({ status: 'queued', reason: null, prepare: true });
   });

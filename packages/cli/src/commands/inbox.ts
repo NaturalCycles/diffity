@@ -51,7 +51,7 @@ export function registerInboxCommand(program: Command): void {
       process.on('SIGTERM', shutdown);
 
       console.log(pc.green(`📋 diffity inbox on http://localhost:${config.port} — polling every ${config.pollMinutes} min. Ctrl-C to stop.`));
-      const handle = await runDaemon(store, config, process.execPath, entry, log);
+      const handle = await runDaemon(store, config, process.execPath, entry, log, { configPath });
       handleStop = handle.stop;
     });
 
@@ -71,19 +71,22 @@ export function registerInboxCommand(program: Command): void {
         return;
       }
 
-      if (view.ready.length === 0 && view.working.length === 0 && view.other.length === 0) {
+      if (view.ready.length === 0 && view.working.length === 0 && view.other.length === 0 && view.dismissed.length === 0) {
         console.log(pc.dim('Nothing in the inbox yet. Run `diffity inbox` to start watching.'));
         return;
       }
 
       section('Ready to review', view.ready.map(row =>
-        `  ${sizeBadge(row)} ${pc.bold(`${row.repo}#${row.number}`)} ${row.title}${row.stale ? pc.yellow('  (stale — new commits)') : ''}`,
+        `  ${sizeBadge(row)} ${pc.bold(`${row.repo}#${row.number}`)} ${row.title}${row.summary ? pc.dim(`  ${row.summary}`) : ''}${row.alert ? pc.red(`  ⚠ ${row.alert}`) : ''}${row.stale ? pc.yellow('  (stale — new commits)') : ''}`,
       ));
       section('Queue', view.working.map(row =>
         `  ${pc.dim(row.status.padEnd(9))} ${row.repo}#${row.number} ${row.title} ${pc.dim(row.statusReason ?? '')}`,
       ));
       section('Other', view.other.map(row =>
         `  ${pc.dim(row.status.padEnd(9))} ${row.repo}#${row.number} ${pc.dim(row.statusReason ?? '')}`,
+      ));
+      section('Dismissed', view.dismissed.map(row =>
+        `  ${pc.dim('dismissed')} ${row.repo}#${row.number} ${row.title}`,
       ));
     });
 }

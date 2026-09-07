@@ -24,6 +24,22 @@ export function inboxPage(): string {
   body { margin: 0; background: var(--bg); color: var(--ink);
     font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
   header { display: flex; align-items: baseline; gap: 12px; padding: 20px 24px 8px; }
+  .bell { margin-left: auto; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--ink);
+    font: inherit; font-size: 12px; padding: 4px 10px; cursor: pointer; }
+  .bell:hover { border-color: var(--accent); }
+  .badge.alert { color: var(--bad); border: 1px solid var(--bad); }
+  .settings { margin-top: 28px; border-top: 1px solid var(--line); padding-top: 14px; }
+  .settings summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
+  .settings label { display: block; margin-top: 12px; font-size: 12.5px; color: var(--muted); }
+  .settings textarea { display: block; width: 100%; margin-top: 4px; font: inherit; font-size: 13px; color: var(--ink);
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; resize: vertical; }
+  .settings-row { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
+  .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px 16px; margin-top: 4px; }
+  .settings-grid input[type=number] { display: block; width: 100%; margin-top: 4px; font: inherit; font-size: 13px; color: var(--ink);
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+  .settings-grid .check { display: flex; align-items: center; gap: 8px; align-self: end; margin-top: 12px; }
+  .settings button { border: 1px solid var(--accent); border-radius: 8px; background: var(--accent); color: white;
+    font: inherit; font-size: 12.5px; padding: 5px 12px; cursor: pointer; }
   h1 { font-size: 18px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
   .sub { color: var(--muted); font-size: 12.5px; }
   main { padding: 8px 24px 40px; max-width: 900px; }
@@ -63,6 +79,7 @@ export function inboxPage(): string {
 <header>
   <h1>diffity inbox</h1>
   <span class="sub" id="status">loading…</span>
+  <button class="bell" id="bell" type="button" hidden>🔔 Notify me when a review is ready</button>
 </header>
 <main>
   <section id="ready-section" hidden>
@@ -77,7 +94,31 @@ export function inboxPage(): string {
     <h2>Other</h2>
     <div id="other"></div>
   </section>
+  <section id="dismissed-section" hidden>
+    <h2>Dismissed</h2>
+    <div id="dismissed"></div>
+  </section>
   <div id="all-empty" class="empty" hidden>Nothing waiting for your review right now.</div>
+  <details class="settings" id="settings">
+    <summary>Settings</summary>
+    <label>Skip PRs if:
+      <textarea id="filter" rows="3" placeholder="e.g. the change is payments-focused, or only touches translations"></textarea>
+    </label>
+    <label>Notify me if:
+      <textarea id="alertWhen" rows="3" placeholder="e.g. there is a P1, or the change touches authentication (empty: every prepared review)"></textarea>
+    </label>
+    <div class="settings-grid">
+      <label>Max prepared at once<input id="maxPrepared" type="number" min="1" step="1"></label>
+      <label>Poll every (minutes)<input id="pollMinutes" type="number" min="1" step="1"></label>
+      <label>Preparation timeout (minutes)<input id="prepareTimeoutMinutes" type="number" min="1" step="1"></label>
+      <label>Answer timeout (minutes)<input id="liveTimeoutMinutes" type="number" min="1" step="1"></label>
+      <label class="check"><input id="live" type="checkbox"> Park a live agent on opened reviews</label>
+    </div>
+    <div class="settings-row">
+      <button id="save" type="button">Save</button>
+      <span class="sub" id="settings-status"></span>
+    </div>
+  </details>
   <div class="foot" id="foot"></div>
 </main>
 <script>
@@ -118,7 +159,8 @@ export function inboxPage(): string {
       '<span class="size">' + sizeLabel(r) + '</span>' +
       '<span class="title"><div><span class="repo">' + esc(r.repo) + '#' + r.number + '</span> ' +
       '<span class="name">' + esc(r.title) + '</span></div>' +
-      '<div class="meta">by ' + esc(r.author) + ' \\u00b7 ' + r.changedFiles + ' file(s)' + (times(r) ? ' \\u00b7 ' + times(r) : '') + '</div></span>' +
+      '<div class="meta">by ' + esc(r.author) + ' \\u00b7 ' + r.changedFiles + ' file(s)' + (r.summary ? ' \\u00b7 ' + esc(r.summary) : '') + (times(r) ? ' \\u00b7 ' + times(r) : '') + '</div></span>' +
+      (r.alert ? '<span class="badge alert" title="' + esc(r.alert) + '">alert</span>' : '') +
       (r.stale ? '<span class="badge stale">stale</span>' : '') +
       '<span class="open-hint">open \\u2197</span>';
     return row;
@@ -190,17 +232,81 @@ export function inboxPage(): string {
     el(sectionId).hidden = rows.length === 0;
   }
 
+  // --- notifications: the set of prepared reviews seen at the last poll; a new one is announced.
+  let known = null;
+  let settings = { filter: '', alertWhen: '' };
+
+  function canNotify() {
+    return 'Notification' in window && Notification.permission === 'granted';
+  }
+
+  function announce(view) {
+    const current = new Map(view.ready.map(r => [r.id + '@' + (r.preparedAt || ''), r]));
+    if (known !== null && canNotify()) {
+      for (const [key, r] of current) {
+        if (known.has(key)) continue;
+        // With words on what matters, only what the agent flagged is worth interrupting for.
+        if (settings.alertWhen.trim() && !r.alert) continue;
+        const body = [r.title, r.summary, r.alert].filter(Boolean).join('\\n');
+        const n = new Notification(r.repo + '#' + r.number + ' is ready to review', { body, tag: r.id });
+        n.onclick = () => { window.open(r.openUrl, '_blank'); n.close(); };
+      }
+    }
+    known = new Set(current.keys());
+  }
+
+  function showBell() {
+    const bell = el('bell');
+    bell.hidden = !('Notification' in window) || Notification.permission !== 'default';
+    bell.onclick = async () => { await Notification.requestPermission(); showBell(); };
+  }
+
+  async function loadSettings() {
+    try {
+      const res = await fetch('/api/settings', { cache: 'no-store' });
+      if (!res.ok) return;
+      settings = await res.json();
+      el('filter').value = settings.filter;
+      el('alertWhen').value = settings.alertWhen;
+      for (const key of ['maxPrepared', 'pollMinutes', 'prepareTimeoutMinutes', 'liveTimeoutMinutes']) el(key).value = settings[key];
+      el('live').checked = settings.live;
+    } catch (err) {
+      el('settings-status').textContent = 'settings could not be loaded';
+    }
+  }
+
+  async function saveSettings() {
+    const next = {
+      filter: el('filter').value,
+      alertWhen: el('alertWhen').value,
+      maxPrepared: Number(el('maxPrepared').value),
+      pollMinutes: Number(el('pollMinutes').value),
+      prepareTimeoutMinutes: Number(el('prepareTimeoutMinutes').value),
+      liveTimeoutMinutes: Number(el('liveTimeoutMinutes').value),
+      live: el('live').checked,
+    };
+    const res = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next) });
+    if (!res.ok) {
+      el('settings-status').textContent = 'not saved: ' + await res.text();
+      return;
+    }
+    settings = next;
+    el('settings-status').textContent = 'saved \\u00b7 in effect from the next poll and preparation';
+  }
+
   async function refresh() {
     try {
       const res = await fetch('/api/inbox', { cache: 'no-store' });
       const view = await res.json();
+      announce(view);
       fill('ready-section', 'ready', view.ready, r => withActions(readyRow(r), r));
       fill('working-section', 'working', view.working, r => withActions(plainRow(r, 'work', r.bumped ? 'bumped' : r.status), r));
       fill('other-section', 'other', view.other, r => {
         const bad = r.status === 'failed';
         return withActions(plainRow(r, bad ? 'bad' : 'work', r.status), r);
       });
-      const total = view.ready.length + view.working.length + view.other.length;
+      fill('dismissed-section', 'dismissed', view.dismissed, r => withActions(plainRow(r, 'work', 'dismissed'), r));
+      const total = view.ready.length + view.working.length + view.other.length + view.dismissed.length;
       el('all-empty').hidden = total > 0;
       el('status').textContent = view.ready.length + ' ready \\u00b7 ' + view.working.length + ' queued';
       el('foot').textContent = 'Updated ' + new Date().toLocaleTimeString();
@@ -209,6 +315,9 @@ export function inboxPage(): string {
     }
   }
 
+  el('save').onclick = saveSettings;
+  showBell();
+  loadSettings();
   refresh();
   setInterval(refresh, 4000);
 </script>

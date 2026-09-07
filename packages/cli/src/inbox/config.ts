@@ -16,6 +16,12 @@ export interface InboxConfig {
    */
   filter: string;
   /**
+   * The reviewer's own words on what needs their attention now. The preparing agent judges each
+   * review against them and marks the ones that match, and the inbox page notifies for those only;
+   * empty means every prepared review is worth a notification.
+   */
+  alertWhen: string;
+  /**
    * The agent, as argv; it runs in the pull request's worktree and reads its prompt on stdin. That
    * worktree is code the pull request's author controls, so the daemon runs the agent without the
    * forge's credentials in its environment — but the command itself still executes attacker-chosen
@@ -43,6 +49,7 @@ export const DEFAULT_INBOX_CONFIG: InboxConfig = {
   reposDir: '~/repos',
   worktreesDir: '~/.diffity/inbox/worktrees',
   filter: '',
+  alertWhen: '',
   // Defence in depth on top of the stripped credentials: the agent is also denied the gh commands
   // that could reach the pull request even if it tried.
   prepare: [
@@ -100,6 +107,12 @@ export function parseInboxConfig(raw: unknown, source = 'inbox config'): InboxCo
     }
     config.filter = obj.filter;
   }
+  if (obj.alertWhen !== undefined) {
+    if (typeof obj.alertWhen !== 'string') {
+      throw new Error(`${source}: alertWhen must be a string`);
+    }
+    config.alertWhen = obj.alertWhen;
+  }
   if (obj.prepare !== undefined) {
     if (!Array.isArray(obj.prepare) || obj.prepare.length === 0 || !obj.prepare.every(part => typeof part === 'string' && part !== '')) {
       throw new Error(`${source}: prepare must be a non-empty array of strings (a command and its arguments)`);
@@ -122,6 +135,29 @@ export function parseInboxConfig(raw: unknown, source = 'inbox config'): InboxCo
     config.liveTimeoutMinutes = positive(obj.liveTimeoutMinutes, 'liveTimeoutMinutes', source);
   }
   return config;
+}
+
+/** The settings the inbox page edits, kept in the config file beside the keys only the file holds. */
+export type InboxSettings = Pick<InboxConfig, 'filter' | 'alertWhen' | 'maxPrepared' | 'pollMinutes' | 'live' | 'liveTimeoutMinutes' | 'prepareTimeoutMinutes'>;
+
+/**
+ * Writes the page-editable settings into the config file, leaving every other key as the reviewer
+ * wrote it. A file that is missing or unreadable starts from nothing rather than from the defaults,
+ * so a later load still fills those in.
+ */
+export function saveInboxSettings(path: string, settings: InboxSettings): void {
+  let raw: Record<string, unknown> = {};
+  if (existsSync(path)) {
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(path, 'utf-8'));
+      if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+        raw = parsed as Record<string, unknown>;
+      }
+    } catch { /* rewritten below from what is known */ }
+  }
+  Object.assign(raw, settings);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(raw, null, 2) + '\n');
 }
 
 function positive(value: unknown, key: string, source: string): number {

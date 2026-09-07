@@ -89,11 +89,13 @@ describe('InboxStore migration', () => {
   it('opens a fresh database and round-trips a prepared row', () => {
     const store = new InboxStore(path);
     store.observe(snapshot(), true, 'now');
-    store.markPrepared('o/r#1', { headSha: 'aaa', bundlePath: '/b', worktreePath: '/wt', logPath: '/l', at: 'now' });
+    store.markPrepared('o/r#1', { headSha: 'aaa', bundlePath: '/b', worktreePath: '/wt', logPath: '/l', at: 'now', summary: '1 P1', alert: 'touches auth' });
     const pr = store.get('o/r#1')!;
     expect(pr.status).toBe('prepared');
     expect(pr.preparedHeadSha).toBe('aaa');
     expect(pr.attempts).toBe(0);
+    expect(pr.summary).toBe('1 P1');
+    expect(pr.alert).toBe('touches auth');
     store.close();
   });
 });

@@ -47,6 +47,8 @@ export interface InboxPr {
   /** The head the prepared review is for; older than headSha means the review is stale. */
   preparedHeadSha: string | null;
   preparedAt: string | null;
+  summary: string | null;
+  alert: string | null;
   bundlePath: string | null;
   worktreePath: string | null;
   logPath: string | null;
@@ -60,15 +62,22 @@ export interface Prepared {
   worktreePath: string;
   logPath: string;
   at: string;
+  /** The findings by severity, as the page shows them: "1 P1 · 2 P2". */
+  summary: string | null;
+  /** Why the agent judged this one to need the reviewer now, when it did. */
+  alert: string | null;
 }
 
 export function prId(ref: { owner: string; repo: string; number: number }): string {
   return `${ref.owner}/${ref.repo}#${ref.number}`;
 }
 
-/** Statuses the inbox is finished with: no poll re-queues them and no surface lists them. */
+/**
+ * Statuses the inbox is finished with: no poll re-queues them and no surface lists them. A
+ * dismissal is not one — it stays listed so the reviewer can take it back with a bump.
+ */
 export function isRetired(status: InboxStatus): boolean {
-  return status === 'done' || status === 'hidden' || status === 'dismissed';
+  return status === 'done' || status === 'hidden';
 }
 
 /**
@@ -112,11 +121,13 @@ export class InboxStore {
         last_seen_at TEXT NOT NULL,
         created_at TEXT,
         updated_at TEXT,
-        bumped_at TEXT
+        bumped_at TEXT,
+        summary TEXT,
+        alert TEXT
       )
     `);
     // A table from an earlier build gains the columns it lacks; a fresh one already has them.
-    for (const column of ['attempts INTEGER NOT NULL DEFAULT 0', 'created_at TEXT', 'updated_at TEXT', 'bumped_at TEXT']) {
+    for (const column of ['attempts INTEGER NOT NULL DEFAULT 0', 'created_at TEXT', 'updated_at TEXT', 'bumped_at TEXT', 'summary TEXT', 'alert TEXT']) {
       try {
         this.db.exec(`ALTER TABLE inbox_prs ADD COLUMN ${column}`);
       } catch (err) {
@@ -202,9 +213,9 @@ export class InboxStore {
     this.db.prepare(`
       UPDATE inbox_prs
       SET status = 'prepared', status_reason = NULL, prepared_head_sha = ?, prepared_at = ?,
-          bundle_path = ?, worktree_path = ?, log_path = ?
+          bundle_path = ?, worktree_path = ?, log_path = ?, summary = ?, alert = ?
       WHERE id = ?
-    `).run(prepared.headSha, prepared.at, prepared.bundlePath, prepared.worktreePath, prepared.logPath, id);
+    `).run(prepared.headSha, prepared.at, prepared.bundlePath, prepared.worktreePath, prepared.logPath, prepared.summary, prepared.alert, id);
   }
 
   /** Where the preparation left its trail, kept even when it ended in a skip or a failure. */
@@ -246,6 +257,8 @@ interface Row {
   created_at: string | null;
   updated_at: string | null;
   bumped_at: string | null;
+  summary: string | null;
+  alert: string | null;
 }
 
 function rowToPr(row: Row): InboxPr {
@@ -272,6 +285,8 @@ function rowToPr(row: Row): InboxPr {
     bumpedAt: row.bumped_at,
     preparedHeadSha: row.prepared_head_sha,
     preparedAt: row.prepared_at,
+    summary: row.summary,
+    alert: row.alert,
     bundlePath: row.bundle_path,
     worktreePath: row.worktree_path,
     logPath: row.log_path,

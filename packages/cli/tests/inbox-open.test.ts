@@ -1,14 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { request } from 'node:http';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { resolveDismiss, resolveOpen } from '../src/inbox/open.js';
 import { openPreparedSession, baseRefOf, ensureServer, repoHash, serverArgs, type OpenSessionDeps } from '../src/inbox/open-session.js';
-import { startInboxServer, type AttendantHost } from '../src/inbox/daemon.js';
+import { startInboxServer, settingsHost, type AttendantHost } from '../src/inbox/daemon.js';
 import { InboxStore } from '../src/inbox/store.js';
 import { readRegistry, registerInstance } from '../src/registry.js';
 import type { PrSnapshot } from '@diffity/github';
@@ -28,7 +28,7 @@ function snapshot(): PrSnapshot {
 function preparedStore(): InboxStore {
   const store = new InboxStore(':memory:');
   store.observe(snapshot(), true, 'now');
-  store.markPrepared('o/r#4', { headSha: 'aaa', bundlePath: '/b.json', worktreePath: '/wt', logPath: '/l', at: 'now' });
+  store.markPrepared('o/r#4', { headSha: 'aaa', bundlePath: '/b.json', worktreePath: '/wt', logPath: '/l', at: 'now', summary: null, alert: null });
   return store;
 }
 
@@ -215,9 +215,9 @@ describe('the inbox server routes', () => {
     importBundle: () => {},
   };
 
-  async function serve(store: InboxStore, logs: string[] = [], attendants: AttendantHost | null = null, onBump: (() => void) | null = null) {
-    const config = { pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', prepare: ['x'], prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10 };
-    const server = startInboxServer(store, config, m => logs.push(m), stubOpen, attendants, onBump);
+  async function serve(store: InboxStore, logs: string[] = [], attendants: AttendantHost | null = null, onBump: (() => void) | null = null, configPath?: string) {
+    const config = { pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', alertWhen: '', prepare: ['x'], prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10 };
+    const server = startInboxServer(store, config, m => logs.push(m), stubOpen, attendants, onBump, settingsHost(config, configPath));
     await new Promise(resolve => server.on('listening', resolve));
     const { port } = server.address() as { port: number };
     return { port, server };
@@ -312,6 +312,8 @@ describe('the inbox server routes', () => {
     const store = preparedStore();
     store.observe({ ...snapshot(), number: 5 }, true, 'now');
     store.setStatus('o/r#5', 'queued', 'waiting: 5 reviews already prepared');
+    store.observe({ ...snapshot(), number: 6 }, true, 'now');
+    store.setStatus('o/r#6', 'dismissed', 'dismissed by the reviewer');
     let ticks = 0;
     const { port, server } = await serve(store, [], null, () => { ticks++; });
     try {
@@ -323,10 +325,44 @@ describe('the inbox server routes', () => {
       expect(pr.bumpedAt).not.toBeNull();
       expect(ticks).toBe(1);
 
+      // A dismissed one comes back through the same door.
+      const back = await fetch(`http://127.0.0.1:${port}/prepare/${encodeURIComponent('o/r#6')}`, { method: 'POST' });
+      expect(back.status).toBe(204);
+      expect(store.get('o/r#6')!.status).toBe('queued');
+
       const prepared = await fetch(`http://127.0.0.1:${port}/prepare/${encodeURIComponent('o/r#4')}`, { method: 'POST' });
       expect(prepared.status).toBe(409);
       const unknown = await fetch(`http://127.0.0.1:${port}/prepare/${encodeURIComponent('o/r#9')}`, { method: 'POST' });
       expect(unknown.status).toBe(404);
+    } finally {
+      server.close();
+      store.close();
+    }
+  });
+
+  it('reads and writes the settings, applying them to the running config and the file', async () => {
+    const store = preparedStore();
+    const configPath = join(root, 'inbox', 'config.json');
+    mkdirSync(join(root, 'inbox'), { recursive: true });
+    writeFileSync(configPath, JSON.stringify({ port: 5390, filter: 'old words' }));
+    const { port, server } = await serve(store, [], null, null, configPath);
+    try {
+      const before = await (await fetch(`http://127.0.0.1:${port}/api/settings`)).json();
+      expect(before).toEqual({ filter: '', alertWhen: '', maxPrepared: 5, pollMinutes: 5, live: true, liveTimeoutMinutes: 10, prepareTimeoutMinutes: 30 });
+
+      const next = { filter: 'skip payments', alertWhen: 'a P1', maxPrepared: 2, pollMinutes: 3, live: false, liveTimeoutMinutes: 4, prepareTimeoutMinutes: 20 };
+      const saved = await fetch(`http://127.0.0.1:${port}/api/settings`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next),
+      });
+      expect(saved.status).toBe(204);
+      const after = await (await fetch(`http://127.0.0.1:${port}/api/settings`)).json();
+      expect(after).toEqual(next);
+      expect(JSON.parse(readFileSync(configPath, 'utf-8'))).toEqual({ port: 5390, ...next });
+
+      const bad = await fetch(`http://127.0.0.1:${port}/api/settings`, { method: 'POST', body: '{"filter": 1}' });
+      expect(bad.status).toBe(400);
+      const driveBy = await rawStatus(port, 'POST', '/api/settings', { Host: `127.0.0.1:${port}`, 'Sec-Fetch-Site': 'cross-site' });
+      expect(driveBy).toBe(403);
     } finally {
       server.close();
       store.close();
@@ -380,7 +416,7 @@ describe('the inbox server routes', () => {
       ensureServer: () => Promise.resolve(7788),
       importBundle: () => { throw new Error('head moved'); },
     };
-    const config = { pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', prepare: ['x'], prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10 };
+    const config = { pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', alertWhen: '', prepare: ['x'], prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10 };
     const server = startInboxServer(store, config, m => logs.push(m), failingOpen);
     await new Promise(resolve => server.on('listening', resolve));
     const { port } = server.address() as { port: number };

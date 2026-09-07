@@ -59,6 +59,7 @@ beforeEach(() => {
   prepareResult = (snap) => ({
     kind: 'prepared', headSha: snap.headSha, bundlePath: `/b/${snap.number}.json`,
     worktree: `/wt/${snap.number}`, logPath: `/l/${snap.number}.log`, at: '2026-09-02T12:00:00.000Z',
+    summary: '1 P2', alert: snap.number === 2 ? 'touches auth' : null,
   });
 });
 
@@ -125,13 +126,14 @@ describe('runTick', () => {
     expect(pr.worktreePath).toBeNull();
   });
 
-  it('sorts the ready list smallest first for the surface', async () => {
+  it('sorts the ready list smallest first for the surface, carrying summary and alert', async () => {
     forge.set(snapshot({ number: 1, additions: 200, deletions: 100 }));
     forge.set(snapshot({ number: 2, additions: 3, deletions: 1 }));
     await runTick(store, deps());
 
     const view = buildView(store, 'http://localhost:5390', '2026-09-02T12:00:00.000Z');
     expect(view.ready.map(row => row.number)).toEqual([2, 1]);
+    expect(view.ready.map(row => [row.summary, row.alert])).toEqual([['1 P2', 'touches auth'], ['1 P2', null]]);
     expect(view.ready[0].openUrl).toBe('http://localhost:5390/open/o%2Fr%232');
   });
 
@@ -229,6 +231,21 @@ describe('runTick', () => {
     const view = buildView(store, 'http://localhost:5390', '2026-09-02T12:00:00.000Z');
     expect(view.ready.map(row => row.number)).toEqual([2]);
     expect(view.other).toEqual([]);
+    // Listed as dismissed, with a way back and no second dismiss.
+    expect(view.dismissed.map(row => [row.number, row.prepareUrl, row.dismissUrl]))
+      .toEqual([[1, 'http://localhost:5390/prepare/o%2Fr%231', null]]);
+  });
+
+  it('retires a dismissed pull request once it is merged, like any other', async () => {
+    forge.set(snapshot({ number: 1 }));
+    await runTick(store, deps());
+    store.setStatus('o/r#1', 'dismissed', 'dismissed by the reviewer');
+
+    forge.requested = [];
+    forge.snapshots.set('o/r#1', snapshot({ number: 1, state: 'MERGED' }));
+    await runTick(store, deps());
+    expect(store.get('o/r#1')!.status).toBe('done');
+    expect(buildView(store, 'http://localhost:5390', 'now').dismissed).toEqual([]);
   });
 
   it('does not prepare a pull request dismissed while the tick was busy with another', async () => {
