@@ -3,13 +3,26 @@ import { InboxStore, prId } from '../src/inbox/store.js';
 import { runTick, type Forge, type TickDeps } from '../src/inbox/tick.js';
 import { buildView } from '../src/inbox/view.js';
 import type { PrRef, PrSnapshot } from '@diffity/github';
-import type { PrepareResult } from '../src/inbox/prepare.js';
+import type { PrepareResult, RunLog } from '../src/inbox/prepare.js';
 
 function snapshot(over: Partial<PrSnapshot> = {}): PrSnapshot {
   return {
     owner: 'o', repo: 'r', number: 1, title: 'A change', url: 'https://github.com/o/r/pull/1',
     author: 'alice', isBot: false, isDraft: false, state: 'OPEN', headSha: 'aaa', baseRef: 'main',
     additions: 10, deletions: 2, changedFiles: 3, createdAt: '2026-09-02T10:00:00Z', updatedAt: '2026-09-02T10:00:00Z', ...over,
+  };
+}
+
+/** One agent run as `preparePr` reports it: two minutes, with what it spent. */
+function run(over: Partial<RunLog> = {}): RunLog {
+  return {
+    startedAt: '2026-09-02T11:58:00.000Z',
+    endedAt: '2026-09-02T12:00:00.000Z',
+    stats: {
+      costUsd: 1.2, durationMs: 120_000, turns: 9, inputTokens: 10, outputTokens: 2000,
+      cacheReadTokens: 5000, cacheWriteTokens: 100, models: ['claude-x'], isError: false, subtype: 'success',
+    },
+    ...over,
   };
 }
 
@@ -36,6 +49,7 @@ let forge: FakeForge;
 let prepared: string[];
 let bumpedFlags: boolean[];
 let removed: string[];
+let pauses: string[];
 let prepareResult: (snap: PrSnapshot) => PrepareResult;
 
 function deps(over: Partial<TickDeps> = {}): TickDeps {
@@ -46,6 +60,8 @@ function deps(over: Partial<TickDeps> = {}): TickDeps {
     log: () => {},
     now: () => '2026-09-02T12:00:00.000Z',
     maxPrepared: 100,
+    agentModel: 'the-configured-model',
+    pauseUntil: until => { pauses.push(until); },
     ...over,
   };
 }
@@ -56,10 +72,11 @@ beforeEach(() => {
   prepared = [];
   bumpedFlags = [];
   removed = [];
+  pauses = [];
   prepareResult = (snap) => ({
     kind: 'prepared', headSha: snap.headSha, bundlePath: `/b/${snap.number}.json`,
     worktree: `/wt/${snap.number}`, logPath: `/l/${snap.number}.log`, at: '2026-09-02T12:00:00.000Z',
-    summary: '1 P2', alert: snap.number === 2 ? 'touches auth' : null, stats: null,
+    summary: '1 P2', alert: snap.number === 2 ? 'touches auth' : null, run: run(),
   });
 });
 
@@ -89,7 +106,7 @@ describe('runTick', () => {
 
   it('records a skip verdict without preparing again next tick', async () => {
     forge.set(snapshot());
-    prepareResult = () => ({ kind: 'skipped', reason: 'payments PR', logPath: '/l/1.log', stats: null });
+    prepareResult = () => ({ kind: 'skipped', reason: 'payments PR', logPath: '/l/1.log', run: run() });
     await runTick(store, deps());
     expect(store.get('o/r#1')!.status).toBe('skipped');
     expect(store.get('o/r#1')!.statusReason).toBe('payments PR');
@@ -139,7 +156,7 @@ describe('runTick', () => {
 
   it('holds a failed preparation with its reason and log, and stops after the attempt cap', async () => {
     forge.set(snapshot());
-    prepareResult = () => ({ kind: 'failed', reason: 'no local clone', worktree: null, logPath: '/l/1.log', stats: null });
+    prepareResult = () => ({ kind: 'failed', failure: 'agent', reason: 'no local clone', worktree: null, logPath: '/l/1.log', run: run() });
 
     for (let i = 0; i < 5; i++) {
       prepared = [];
@@ -317,6 +334,87 @@ describe('runTick', () => {
     expect(store.get('o/r#3')!.status).toBe('prepared');
     expect(store.get('o/r#3')!.bumpedAt).toBeNull();
     expect(store.get('o/r#2')!.status).toBe('queued');
+  });
+
+  it('logs the preparation as a run, with the models it spent on', async () => {
+    forge.set(snapshot());
+    await runTick(store, deps());
+
+    expect(store.runs({})).toHaveLength(1);
+    expect(store.runs({})[0]).toMatchObject({
+      prId: 'o/r#1', headSha: 'aaa', phase: 'prepare', outcome: 'prepared', model: 'claude-x',
+      turns: 9, costUsd: 1.2, durationMs: 120_000, outputTokens: 2000, note: null,
+    });
+  });
+
+  it('logs a skip and a timeout under their own outcomes, and nothing when no agent ran', async () => {
+    forge.set(snapshot());
+    prepareResult = () => ({ kind: 'skipped', reason: 'payments PR', logPath: '/l/1.log', run: run() });
+    await runTick(store, deps());
+    expect(store.runs({}).map(row => [row.outcome, row.note])).toEqual([['skipped', 'payments PR']]);
+
+    forge.snapshots.set('o/r#1', snapshot({ headSha: 'bbb' }));
+    prepareResult = () => ({ kind: 'failed', failure: 'timeout', reason: 'the agent did not finish within 30 minutes', worktree: null, logPath: '/l/1.log', run: run() });
+    await runTick(store, deps());
+    expect(store.runs({}).map(row => row.outcome)).toEqual(['timeout', 'skipped']);
+
+    // A worktree that could not be cut never got as far as an agent, so there is no run to log.
+    forge.snapshots.set('o/r#1', snapshot({ headSha: 'ccc' }));
+    prepareResult = () => ({ kind: 'failed', failure: 'worktree', reason: 'No local clone', worktree: null, logPath: null, run: run() });
+    await runTick(store, deps());
+    expect(store.runs({}).map(row => row.outcome)).toEqual(['timeout', 'skipped']);
+  });
+
+  it('records the configured model when the run did not say which it used', async () => {
+    forge.set(snapshot());
+    prepareResult = snap => ({
+      kind: 'prepared', headSha: snap.headSha, bundlePath: '/b.json', worktree: '/wt', logPath: '/l.log',
+      at: '2026-09-02T12:00:00.000Z', summary: null, alert: null, run: run({ stats: null }),
+    });
+    await runTick(store, deps());
+
+    // No stats at all: the wall clock the daemon measured stands in for the duration.
+    expect(store.runs({})[0]).toMatchObject({ model: 'the-configured-model', durationMs: 120_000, turns: null, costUsd: null });
+  });
+
+  it('waits out a session limit: the row keeps its retries and preparing is paused', async () => {
+    forge.set(snapshot());
+    prepareResult = () => ({
+      kind: 'failed', failure: 'rate-limit', reason: 'waiting: Claude session limit until 14:00',
+      worktree: null, logPath: '/l/1.log', resetsAt: '2026-09-02T14:00:00.000Z', run: run(),
+    });
+    await runTick(store, deps());
+
+    const pr = store.get('o/r#1')!;
+    expect(pr.status).toBe('queued');
+    expect(pr.statusReason).toBe('waiting: Claude session limit until 14:00');
+    expect(pr.attempts).toBe(0);
+    expect(pr.logPath).toBe('/l/1.log');
+    expect(pauses).toEqual(['2026-09-02T14:00:00.000Z']);
+    expect(store.runs({})[0]).toMatchObject({ outcome: 'rate-limited', note: 'waiting: Claude session limit until 14:00' });
+  });
+
+  it('pauses half an hour when the limit message named no time', async () => {
+    forge.set(snapshot());
+    prepareResult = () => ({
+      kind: 'failed', failure: 'rate-limit', reason: 'waiting: Claude session limit, retrying in 30 minutes',
+      worktree: null, logPath: null, resetsAt: null, run: run(),
+    });
+    await runTick(store, deps());
+    expect(pauses).toEqual(['2026-09-02T12:30:00.000Z']);
+  });
+
+  it('polls and reconciles while paused, but prepares nothing until it lifts', async () => {
+    forge.set(snapshot());
+    await runTick(store, deps({ paused: () => true }));
+
+    expect(prepared).toEqual([]);
+    expect(store.get('o/r#1')!.status).toBe('queued');
+    expect(store.runs({})).toEqual([]);
+
+    await runTick(store, deps());
+    expect(prepared).toEqual(['o/r#1']);
+    expect(store.get('o/r#1')!.status).toBe('prepared');
   });
 
   it('offers a bump on queued, skipped and failed rows only, and lists a bumped row first', async () => {

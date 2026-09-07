@@ -13,13 +13,15 @@ export interface AttendedPr {
   url: string;
   title: string;
   author: string;
+  /** The head the prepared review is for, so an answer's run is logged against it. */
+  headSha: string | null;
 }
 
 export interface AttendantDeps {
   /** Parks on the session once — one `agent await` — and says how it ended. Aborting ends it early. */
   awaitRequest(worktree: string, signal: AbortSignal): Promise<AwaitOutcome>;
   /** Runs the answering agent for one request; resolves when it has finished, saying if it was cut short. */
-  answer(worktree: string, prompt: string, signal: AbortSignal): Promise<{ timedOut: boolean }>;
+  answer(worktree: string, pr: AttendedPr, prompt: string, signal: AbortSignal): Promise<{ timedOut: boolean }>;
   /** Closes a request the agent could not answer, with a note in the thread, so it is not asked again. */
   giveUp(worktree: string, request: LiveRequest, note: string): Promise<void>;
   log(message: string): void;
@@ -93,7 +95,7 @@ export class Attendants {
           this.deps.log(`${pr.id}: the reader asked about ${request.filePath}:${request.startLine}`);
           // Not awaited: the wait is re-armed at once, and a second question arriving meanwhile
           // queues behind this one on the server rather than finding nobody parked.
-          void this.deps.answer(worktree, composeLivePrompt(pr, worktree, request), signal)
+          void this.deps.answer(worktree, pr, composeLivePrompt(pr, worktree, request), signal)
             .then(({ timedOut }) => timedOut
               ? this.deps.giveUp(worktree, request, 'The agent did not finish answering within the time allowed.')
               : undefined)

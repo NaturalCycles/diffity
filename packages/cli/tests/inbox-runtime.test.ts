@@ -3,6 +3,9 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { realAttendantDeps, runAgent, startDiffityServer } from '../src/inbox/runtime.js';
+import type { AttendedPr } from '../src/inbox/attendant.js';
+import type { InboxConfig } from '../src/inbox/config.js';
+import type { RunRecord } from '../src/inbox/store.js';
 
 let root: string;
 
@@ -13,6 +16,37 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
+
+function attendedPr(): AttendedPr {
+  return { id: 'o/r#4', url: 'https://github.com/o/r/pull/4', title: 'A change', author: 'alice', headSha: 'aaa' };
+}
+
+function liveConfig(): InboxConfig {
+  return {
+    pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', alertWhen: '',
+    agent: { model: 'the-configured-model', effort: null, mcpAllow: [], extraArgs: [], maxBudgetUsd: null },
+    prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10,
+  };
+}
+
+/** A `claude` on PATH for the length of the call, with the reviewer's data directory redirected. */
+async function withStandInAgent(bin: string, run: () => Promise<void>): Promise<void> {
+  const path = process.env.PATH;
+  const dataDir = process.env.DIFFITY_DATA_DIR;
+  process.env.PATH = `${bin}:${path ?? ''}`;
+  // An answer runs in the reviewer's own data directory, which here must not be their real one.
+  process.env.DIFFITY_DATA_DIR = join(root, 'data');
+  try {
+    await run();
+  } finally {
+    process.env.PATH = path;
+    if (dataDir === undefined) {
+      delete process.env.DIFFITY_DATA_DIR;
+    } else {
+      process.env.DIFFITY_DATA_DIR = dataDir;
+    }
+  }
+}
 
 function opts(argv: string[], over: Partial<Parameters<typeof runAgent>[0]> = {}) {
   return {
@@ -106,33 +140,37 @@ describe('realAttendantDeps', () => {
     mkdirSync(bin, { recursive: true });
     writeFileSync(join(bin, 'claude'), `#!/bin/sh\nexec '${process.execPath}' '${dump}' "$@"\n`, { mode: 0o755 });
 
-    const config = {
-      pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', alertWhen: '',
-      agent: { model: null, effort: null, mcpAllow: [], extraArgs: [], maxBudgetUsd: null },
-      prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10,
-    };
-    const deps = realAttendantDeps(process.execPath, entry, config, () => join(root, 'live.log'), () => {});
+    const deps = realAttendantDeps(process.execPath, entry, liveConfig(), () => join(root, 'live.log'), () => {});
 
-    const path = process.env.PATH;
-    const dataDir = process.env.DIFFITY_DATA_DIR;
-    process.env.PATH = `${bin}:${path ?? ''}`;
-    // An answer runs in the reviewer's own data directory, which here must not be their real one.
-    process.env.DIFFITY_DATA_DIR = join(root, 'data');
-    try {
-      await deps.answer(root, 'the live prompt\n', new AbortController().signal);
-    } finally {
-      process.env.PATH = path;
-      if (dataDir === undefined) {
-        delete process.env.DIFFITY_DATA_DIR;
-      } else {
-        process.env.DIFFITY_DATA_DIR = dataDir;
-      }
-    }
+    await withStandInAgent(bin, () => deps.answer(root, attendedPr(), 'the live prompt\n', new AbortController().signal).then(() => {}));
 
     const argv = JSON.parse(readFileSync(argvPath, 'utf-8')) as string[];
     const at = argv.indexOf('--append-system-prompt');
     expect(at).toBeGreaterThan(-1);
     expect(argv[at + 1]).toBe('# Diffity Live Skill\n\nAnswer it.\n');
+  });
+
+  it('logs the answer as a run against the pull request it was asked about', async () => {
+    mkdirSync(join(root, 'skills', 'diffity-live'), { recursive: true });
+    writeFileSync(join(root, 'skills', 'diffity-live', 'SKILL.md'), '---\nname: diffity-live\n---\n\nAnswer it.\n');
+    const result = JSON.stringify({
+      type: 'result', subtype: 'success', is_error: false, result: 'answered', total_cost_usd: 0.4,
+      duration_ms: 90_000, num_turns: 3, usage: { output_tokens: 500 }, modelUsage: { 'claude-x': {} },
+    });
+    const bin = join(root, 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, 'claude'), `#!/bin/sh\ncat > /dev/null\ncat <<'JSON'\n${result}\nJSON\n`, { mode: 0o755 });
+
+    const runs: RunRecord[] = [];
+    const deps = realAttendantDeps(process.execPath, join(root, 'index.js'), liveConfig(), () => join(root, 'live.log'), () => {}, run => runs.push(run));
+
+    await withStandInAgent(bin, () => deps.answer(root, attendedPr(), 'the live prompt\n', new AbortController().signal).then(() => {}));
+
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({
+      prId: 'o/r#4', headSha: 'aaa', phase: 'answer', outcome: 'answered', model: 'claude-x',
+      turns: 3, costUsd: 0.4, durationMs: 90_000, outputTokens: 500,
+    });
   });
 });
 

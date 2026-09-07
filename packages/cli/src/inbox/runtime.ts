@@ -8,6 +8,7 @@ import type { InboxConfig } from './config.js';
 import { buildAgentArgv, skillBody } from './agent-argv.js';
 import { parseAgentOutput } from './agent-output.js';
 import { parseAwaitOutcome, type AttendantDeps } from './attendant.js';
+import { runRecordOf, type RunRecord } from './store.js';
 import { diffityDir } from '../registry.js';
 
 /**
@@ -214,9 +215,17 @@ function agentEnv(dataDir: string, mcpAllow: string[]): NodeJS.ProcessEnv {
  * The real side effects behind an attendant. The wait is this CLI's own `agent await` over the
  * worktree; the answer is the same built agent command as a preparation, with the forge's
  * credentials stripped, but in the reviewer's own diffity data directory — the opened session lives
- * there, and the reply has to land in it.
+ * there, and the reply has to land in it. Every answer is an agent run, so `recordRun` puts it in
+ * the same log as the preparations.
  */
-export function realAttendantDeps(nodePath: string, entry: string, config: InboxConfig, logPathFor: (worktree: string) => string, log: (message: string) => void): AttendantDeps {
+export function realAttendantDeps(
+  nodePath: string,
+  entry: string,
+  config: InboxConfig,
+  logPathFor: (worktree: string) => string,
+  log: (message: string) => void,
+  recordRun: (run: RunRecord) => void = () => {},
+): AttendantDeps {
   return {
     awaitRequest: (worktree, signal) => new Promise(resolve => {
       const child = spawn(nodePath, [entry, '--repo', worktree, 'agent', 'await', '--timeout', '240'], { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -231,12 +240,13 @@ export function realAttendantDeps(nodePath: string, entry: string, config: Inbox
       child.on('error', err => { signal.removeEventListener('abort', onAbort); resolve({ kind: 'failed', reason: err.message }); });
       child.on('close', code => { signal.removeEventListener('abort', onAbort); resolve(parseAwaitOutcome(code, stdout, stderr)); });
     }),
-    answer: async (worktree, prompt, signal) => {
+    answer: async (worktree, pr, prompt, signal) => {
       const inflight: Inflight = {};
       const onAbort = () => inflight.agentKill?.();
       signal.addEventListener('abort', onAbort, { once: true });
+      const startedAt = new Date().toISOString();
       try {
-        const { timedOut } = await runAgent({
+        const { stdout, timedOut } = await runAgent({
           // The live skill, not the review one: the live prompt tells the agent to follow it, and
           // the agent runs with none of the reviewer's installed skills to find it in.
           argv: buildAgentArgv({ nodePath, entry, agent: config.agent, systemPrompt: skillBody(entry, 'diffity-live', log) }),
@@ -246,6 +256,12 @@ export function realAttendantDeps(nodePath: string, entry: string, config: Inbox
         if (timedOut) {
           log(`the answering agent in ${worktree} did not finish within ${config.liveTimeoutMinutes} minutes`);
         }
+        const { stats } = parseAgentOutput(stdout);
+        recordRun(runRecordOf({
+          prId: pr.id, headSha: pr.headSha, phase: 'answer',
+          outcome: timedOut ? 'timeout' : stats?.isError ? 'failed' : 'answered',
+          startedAt, endedAt: new Date().toISOString(), stats, configModel: config.agent.model,
+        }));
         return { timedOut };
       } finally {
         signal.removeEventListener('abort', onAbort);

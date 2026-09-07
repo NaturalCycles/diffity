@@ -116,7 +116,7 @@ describe('preparePr', () => {
     }));
 
     expect(result.kind).toBe('prepared');
-    expect(result.stats).toMatchObject({ costUsd: 1.25, turns: 12, outputTokens: 900, models: ['claude-x'], subtype: 'success' });
+    expect(result.run.stats).toMatchObject({ costUsd: 1.25, turns: 12, outputTokens: 900, models: ['claude-x'], subtype: 'success' });
   });
 
   it('fails with the budget as the reason when the agent hit it', async () => {
@@ -130,6 +130,7 @@ describe('preparePr', () => {
 
     expect(result.kind).toBe('failed');
     if (result.kind !== 'failed') return;
+    expect(result.failure).toBe('budget');
     expect(result.reason).toBe('the agent hit its budget of $3');
     expect(existsSync(dest)).toBe(false);
   });
@@ -163,6 +164,8 @@ describe('preparePr', () => {
     const result = await preparePr(snapshot(), cfg, deps());
     expect(result.kind).toBe('failed');
     if (result.kind !== 'failed') return;
+    // Nothing was run, so the tick has no run to log for it.
+    expect(result.failure).toBe('worktree');
     expect(result.reason).toContain('No local clone');
   });
 
@@ -173,8 +176,49 @@ describe('preparePr', () => {
     }));
     expect(result.kind).toBe('failed');
     if (result.kind !== 'failed') return;
+    expect(result.failure).toBe('timeout');
     expect(result.reason).toContain('did not finish');
     expect(existsSync(dest)).toBe(false);
+  });
+
+  it('says when the agent started and ended, around the run itself', async () => {
+    const clock = [
+      '2026-09-07T11:59:00.000Z', '2026-09-07T12:00:00.000Z',
+      '2026-09-07T12:08:00.000Z', '2026-09-07T12:08:01.000Z',
+    ];
+    const result = await preparePr(snapshot(), config(), deps({ now: () => clock.shift() ?? 'later' }));
+
+    expect(result.run).toEqual({ startedAt: '2026-09-07T12:00:00.000Z', endedAt: '2026-09-07T12:08:00.000Z', stats: null });
+    expect(result.kind === 'prepared' && result.at).toBe('2026-09-07T12:08:01.000Z');
+  });
+
+  it('waits out a session limit instead of holding it against the pull request', async () => {
+    const dest = worktreePath(worktreesDir, snapshot());
+    const result = await preparePr(snapshot(), config(), deps({
+      runAgent: () => Promise.resolve({
+        stdout: "Claude AI usage limit reached. You've hit your session limit \u00b7 resets 2pm (Europe/Stockholm)\n",
+        timedOut: false,
+      }),
+    }));
+
+    expect(result.kind).toBe('failed');
+    if (result.kind !== 'failed') return;
+    expect(result.failure).toBe('rate-limit');
+    expect(result.reason).toMatch(/^waiting: Claude session limit until \d\d:\d\d$/);
+    expect(result.resetsAt).toMatch(/^20\d\d-\d\d-\d\dT/);
+    expect(existsSync(dest)).toBe(false);
+  });
+
+  it('leaves the retry to the caller when the limit named no time', async () => {
+    const result = await preparePr(snapshot(), config(), deps({
+      runAgent: () => Promise.resolve({
+        stdout: JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: "You've hit your usage limit" }),
+        timedOut: false,
+      }),
+    }));
+
+    expect(result.kind === 'failed' && [result.failure, result.reason, result.resetsAt])
+      .toEqual(['rate-limit', 'waiting: Claude session limit, retrying in 30 minutes', null]);
   });
 
   it('always stops the diffity server, even on a failure', async () => {
@@ -218,6 +262,36 @@ describe('the inbox JSON server', () => {
     const view = buildView(store, 'http://localhost:5390', 'now');
     expect(view.ready[0].openUrl).toBe('http://localhost:5390/open/o%2Fdemo%234');
     expect(view.ready[0].stale).toBe(false);
+    store.close();
+  });
+
+  it('carries what the agent spent on a prepared review, and the pause, to the page', async () => {
+    const store = new InboxStore(':memory:');
+    store.observe({ ...snapshot(), headSha: 'aaa' }, true, 'now');
+    store.markPrepared('o/demo#4', { headSha: 'aaa', bundlePath: '/b.json', worktreePath: '/wt', logPath: '/l', at: 'now', summary: '1 P1', alert: null });
+    store.recordRun({
+      prId: 'o/demo#4', headSha: 'aaa', phase: 'prepare', model: 'claude-x',
+      startedAt: new Date().toISOString(), endedAt: new Date().toISOString(), durationMs: 480_000,
+      turns: 12, costUsd: 1.2, inputTokens: 30, outputTokens: 27_000, cacheReadTokens: 1_100_000,
+      cacheWriteTokens: 76_000, outcome: 'prepared', note: null,
+    });
+    const until = new Date(Date.now() + 60_000).toISOString();
+    store.pauseUntil(until);
+    const noOpenDeps = { baseRefOf: () => 'x', ensureServer: () => Promise.resolve(1), importBundle: () => {} };
+    const server = startInboxServer(store, { ...config(), port: 0 }, () => {}, noOpenDeps);
+    await new Promise(resolve => server.on('listening', resolve));
+    const { port } = server.address() as { port: number };
+
+    const body = await (await fetch(`http://127.0.0.1:${port}/api/inbox`)).json();
+
+    expect(body.ready[0].spend).toEqual({
+      minutes: 8, costUsd: 1.2, detail: 'prepare · claude-x · 12 turns · out 27k · read 1.1M',
+    });
+    expect(body.runs.today).toEqual({ count: 1, minutes: 8, costUsd: 1.2 });
+    expect(body.runs.week).toEqual({ count: 1, minutes: 8, costUsd: 1.2 });
+    expect(body.pausedUntil).toBe(until);
+
+    server.close();
     store.close();
   });
 

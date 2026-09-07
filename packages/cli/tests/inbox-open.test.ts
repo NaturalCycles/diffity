@@ -384,7 +384,7 @@ describe('the inbox server routes', () => {
     let ticking = false;
     const { port, server } = await serve(store, [], null, null, undefined, {
       onTick: () => { ticks++; ticking = true; },
-      status: () => ({ ticking, lastPollAt: ticking ? null : '2026-09-07T10:00:00Z' }),
+      status: () => ({ ticking, lastPollAt: ticking ? null : '2026-09-07T10:00:00Z', pausedUntil: null }),
     });
     try {
       const before = await (await fetch(`http://127.0.0.1:${port}/api/inbox`)).json();

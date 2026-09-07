@@ -151,4 +151,39 @@ describe('runDaemon singleton and reclaim ordering', () => {
       await handle.stop();
     }
   });
+
+  it('polls but prepares nothing while paused, and takes the queue up once the pause has passed', async () => {
+    const store = new InboxStore(join(root, 'inbox', 'inbox.sqlite'));
+    const snap: PrSnapshot = {
+      owner: 'o', repo: 'r', number: 1, title: 'T', url: 'https://github.com/o/r/pull/1', author: 'alice', isBot: false,
+      isDraft: false, state: 'OPEN', headSha: 'aaa', baseRef: 'main', additions: 1, deletions: 0, changedFiles: 1,
+      createdAt: 'now', updatedAt: 'now',
+    };
+    store.observe(snap, true, 'now');
+    store.pauseUntil(new Date(Date.now() + 60_000).toISOString());
+    const forge: Forge = {
+      viewerLogin: () => Promise.resolve('me'),
+      searchReviewRequested: () => Promise.resolve([{ owner: 'o', repo: 'r', number: 1 }]),
+      viewPr: () => Promise.resolve(snap),
+    };
+    const handle = await runDaemon(store, config(6006), process.execPath, 'unused-entry', () => {}, { forge });
+    try {
+      await settle();
+      const paused = await (await fetch('http://127.0.0.1:6006/api/inbox')).json();
+      expect(paused.pausedUntil).not.toBeNull();
+      expect(store.get('o/r#1')!.status).toBe('queued');
+
+      // The reset time passes: the next tick prepares it (and fails, for want of a clone).
+      store.pauseUntil(new Date(Date.now() - 1000).toISOString());
+      expect((await fetch('http://127.0.0.1:6006/api/tick', { method: 'POST' })).status).toBe(204);
+      await settle();
+      await settle();
+
+      expect(store.get('o/r#1')!.status).toBe('failed');
+      const resumed = await (await fetch('http://127.0.0.1:6006/api/inbox')).json();
+      expect(resumed.pausedUntil).toBeNull();
+    } finally {
+      await handle.stop();
+    }
+  });
 });

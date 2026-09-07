@@ -1,8 +1,9 @@
 import { join } from 'node:path';
 import type { PrSnapshot } from '@diffity/github';
 import type { InboxConfig } from './config.js';
-import { parseAgentOutput, type RunStats } from './agent-output.js';
+import { parseAgentOutput, rateLimitOf, type RunStats } from './agent-output.js';
 import { inboxDir } from './paths.js';
+import { localHhMm } from './runs.js';
 import { composePrompt, verdictOf } from './prompt.js';
 import { summarizeBundleFile } from './summary.js';
 import { cloneDir, prepareWorktree, removeWorktree, worktreePath } from './worktree.js';
@@ -39,10 +40,23 @@ export interface PrepareDeps {
   now(): string;
 }
 
+/**
+ * What a failed preparation failed at. `worktree` is the one that happened before any agent ran;
+ * `rate-limit` is the one that is not the pull request's fault and is waited out rather than retried.
+ */
+export type PrepareFailure = 'worktree' | 'timeout' | 'budget' | 'rate-limit' | 'agent' | 'bundle';
+
+/** When the agent ran and what it reported, on every outcome, so the run log has it either way. */
+export interface RunLog {
+  startedAt: string;
+  endedAt: string;
+  stats: RunStats | null;
+}
+
 export type PrepareResult =
-  | { kind: 'prepared'; headSha: string; bundlePath: string; worktree: string; logPath: string; at: string; summary: string | null; alert: string | null; stats: RunStats | null }
-  | { kind: 'skipped'; reason: string; logPath: string; stats: RunStats | null }
-  | { kind: 'failed'; reason: string; worktree: string | null; logPath: string | null; stats: RunStats | null };
+  | { kind: 'prepared'; headSha: string; bundlePath: string; worktree: string; logPath: string; at: string; summary: string | null; alert: string | null; run: RunLog }
+  | { kind: 'skipped'; reason: string; logPath: string; run: RunLog }
+  | { kind: 'failed'; reason: string; failure: PrepareFailure; worktree: string | null; logPath: string | null; run: RunLog; resetsAt?: string | null };
 
 /** Where the daemon keeps what preparation produces, beside its config rather than the worktrees. */
 export function bundlesDir(): string {
@@ -69,18 +83,21 @@ export async function preparePr(snapshot: PrSnapshot, config: InboxConfig, deps:
   const clone = cloneDir(config.reposDir, snapshot.repo);
   const logPath = join(logsDir(), `${snapshot.owner}-${snapshot.repo}-${snapshot.number}.log`);
 
+  const before = deps.now();
+  let run: RunLog = { startedAt: before, endedAt: before, stats: null };
+
   let head: string;
   let diffRef: string;
   try {
     ({ head, diffRef } = await prepareWorktree(clone, dest, snapshot, snapshot.baseRef));
   } catch (err) {
-    return { kind: 'failed', reason: err instanceof Error ? err.message : String(err), worktree: null, logPath: null, stats: null };
+    return { kind: 'failed', failure: 'worktree', reason: err instanceof Error ? err.message : String(err), worktree: null, logPath: null, run };
   }
 
   let server: ServerHandle | null = null;
-  let stats: RunStats | null = null;
   try {
     server = await deps.startServer(dest, diffRef);
+    const startedAt = deps.now();
     const { stdout, timedOut } = await deps.runAgent({
       argv: deps.agentArgv(),
       prompt: composePrompt({
@@ -92,30 +109,45 @@ export async function preparePr(snapshot: PrSnapshot, config: InboxConfig, deps:
       timeoutMs: config.prepareTimeoutMinutes * 60_000,
     });
 
+    run = { startedAt, endedAt: deps.now(), stats: null };
+
     if (timedOut) {
       await removeWorktree(clone, dest);
-      return { kind: 'failed', reason: `the agent did not finish within ${config.prepareTimeoutMinutes} minutes`, worktree: null, logPath, stats: null };
+      return { kind: 'failed', failure: 'timeout', reason: `the agent did not finish within ${config.prepareTimeoutMinutes} minutes`, worktree: null, logPath, run };
     }
 
     const parsed = parseAgentOutput(stdout);
-    stats = parsed.stats;
+    run = { ...run, stats: parsed.stats };
 
-    if (stats?.subtype === 'error_max_budget_usd') {
+    if (parsed.stats?.subtype === 'error_max_budget_usd') {
       await removeWorktree(clone, dest);
       // The cap can come from agent.extraArgs rather than agent.maxBudgetUsd, in which case the
       // daemon does not know the number the agent hit.
       const budget = config.agent.maxBudgetUsd;
-      return { kind: 'failed', reason: budget === null ? 'the agent hit its budget' : `the agent hit its budget of $${budget}`, worktree: null, logPath, stats };
+      return { kind: 'failed', failure: 'budget', reason: budget === null ? 'the agent hit its budget' : `the agent hit its budget of $${budget}`, worktree: null, logPath, run };
+    }
+
+    // Nothing was reviewed and nothing is wrong with the pull request: the daemon waits the limit
+    // out rather than spending the pull request's retries on it.
+    const limit = rateLimitOf(parsed.text, new Date(run.endedAt));
+    if (limit) {
+      await removeWorktree(clone, dest);
+      return {
+        kind: 'failed', failure: 'rate-limit', worktree: null, logPath, run, resetsAt: limit.resetsAt,
+        reason: limit.resetsAt
+          ? `waiting: Claude session limit until ${localHhMm(limit.resetsAt)}`
+          : 'waiting: Claude session limit, retrying in 30 minutes',
+      };
     }
 
     const verdict = verdictOf(parsed.text);
     if (verdict.kind === 'skipped') {
       await removeWorktree(clone, dest);
-      return { kind: 'skipped', reason: verdict.reason, logPath, stats };
+      return { kind: 'skipped', reason: verdict.reason, logPath, run };
     }
     if (verdict.kind === 'none') {
       await removeWorktree(clone, dest);
-      return { kind: 'failed', reason: 'the agent ended without SKIP or PREPARED', worktree: null, logPath, stats };
+      return { kind: 'failed', failure: 'agent', reason: 'the agent ended without SKIP or PREPARED', worktree: null, logPath, run };
     }
 
     // The head actually checked out, which may be newer than the snapshot if the author pushed
@@ -124,12 +156,12 @@ export async function preparePr(snapshot: PrSnapshot, config: InboxConfig, deps:
     try {
       await deps.exportBundle({ worktree: dest, prNumber: snapshot.number, outPath: bundlePath });
     } catch (err) {
-      return { kind: 'failed', reason: `the review was prepared but its bundle could not be written: ${err instanceof Error ? err.message : err}`, worktree: dest, logPath, stats };
+      return { kind: 'failed', failure: 'bundle', reason: `the review was prepared but its bundle could not be written: ${err instanceof Error ? err.message : err}`, worktree: dest, logPath, run };
     }
 
-    return { kind: 'prepared', headSha: head, bundlePath, worktree: dest, logPath, at: deps.now(), summary: summarizeBundleFile(bundlePath), alert: verdict.alert, stats };
+    return { kind: 'prepared', headSha: head, bundlePath, worktree: dest, logPath, at: deps.now(), summary: summarizeBundleFile(bundlePath), alert: verdict.alert, run };
   } catch (err) {
-    return { kind: 'failed', reason: err instanceof Error ? err.message : String(err), worktree: dest, logPath, stats };
+    return { kind: 'failed', failure: 'agent', reason: err instanceof Error ? err.message : String(err), worktree: dest, logPath, run };
   } finally {
     server?.stop();
   }
