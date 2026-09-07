@@ -19,7 +19,7 @@ export interface ReviewThread {
  */
 const WORTH_CHECKING = new Set(['P1', 'P2', 'must-fix']);
 
-/** What `agent list --json` printed, or nothing when it printed something else. */
+/** The threads `agent list --json` printed; anything else is a listing that cannot be checked. */
 export function parseThreadList(json: string): ReviewThread[] {
   const raw: unknown = JSON.parse(json);
   if (!Array.isArray(raw)) {
