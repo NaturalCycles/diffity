@@ -56,7 +56,7 @@ export function inboxPage(): string {
   .row { display: flex; align-items: center; gap: 12px; background: var(--panel);
     border: 1px solid var(--line); border-radius: 10px; padding: 11px 14px; margin-bottom: 8px; }
   .entry { display: flex; align-items: stretch; gap: 8px; margin-bottom: 8px; }
-  .entry .row { flex: 1; margin-bottom: 0; }
+  .entry .row { flex: 1; min-width: 0; margin-bottom: 0; }
   .dismiss { flex: none; width: 38px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
     color: var(--muted); font-size: 16px; cursor: pointer; }
   .dismiss:hover { color: var(--bad); border-color: var(--bad); }
@@ -147,9 +147,10 @@ export function inboxPage(): string {
     return Math.round(hours / 24) + ' d ago';
   }
 
-  function metaLine(parts) {
+  function metaLine(parts, hover) {
     const text = parts.filter(Boolean).join(' \\u00b7 ');
-    return text ? '<div class="meta">' + text + '</div>' : '';
+    // The line is cut to the card; the full text, wrapped, is a hover away.
+    return text ? '<div class="meta"' + (hover ? ' title="' + esc(hover) + '"' : '') + '>' + text + '</div>' : '';
   }
 
   function times(r) {
@@ -184,7 +185,7 @@ export function inboxPage(): string {
       '<span class="size">' + sizeLabel(r) + '</span>' +
       '<span class="title"><div><span class="repo">' + esc(r.repo) + '#' + r.number + '</span> ' +
       '<span class="name">' + esc(r.title) + '</span></div>' +
-      metaLine([esc(r.statusReason || ''), times(r)]) + '</span>' +
+      metaLine([esc(r.statusReason || ''), times(r)], r.statusReason || '') + '</span>' +
       '<span class="badge ' + badgeClass + '">' + esc(badgeText) + '</span>';
     return row;
   }
