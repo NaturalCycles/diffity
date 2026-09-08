@@ -27,8 +27,9 @@ import {
 
 /**
  * A prepared review in portable form: the threads and walkthrough tours of one session, pinned to
- * the commit whose working tree their line numbers mean. Everything machine- and forge-local —
- * ids, live state, what was submitted where — stays behind; an import mints its own.
+ * the commit whose working tree their line numbers mean. Machine-local state — ids, live state —
+ * stays behind; an import mints its own. What a finding was already posted to the forge as travels
+ * with it, so the session it opens in does not offer to send it a second time.
  */
 export interface ReviewBundle {
   formatVersion: number;
@@ -53,7 +54,16 @@ export interface BundleThread {
   endLine: number;
   status: ThreadStatus;
   anchorContent: string | null;
+  /** Where this finding already is on the forge; absent for one that has never been sent. */
+  posted?: BundlePosted;
   comments: BundleComment[];
+}
+
+/** A finding's forge review, as the machine that sent it knew it. */
+export interface BundlePosted {
+  reviewUrl: string | null;
+  headSha: string | null;
+  githubCommentId: number | null;
 }
 
 export interface BundleComment {
@@ -121,6 +131,7 @@ function bundleThread(value: unknown, label: string): BundleThread {
   if (comments.length === 0) {
     throw new FieldError(`${label}.comments must not be empty`);
   }
+  const posted = bundlePosted(obj.posted, `${label}.posted`);
   return {
     filePath: str(obj.filePath, `${label}.filePath`),
     side: member(obj.side, `${label}.side`, COMMENT_SIDES),
@@ -128,7 +139,20 @@ function bundleThread(value: unknown, label: string): BundleThread {
     ...lineRange(obj, 0, label),
     status: member(obj.status, `${label}.status`, THREAD_STATUSES),
     anchorContent: optStr(obj.anchorContent, `${label}.anchorContent`) ?? null,
+    ...(posted ? { posted } : {}),
     comments,
+  };
+}
+
+function bundlePosted(value: unknown, label: string): BundlePosted | null {
+  if (value == null) {
+    return null;
+  }
+  const obj = record(value, label);
+  return {
+    reviewUrl: optStr(obj.reviewUrl, `${label}.reviewUrl`) ?? null,
+    headSha: optStr(obj.headSha, `${label}.headSha`) ?? null,
+    githubCommentId: optInt(obj.githubCommentId, `${label}.githubCommentId`, 1) ?? null,
   };
 }
 

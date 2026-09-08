@@ -56,6 +56,8 @@ export interface InboxPr {
   alert: string | null;
   /** The threads the agent named as the reason for the alert; empty when it named none. */
   alertFindings: string[];
+  /** The review the daemon posted the alert findings in, or null when it has posted none. */
+  autoPosted: AutoPosted | null;
   bundlePath: string | null;
   worktreePath: string | null;
   logPath: string | null;
@@ -75,6 +77,16 @@ export interface Prepared {
   alert: string | null;
   /** The threads it named as the reason, by id; an alert on the reviewer's own paths names none. */
   alertFindings: string[];
+}
+
+/**
+ * The daemon's own posting of the findings behind an alert: when it went out, the head it was
+ * posted against — nothing is posted twice for one head — and the review it created.
+ */
+export interface AutoPosted {
+  at: string;
+  headSha: string;
+  url: string | null;
 }
 
 /** A review diffity posted to the forge: the head it was posted against, and what it said. */
@@ -238,6 +250,9 @@ export class InboxStore {
         summary TEXT,
         alert TEXT,
         alert_findings TEXT,
+        auto_posted_at TEXT,
+        auto_posted_head_sha TEXT,
+        auto_posted_url TEXT,
         ci_state TEXT
       )
     `);
@@ -275,7 +290,7 @@ export class InboxStore {
     this.db.exec('CREATE INDEX IF NOT EXISTS inbox_handled_pr_at ON inbox_handled (pr_id, at)');
     this.db.exec('CREATE TABLE IF NOT EXISTS inbox_state (key TEXT PRIMARY KEY, value TEXT)');
     // A table from an earlier build gains the columns it lacks; a fresh one already has them.
-    for (const column of ['attempts INTEGER NOT NULL DEFAULT 0', 'created_at TEXT', 'updated_at TEXT', 'bumped_at TEXT', 'summary TEXT', 'alert TEXT', 'alert_findings TEXT', 'ci_state TEXT']) {
+    for (const column of ['attempts INTEGER NOT NULL DEFAULT 0', 'created_at TEXT', 'updated_at TEXT', 'bumped_at TEXT', 'summary TEXT', 'alert TEXT', 'alert_findings TEXT', 'auto_posted_at TEXT', 'auto_posted_head_sha TEXT', 'auto_posted_url TEXT', 'ci_state TEXT']) {
       try {
         this.db.exec(`ALTER TABLE inbox_prs ADD COLUMN ${column}`);
       } catch (err) {
@@ -368,6 +383,15 @@ export class InboxStore {
       prepared.headSha, prepared.at, prepared.bundlePath, prepared.worktreePath, prepared.logPath,
       prepared.summary, prepared.alert, JSON.stringify(prepared.alertFindings), id,
     );
+  }
+
+  /**
+   * Records that the daemon itself put the alert findings on the pull request. One row, overwritten
+   * at the next head: what it answers is "has this head been posted to already".
+   */
+  markAutoPosted(id: string, posted: AutoPosted): void {
+    this.db.prepare('UPDATE inbox_prs SET auto_posted_at = ?, auto_posted_head_sha = ?, auto_posted_url = ? WHERE id = ?')
+      .run(posted.at, posted.headSha, posted.url, id);
   }
 
   /**
@@ -502,6 +526,9 @@ interface Row {
   summary: string | null;
   alert: string | null;
   alert_findings: string | null;
+  auto_posted_at: string | null;
+  auto_posted_head_sha: string | null;
+  auto_posted_url: string | null;
   ci_state: string | null;
 }
 
@@ -533,6 +560,9 @@ function rowToPr(row: Row): InboxPr {
     summary: row.summary,
     alert: row.alert,
     alertFindings: parseAlertFindings(row.alert_findings),
+    autoPosted: row.auto_posted_at != null && row.auto_posted_head_sha != null
+      ? { at: row.auto_posted_at, headSha: row.auto_posted_head_sha, url: row.auto_posted_url ?? null }
+      : null,
     bundlePath: row.bundle_path,
     worktreePath: row.worktree_path,
     logPath: row.log_path,

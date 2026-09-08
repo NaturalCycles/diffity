@@ -45,7 +45,7 @@ export interface DaemonOptions {
   /** Who parks on an opened review; defaults to the real attendants. Tests override it. */
   attendants?: AttendantHost;
   /** How one pull request is prepared; defaults to the real preparation. Tests override it. */
-  prepare?: (snapshot: PrSnapshot, opts: { bumped: boolean }) => Promise<PrepareResult>;
+  prepare?: (snapshot: PrSnapshot, opts: { bumped: boolean; alreadyPostedHead: string | null }) => Promise<PrepareResult>;
   /** Where the prepares register what they have running, for the shutdown to stop; its own by default. */
   inflight?: Inflight;
   /** Where the page's settings are written; without it they change the running daemon only. */
@@ -80,6 +80,7 @@ export function settingsHost(config: InboxConfig, configPath: string | undefined
   return {
     get: () => ({
       filter: config.filter, skipTitles: config.skipTitles, alertWhen: config.alertWhen, alertPaths: config.alertPaths,
+      postAlerts: config.postAlerts, postPrefix: config.postPrefix,
       maxPrepared: config.maxPrepared, pollMinutes: config.pollMinutes,
       live: config.live, liveTimeoutMinutes: config.liveTimeoutMinutes, prepareTimeoutMinutes: config.prepareTimeoutMinutes,
       waitForCi: config.waitForCi, agent: config.agent, validate: config.validate,
@@ -129,7 +130,7 @@ export async function runDaemon(
   const pausedUntil = () => store.pausedUntil(new Date().toISOString());
   const deps = {
     forge: options.forge ?? realForge,
-    prepare: options.prepare ?? ((snapshot: PrSnapshot, opts: { bumped: boolean }) => preparePr(snapshot, config, prepareDeps, opts)),
+    prepare: options.prepare ?? ((snapshot: PrSnapshot, opts: { bumped: boolean; alreadyPostedHead: string | null }) => preparePr(snapshot, config, prepareDeps, opts)),
     removeWorktree: (worktree: string, repo: string) => reclaimWorktree(config, worktree, repo),
     log,
     now: () => new Date().toISOString(),

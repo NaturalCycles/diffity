@@ -1,5 +1,5 @@
 import type { CiState } from '@diffity/github';
-import { isRetired, type Handled, type InboxPr, type InboxStore, type RunTotals } from './store.js';
+import { isRetired, type AutoPosted, type Handled, type InboxPr, type InboxStore, type RunTotals } from './store.js';
 import { costOf, minutesOf, runDetail } from './runs.js';
 import { BUMPABLE } from './open.js';
 
@@ -38,6 +38,8 @@ export interface InboxRow {
   alert: string | null;
   /** The findings it named as that reason, by thread id; empty when it named none. */
   alertFindings: string[];
+  /** The review the daemon posted those findings in, when it did; null when it posted none. */
+  autoPosted: AutoPosted | null;
   openUrl: string | null;
   /** Where a POST dismisses it; null while it is being prepared, and once it is retired. */
   dismissUrl: string | null;
@@ -150,6 +152,7 @@ function toRow(pr: InboxPr, openBase: string, store: InboxStore): InboxRow {
     summary: pr.summary,
     alert: pr.alert,
     alertFindings: pr.alertFindings,
+    autoPosted: pr.autoPosted,
     openUrl: openable ? `${openBase}/open/${encodeURIComponent(pr.id)}` : null,
     dismissUrl: pr.status === 'preparing' || pr.status === 'dismissed' || isRetired(pr.status) ? null : `${openBase}/dismiss/${encodeURIComponent(pr.id)}`,
     prepareUrl: bumpable && pr.bumpedAt === null ? `${openBase}/prepare/${encodeURIComponent(pr.id)}` : null,

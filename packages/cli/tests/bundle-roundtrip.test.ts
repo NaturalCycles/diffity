@@ -151,6 +151,39 @@ describe('a review bundle', () => {
     expect(getToursForSession(target.id)).toHaveLength(1);
   });
 
+  it('carries a posted finding to the session it is imported into, marked as already sent', async () => {
+    const { buildBundle, importBundle } = await import('../src/bundle.js');
+    const { findOrCreateSession } = await import('../src/session.js');
+    const { getThreadsForSession, markThreadsSubmitted } = await import('../src/threads.js');
+    const session = await preparedSession();
+    const posted = getThreadsForSession(session.id).find(thread => thread.startLine === 2)!;
+    markThreadsSubmitted(
+      [{ threadId: posted.id, githubCommentId: 900 }],
+      { reviewUrl: 'https://github.com/o/r/pull/7#pullrequestreview-9', headSha },
+    );
+
+    const bundle = buildBundle(session, { prNumber: 7, generator: 'test' });
+    expect(bundle.threads.find(thread => thread.startLine === 2)!.posted).toEqual({
+      reviewUrl: 'https://github.com/o/r/pull/7#pullrequestreview-9', headSha, githubCommentId: 900,
+    });
+    // Only what went out carries it; the rest of the review is still the reviewer's to send.
+    expect(bundle.threads.filter(thread => thread.posted)).toHaveLength(1);
+
+    const cloneDir = join(root, `clone-${repoCount++}`);
+    execFileSync('git', ['clone', '--quiet', repoDir, cloneDir], { stdio: 'pipe' });
+    process.chdir(cloneDir);
+    const target = findOrCreateSession('work');
+    importBundle(target, bundle);
+
+    const threads = getThreadsForSession(target.id);
+    const imported = threads.find(thread => thread.startLine === 2)!;
+    expect(imported.submittedAt).toBeTruthy();
+    expect(imported.submittedReviewUrl).toBe('https://github.com/o/r/pull/7#pullrequestreview-9');
+    expect(imported.submittedHeadSha).toBe(headSha);
+    expect(imported.githubCommentId).toBe(900);
+    expect(threads.filter(thread => thread.submittedAt)).toHaveLength(1);
+  });
+
   it('keeps the comments\' own timestamps, so replies read back in their original order', async () => {
     const { buildBundle, importBundle } = await import('../src/bundle.js');
     const { findOrCreateSession } = await import('../src/session.js');

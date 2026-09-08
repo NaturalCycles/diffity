@@ -84,6 +84,42 @@ describe('parseReviewBundle', () => {
     expect(result.value.tours[0].steps[0].annotation).toBe('');
   });
 
+  it('carries what a finding was already posted as, and takes a thread without it', () => {
+    const input = validBundle();
+    (input.threads as Record<string, unknown>[])[0].posted = {
+      reviewUrl: 'https://github.com/o/r/pull/12#pullrequestreview-9',
+      headSha: 'a'.repeat(40),
+      githubCommentId: 900,
+    };
+    const result = parseReviewBundle(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.threads[0].posted).toEqual({
+      reviewUrl: 'https://github.com/o/r/pull/12#pullrequestreview-9',
+      headSha: 'a'.repeat(40),
+      githubCommentId: 900,
+    });
+    // A thread nobody has posted says nothing about a review at all.
+    expect('posted' in result.value.threads[1]).toBe(false);
+  });
+
+  it('takes a posted review that has forgotten the details, and refuses a broken one', () => {
+    const bare = validBundle();
+    (bare.threads as Record<string, unknown>[])[0].posted = {};
+    const result = parseReviewBundle(bare);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.threads[0].posted).toEqual({ reviewUrl: null, headSha: null, githubCommentId: null });
+
+    const wrong = validBundle();
+    (wrong.threads as Record<string, unknown>[])[0].posted = { githubCommentId: 0 };
+    expect(errorOf(wrong)).toBe('threads[0].posted.githubCommentId must be an integer >= 1');
+
+    const notAnObject = validBundle();
+    (notAnObject.threads as Record<string, unknown>[])[0].posted = 'yes';
+    expect(errorOf(notAnObject)).toBe('threads[0].posted must be an object');
+  });
+
   it('rejects a bundle from a newer format', () => {
     expect(errorOf({ ...validBundle(), formatVersion: BUNDLE_FORMAT_VERSION + 1 }))
       .toContain('newer than this diffity understands');

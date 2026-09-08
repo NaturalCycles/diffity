@@ -21,6 +21,8 @@ function agentConfig(): AgentConfig {
   return { model: null, effort: null, mcpAllow: [], extraArgs: [], maxBudgetUsd: null };
 }
 
+const PREFIX = '[not yet checked by human]';
+
 function validateConfig(): ValidateConfig {
   return { model: null, timeoutMinutes: 15, maxBudgetUsd: null };
 }
@@ -226,7 +228,7 @@ describe('the inbox server routes', () => {
   };
 
   async function serve(store: InboxStore, logs: string[] = [], attendants: AttendantHost | null = null, onBump: (() => void) | null = null, configPath?: string, extra: Partial<ServerHooks> = {}) {
-    const config = { pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', skipTitles: [], alertWhen: '', alertPaths: [], agent: agentConfig(), validate: validateConfig(), waitForCi: false, prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10 };
+    const config = { pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', skipTitles: [], alertWhen: '', alertPaths: [], postAlerts: false, postPrefix: PREFIX, agent: agentConfig(), validate: validateConfig(), waitForCi: false, prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10 };
     const server = startInboxServer(store, config, m => logs.push(m), stubOpen, { attendants, onBump, settings: settingsHost(config, configPath), ...extra });
     await new Promise(resolve => server.on('listening', resolve));
     const { port } = server.address() as { port: number };
@@ -359,12 +361,14 @@ describe('the inbox server routes', () => {
     try {
       const before = await (await fetch(`http://127.0.0.1:${port}/api/settings`)).json();
       expect(before).toEqual({
-        filter: '', skipTitles: [], alertWhen: '', alertPaths: [], maxPrepared: 5, pollMinutes: 5, live: true,
+        filter: '', skipTitles: [], alertWhen: '', alertPaths: [], postAlerts: false, postPrefix: PREFIX,
+        maxPrepared: 5, pollMinutes: 5, live: true,
         liveTimeoutMinutes: 10, prepareTimeoutMinutes: 30, waitForCi: false, agent: agentConfig(), validate: validateConfig(),
       });
 
       const next = {
         filter: 'skip payments', skipTitles: ['\\(payments\\)'], alertWhen: 'a P1', alertPaths: ['packages/shared/src/model/**'],
+        postAlerts: true, postPrefix: '[a machine wrote this]',
         maxPrepared: 2, pollMinutes: 3, live: false, liveTimeoutMinutes: 4, prepareTimeoutMinutes: 20, waitForCi: true, validate: validateConfig(),
         agent: { ...agentConfig(), model: 'opus', mcpAllow: ['mcp__atlassian__getJiraIssue'] },
       };
@@ -461,7 +465,7 @@ describe('the inbox server routes', () => {
       ensureServer: () => Promise.resolve(7788),
       importBundle: () => { throw new Error('head moved'); },
     };
-    const config = { pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', skipTitles: [], alertWhen: '', alertPaths: [], agent: agentConfig(), validate: validateConfig(), waitForCi: false, prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10 };
+    const config = { pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', skipTitles: [], alertWhen: '', alertPaths: [], postAlerts: false, postPrefix: PREFIX, agent: agentConfig(), validate: validateConfig(), waitForCi: false, prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10 };
     const server = startInboxServer(store, config, m => logs.push(m), failingOpen);
     await new Promise(resolve => server.on('listening', resolve));
     const { port } = server.address() as { port: number };

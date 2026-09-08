@@ -1,6 +1,6 @@
 {
   "name": "@diffity/ui",
-  "version": "0.10.30",
+  "version": "0.10.31",
   "type": "module",
   "private": true,
   "scripts": {

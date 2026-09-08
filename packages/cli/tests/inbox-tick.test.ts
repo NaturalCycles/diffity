@@ -88,7 +88,7 @@ beforeEach(() => {
     kind: 'prepared', headSha: snap.headSha, bundlePath: `/b/${snap.number}.json`,
     worktree: `/wt/${snap.number}`, logPath: `/l/${snap.number}.log`, at: '2026-09-02T12:00:00.000Z',
     summary: '1 P2', alert: snap.number === 2 ? 'touches auth' : null,
-    alertFindings: snap.number === 2 ? ['cf15e689', '7b2a10c4'] : [], run: run(),
+    alertFindings: snap.number === 2 ? ['cf15e689', '7b2a10c4'] : [], posted: null, run: run(),
     validation: 'not-needed', validateRun: null,
   });
 });
@@ -449,7 +449,7 @@ describe('runTick', () => {
     const logged: string[] = [];
     prepareResult = snap => ({
       kind: 'prepared', headSha: snap.headSha, bundlePath: '/b.json', worktree: '/wt', logPath: '/l.log',
-      at: '2026-09-02T12:00:00.000Z', summary: '1 P1', alert: null, alertFindings: [], run: run(),
+      at: '2026-09-02T12:00:00.000Z', summary: '1 P1', alert: null, alertFindings: [], posted: null, run: run(),
       validation: 'validated',
       validateRun: {
         startedAt: '2026-09-02T12:00:00.000Z', endedAt: '2026-09-02T12:03:00.000Z',
@@ -472,7 +472,7 @@ describe('runTick', () => {
     const logged: string[] = [];
     prepareResult = snap => ({
       kind: 'prepared', headSha: snap.headSha, bundlePath: '/b.json', worktree: '/wt', logPath: '/l.log',
-      at: '2026-09-02T12:00:00.000Z', summary: '1 P1 \u00b7 unchecked', alert: null, alertFindings: [], run: run(),
+      at: '2026-09-02T12:00:00.000Z', summary: '1 P1 \u00b7 unchecked', alert: null, alertFindings: [], posted: null, run: run(),
       validation: 'unchecked',
       validateRun: {
         startedAt: '2026-09-02T12:00:00.000Z', endedAt: '2026-09-02T12:15:00.000Z', stats: null,
@@ -492,7 +492,7 @@ describe('runTick', () => {
     forge.set(snapshot());
     prepareResult = snap => ({
       kind: 'prepared', headSha: snap.headSha, bundlePath: '/b.json', worktree: '/wt', logPath: '/l.log',
-      at: '2026-09-02T12:00:00.000Z', summary: null, alert: null, alertFindings: [], run: run({ stats: null }),
+      at: '2026-09-02T12:00:00.000Z', summary: null, alert: null, alertFindings: [], posted: null, run: run({ stats: null }),
       validation: 'not-needed', validateRun: null,
     });
     await runTick(store, deps());
@@ -761,7 +761,7 @@ describe('a posted review', () => {
     prepareResult = snap => ({
       kind: 'prepared', headSha: snap.headSha, bundlePath: '/b/1.json', worktree: '/wt/1',
       logPath: '/l/1.log', at: '2026-09-02T13:05:00.000Z', summary: '1 P2', alert: null,
-      alertFindings: [], run: run(), validation: 'not-needed', validateRun: null,
+      alertFindings: [], posted: null, run: run(), validation: 'not-needed', validateRun: null,
     });
     await prepareBumped(store, deps(), 'o/r#1');
     expect(prepared).toEqual(['o/r#1']);
@@ -869,5 +869,139 @@ describe('a posted review', () => {
 
     expect(store.get('o/r#9')).toBeNull();
     expect(forge.views).toEqual(['o/r#9']);
+  });
+});
+
+describe('a pull request the daemon posted the alert findings to', () => {
+  const POSTED_AT = '2026-09-02T12:00:00.000Z';
+  const REVIEW = 'https://github.com/o/r/pull/1#pullrequestreview-9';
+
+  /** A review prepared with an alert, and the findings behind it posted at that head. */
+  function alerting(): void {
+    prepareResult = snap => ({
+      kind: 'prepared', headSha: snap.headSha, bundlePath: `/b/${snap.number}.json`,
+      worktree: `/wt/${snap.number}`, logPath: `/l/${snap.number}.log`, at: POSTED_AT,
+      summary: '1 P1', alert: 'touches auth', alertFindings: ['cf15e689'],
+      posted: { at: POSTED_AT, headSha: snap.headSha, url: REVIEW, commentIds: 1 },
+      run: run(), validation: 'not-needed', validateRun: null,
+    });
+  }
+
+  it('records the review against the row, so the next head is the only one posted to again', async () => {
+    alerting();
+    forge.set(snapshot());
+    await runTick(store, deps());
+
+    expect(store.get('o/r#1')!.autoPosted).toEqual({ at: POSTED_AT, headSha: 'aaa', url: REVIEW });
+  });
+
+  it('tells the next preparation which head has already been posted to', async () => {
+    alerting();
+    forge.set(snapshot());
+    const heads: (string | null)[] = [];
+    const record = (over = {}) => deps({
+      prepare: (snap, opts) => { heads.push(opts.alreadyPostedHead); return Promise.resolve(prepareResult(snap)); },
+      ...over,
+    });
+    await runTick(store, record());
+
+    // The next push is a head nobody has posted to, so the refreshed review posts again.
+    forge.snapshots.set('o/r#1', snapshot({ headSha: 'bbb' }));
+    await runTick(store, record());
+
+    expect(heads).toEqual([null, 'aaa']);
+    expect(store.get('o/r#1')!.autoPosted!.headSha).toBe('bbb');
+  });
+
+  it('stays the reviewer\'s to review once the post has withdrawn the request', async () => {
+    alerting();
+    forge.set(snapshot());
+    await runTick(store, deps());
+
+    // GitHub drops it from review-requested:@me the moment the review lands.
+    forge.requested = [];
+    await runTick(store, deps());
+
+    const pr = store.get('o/r#1')!;
+    expect(pr.status).toBe('prepared');
+    expect(pr.worktreePath).toBe('/wt/1');
+    expect(removed).toEqual([]);
+    const view = buildView(store, 'http://localhost:5390', POSTED_AT);
+    expect(view.alerted.map(row => row.id)).toEqual(['o/r#1']);
+    expect(view.alerted[0].autoPosted).toEqual({ at: POSTED_AT, headSha: 'aaa', url: REVIEW });
+  });
+
+  it('re-prepares and posts again when the author pushes, without losing the worktree', async () => {
+    alerting();
+    forge.set(snapshot());
+    await runTick(store, deps());
+
+    forge.requested = [];
+    forge.snapshots.set('o/r#1', snapshot({ headSha: 'bbb' }));
+    prepared = [];
+    await runTick(store, deps());
+
+    expect(prepared).toEqual(['o/r#1']);
+    expect(store.get('o/r#1')!.preparedHeadSha).toBe('bbb');
+    expect(store.get('o/r#1')!.autoPosted!.headSha).toBe('bbb');
+    expect(removed).toEqual([]);
+  });
+
+  it('holds at its head once the reviewer has dismissed it', async () => {
+    alerting();
+    forge.set(snapshot());
+    await runTick(store, deps());
+    store.setStatus('o/r#1', 'dismissed', 'dismissed by the reviewer');
+
+    forge.requested = [];
+    prepared = [];
+    await runTick(store, deps());
+
+    expect(store.get('o/r#1')!.status).toBe('dismissed');
+    expect(prepared).toEqual([]);
+  });
+
+  it('becomes handled, and gives up its worktree, once the reviewer posts their own review', async () => {
+    alerting();
+    forge.set(snapshot());
+    await runTick(store, deps());
+
+    store.recordHandled({ prId: 'o/r#1', headSha: 'aaa', event: 'APPROVE', reviewUrl: REVIEW, at: '2026-09-02T12:30:00.000Z' });
+    forge.requested = [];
+    await runTick(store, deps());
+
+    const pr = store.get('o/r#1')!;
+    expect(pr.status).toBe('handled');
+    expect(pr.statusReason).toBe('you approved');
+    expect(removed).toEqual(['/wt/1']);
+    expect(pr.worktreePath).toBeNull();
+  });
+
+  it('is retired like any other once it is merged', async () => {
+    alerting();
+    forge.set(snapshot());
+    await runTick(store, deps());
+
+    forge.requested = [];
+    forge.snapshots.set('o/r#1', snapshot({ state: 'MERGED' }));
+    await runTick(store, deps());
+
+    expect(store.get('o/r#1')!.status).toBe('done');
+    expect(removed).toEqual(['/wt/1']);
+  });
+
+  it('waits for CI like a requested row when its refresh is held back', async () => {
+    alerting();
+    forge.set(snapshot());
+    await runTick(store, deps());
+
+    forge.requested = [];
+    forge.snapshots.set('o/r#1', snapshot({ headSha: 'bbb', checks: [{ name: 'build', status: 'pending' }] }));
+    prepared = [];
+    await runTick(store, deps({ waitForCi: true }));
+
+    expect(prepared).toEqual([]);
+    expect(store.get('o/r#1')!.statusReason).toBe('waiting: CI running (1 checks)');
+    expect(removed).toEqual([]);
   });
 });
