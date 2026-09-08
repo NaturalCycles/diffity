@@ -326,6 +326,13 @@ describe('a pull request whose review diffity posted', () => {
       .toEqual({ status: 'handled', reason: 'you approved', prepare: false });
   });
 
+  it('keeps a failed preparation\'s reason until the head moves', () => {
+    const failed = existing({ status: 'failed', statusReason: 'the agent timed out', preparedHeadSha: null, preparedAt: null, headSha: 'aaa' });
+    expect(reconcile({ existing: failed, snapshot: snapshot({ headSha: 'aaa' }), ...notRequested, handled: handled() })).toBeNull();
+    expect(reconcile({ existing: failed, snapshot: snapshot({ headSha: 'bbb' }), ...notRequested, handled: handled() }))
+      .toEqual({ status: 'handled', reason: 'new commits since you approved', prepare: false });
+  });
+
   it('goes back in the queue when the author asks for another review', () => {
     const settled = existing({ status: 'handled', statusReason: 'you approved', preparedHeadSha: null, preparedAt: null });
     expect(reconcile({ existing: settled, snapshot: snapshot({ headSha: 'bbb' }), requested: true, viewerLogin: 'me', handled: handled() }))

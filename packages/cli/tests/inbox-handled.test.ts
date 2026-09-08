@@ -45,7 +45,7 @@ describe('the handled log', () => {
   it('keeps every mark and reads back the latest one per pull request', () => {
     const store = new InboxStore(path);
     expect(store.latestHandled('o/r#1')).toBeNull();
-    expect(store.handledIds()).toEqual([]);
+    expect(store.unadoptedHandledIds()).toEqual([]);
 
     store.recordHandled(mark({ event: 'COMMENT', at: '2026-09-08T09:00:00.000Z' }));
     store.recordHandled(mark({ headSha: 'bbb', at: '2026-09-08T11:00:00.000Z' }));
@@ -56,7 +56,7 @@ describe('the handled log', () => {
       reviewUrl: 'https://github.com/o/r/pull/1#pullrequestreview-9', at: '2026-09-08T11:00:00.000Z',
     });
     expect(store.latestHandled('o/r#2')?.reviewUrl).toBeNull();
-    expect(store.handledIds()).toEqual(['o/r#1', 'o/r#2']);
+    expect(store.unadoptedHandledIds()).toEqual(['o/r#1', 'o/r#2']);
     store.close();
   });
 
@@ -86,7 +86,25 @@ describe('the handled log', () => {
     });
 
     const store = new InboxStore(inboxStorePath());
-    expect(store.handledIds()).toEqual(['o/r#3']);
+    expect(store.unadoptedHandledIds()).toEqual(['o/r#3']);
+    store.close();
+  });
+
+  it('leaves out the marks a listed row already carries, and keeps the hidden ones', () => {
+    const store = new InboxStore(path);
+    for (const number of [1, 2, 3, 4]) {
+      store.observe(snapshot({ number }), false, 'now');
+      store.recordHandled(mark({ prId: `o/r#${number}` }));
+    }
+    store.setStatus('o/r#1', 'handled', 'you approved');
+    store.setStatus('o/r#2', 'hidden', 'review no longer requested');
+    store.setStatus('o/r#3', 'done', 'merged');
+    store.setStatus('o/r#4', 'dismissed', null);
+    store.recordHandled(mark({ prId: 'o/r#5' }));
+
+    // The hidden one is out of the poll's reach, so the adoption pass has to pick it up; a merged
+    // one is done with, and the rest are listed already.
+    expect(store.unadoptedHandledIds()).toEqual(['o/r#2', 'o/r#5']);
     store.close();
   });
 

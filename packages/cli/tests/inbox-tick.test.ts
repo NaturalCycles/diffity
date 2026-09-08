@@ -777,6 +777,58 @@ describe('a posted review', () => {
     expect(store.get('o/r#7')!.statusReason).toBe('new commits since you commented');
   });
 
+  it('takes a review posted after the request had already been withdrawn', async () => {
+    forge.set(snapshot());
+    await runTick(store, deps());
+
+    // The request goes away with no review posted: the row is retired and its worktree freed.
+    forge.requested = [];
+    await runTick(store, deps());
+    expect(store.get('o/r#1')!.status).toBe('hidden');
+    expect(store.get('o/r#1')!.worktreePath).toBeNull();
+
+    // The reviewer posts from their own clone afterwards.
+    prepared = [];
+    removed = [];
+    store.recordHandled({ prId: 'o/r#1', headSha: 'aaa', event: 'APPROVE', reviewUrl: null, at: '2026-09-02T13:00:00.000Z' });
+    await runTick(store, deps());
+
+    const pr = store.get('o/r#1')!;
+    expect(pr.status).toBe('handled');
+    expect(pr.statusReason).toBe('you approved');
+    expect(pr.worktreePath).toBeNull();
+    expect(prepared).toEqual([]);
+    expect(removed).toEqual([]);
+    expect(buildView(store, 'http://localhost:5390', '2026-09-02T12:00:00.000Z').handled.map(row => row.id))
+      .toEqual(['o/r#1']);
+  });
+
+  it('leaves a bumped preparation that failed on a handled row saying so', async () => {
+    forge.set(snapshot());
+    await runTick(store, deps());
+    await postAndPoll();
+
+    store.bump('o/r#1', '2026-09-02T13:00:00.000Z');
+    prepareResult = () => ({
+      kind: 'failed', failure: 'timeout', reason: 'the agent timed out',
+      worktree: null, logPath: '/l/1.log', run: run(),
+    });
+    await prepareBumped(store, deps(), 'o/r#1');
+    expect(store.get('o/r#1')!.status).toBe('failed');
+
+    await runTick(store, deps());
+    let pr = store.get('o/r#1')!;
+    expect(pr.status).toBe('failed');
+    expect(pr.statusReason).toBe('the agent timed out');
+
+    // The next push is a new change, and the row goes back to what the posted review said about it.
+    forge.snapshots.set('o/r#1', snapshot({ headSha: 'bbb' }));
+    await runTick(store, deps());
+    pr = store.get('o/r#1')!;
+    expect(pr.status).toBe('handled');
+    expect(pr.statusReason).toBe('new commits since you approved');
+  });
+
   it('retires an adopted pull request that has since been merged, and asks no more', async () => {
     store.recordHandled({ prId: 'o/r#8', headSha: 'ggg', event: 'APPROVE', reviewUrl: null, at: '2026-09-02T11:00:00.000Z' });
     forge.set(snapshot({ number: 8, state: 'MERGED' }), false);

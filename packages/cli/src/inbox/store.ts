@@ -381,10 +381,17 @@ export class InboxStore {
       : null;
   }
 
-  /** Every pull request diffity has posted a review for, whether the inbox has a row for it or not. */
-  handledIds(): string[] {
-    return (this.db.prepare('SELECT DISTINCT pr_id FROM inbox_handled ORDER BY pr_id').all() as unknown as { pr_id: string }[])
-      .map(row => row.pr_id);
+  /**
+   * Pull requests with a posted review that no listed row carries: one the inbox has never seen,
+   * and one it retired as `hidden` before the review reached the forge. A retirement to `done` is
+   * final, so a merged or closed one is not among them.
+   */
+  unadoptedHandledIds(): string[] {
+    return (this.db.prepare(`
+      SELECT DISTINCT pr_id FROM inbox_handled
+      WHERE pr_id NOT IN (SELECT id FROM inbox_prs WHERE status <> 'hidden')
+      ORDER BY pr_id
+    `).all() as unknown as { pr_id: string }[]).map(row => row.pr_id);
   }
 
   recordRun(run: RunRecord): void {

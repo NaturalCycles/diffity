@@ -164,6 +164,11 @@ function decide(input: ReconcileInput): Transition | null {
     if (existing?.status === 'queued' || existing?.status === 'preparing') {
       return null;
     }
+    // A preparation that failed says so until the head moves, as it does on a requested row: the
+    // reviewer asked for that review and wants to know it did not happen.
+    if (existing?.status === 'failed' && existing.headSha === snapshot.headSha) {
+      return null;
+    }
     if ((existing?.status === 'prepared' || existing?.status === 'stale')
       && (existing.preparedAt ?? '') > handled.at) {
       return null;

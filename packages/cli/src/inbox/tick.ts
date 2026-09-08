@@ -104,10 +104,11 @@ export async function runTick(store: InboxStore, deps: TickDeps): Promise<void> 
   }
 
   // A review posted from a checkout the inbox never polled — the reviewer's own clone — leaves
-  // nothing behind but its mark. Each such pull request is asked about once: observing it gives it
-  // a row, and the loop above takes it over from the next tick.
-  for (const id of store.handledIds()) {
-    if (requestedIds.has(id) || deps.inFlight.has(id) || store.get(id)) {
+  // nothing behind but its mark, and a row the loop above no longer looks at (retired as `hidden`
+  // before the review was posted) is in the same position. Each is asked about once: the row it
+  // gets is listed, so the loop above has it from the next tick.
+  for (const id of store.unadoptedHandledIds()) {
+    if (requestedIds.has(id) || deps.inFlight.has(id)) {
       continue;
     }
     const ref = prIdToRef(id);
@@ -118,8 +119,9 @@ export async function runTick(store: InboxStore, deps: TickDeps): Promise<void> 
     if (!snapshot) {
       continue;
     }
+    const existing = store.get(id);
     store.observe(snapshot, false, deps.now());
-    const transition = reconcile({ existing: null, snapshot, requested: false, viewerLogin, handled: store.latestHandled(id) });
+    const transition = reconcile({ existing, snapshot, requested: false, viewerLogin, handled: store.latestHandled(id) });
     if (transition) {
       store.setStatus(id, transition.status, transition.reason);
     }
