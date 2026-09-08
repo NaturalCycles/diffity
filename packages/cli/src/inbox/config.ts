@@ -66,6 +66,15 @@ export interface InboxConfig {
    * as needing the reviewer now, alongside whatever the agent made of `alertWhen`.
    */
   alertPaths: string[];
+  /**
+   * Whether the daemon posts the findings the agent named behind an `alertWhen` alert to the pull
+   * request itself, as a comment review in the reviewer's name, at most once per head. An alert
+   * raised by `alertPaths` posts nothing: it is the reviewer's own rule about the paths, and there
+   * is nothing in it to tell the author.
+   */
+  postAlerts: boolean;
+  /** Opens every posted comment, so nobody reads one as a verdict a human has stood behind. */
+  postPrefix: string;
   agent: AgentConfig;
   validate: ValidateConfig;
   /** Whether a pull request waits for its CI to pass before an agent is spent on it. */
@@ -94,6 +103,8 @@ export const DEFAULT_INBOX_CONFIG: InboxConfig = {
   skipTitles: [],
   alertWhen: '',
   alertPaths: [],
+  postAlerts: false,
+  postPrefix: '[Automated AI pre-review, not yet checked by human]',
   agent: { model: null, effort: null, mcpAllow: [], extraArgs: [], maxBudgetUsd: null },
   validate: { model: null, timeoutMinutes: 15, maxBudgetUsd: null },
   waitForCi: false,
@@ -165,6 +176,23 @@ export function parseInboxConfig(raw: unknown, source = 'inbox config'): InboxCo
       throw new Error(`${source}: alertPaths must be an array of non-empty globs`);
     }
     config.alertPaths = (obj.alertPaths as string[]).map(glob => glob.trim());
+  }
+  if (obj.postAlerts !== undefined) {
+    if (typeof obj.postAlerts !== 'boolean') {
+      throw new Error(`${source}: postAlerts must be true or false`);
+    }
+    config.postAlerts = obj.postAlerts;
+  }
+  if (obj.postPrefix !== undefined) {
+    if (typeof obj.postPrefix !== 'string') {
+      throw new Error(`${source}: postPrefix must be a string`);
+    }
+    config.postPrefix = obj.postPrefix;
+  }
+  // Nothing goes to a pull request unprefixed: the prefix is what tells the author no human has
+  // stood behind the finding yet.
+  if (config.postAlerts && config.postPrefix.trim() === '') {
+    throw new Error(`${source}: postPrefix must not be empty when postAlerts is on`);
   }
   if (obj.agent !== undefined) {
     config.agent = parseAgentConfig(obj.agent, source);
@@ -279,7 +307,7 @@ function parseValidateConfig(raw: unknown, source: string): ValidateConfig {
 }
 
 /** The settings the inbox page edits, kept in the config file beside the keys only the file holds. */
-export type InboxSettings = Pick<InboxConfig, 'filter' | 'skipTitles' | 'alertWhen' | 'alertPaths' | 'maxPrepared' | 'pollMinutes' | 'live' | 'liveTimeoutMinutes' | 'prepareTimeoutMinutes' | 'waitForCi' | 'agent' | 'validate'>;
+export type InboxSettings = Pick<InboxConfig, 'filter' | 'skipTitles' | 'alertWhen' | 'alertPaths' | 'postAlerts' | 'postPrefix' | 'maxPrepared' | 'pollMinutes' | 'live' | 'liveTimeoutMinutes' | 'prepareTimeoutMinutes' | 'waitForCi' | 'agent' | 'validate'>;
 
 /**
  * Writes the page-editable settings into the config file, leaving every other key as the reviewer

@@ -1,6 +1,8 @@
 import { join } from 'node:path';
-import type { PrSnapshot } from '@diffity/github';
+import { GENERAL_THREAD_FILE_PATH } from '@diffity/api';
+import type { PrComment, PrSnapshot, ReviewResult, ReviewSubmission } from '@diffity/github';
 import type { InboxConfig } from './config.js';
+import { prId } from './store.js';
 import { parseAgentOutput, rateLimitOf, type RunStats } from './agent-output.js';
 import { inboxDir } from './paths.js';
 import { localHhMm } from './runs.js';
@@ -31,6 +33,25 @@ export interface ExportOpts {
   outPath: string;
 }
 
+/** One review for the forge, as the daemon itself posts it — never through the agent. */
+export interface PostReviewOpts {
+  owner: string;
+  repo: string;
+  prNumber: number;
+  headSha: string;
+  submission: ReviewSubmission;
+}
+
+/** What reached the forge, so the session the reviewer opens shows those findings as sent. */
+export interface MarkPostedOpts {
+  worktree: string;
+  threadIds: string[];
+  /** The forge comment each thread exists as, where the forge said which. */
+  commentIds: { threadId: string; githubCommentId: number }[];
+  reviewUrl: string | null;
+  headSha: string;
+}
+
 /** The side effects the preparer needs, injected so the orchestration itself is testable. */
 export interface PrepareDeps {
   startServer(worktree: string, diffRef: string): Promise<ServerHandle>;
@@ -41,7 +62,11 @@ export interface PrepareDeps {
   runAgent(opts: RunAgentOpts): Promise<{ stdout: string; timedOut: boolean }>;
   /** The threads the drafting agent left in the session over this worktree. */
   listThreads(worktree: string): Promise<ReviewThread[]>;
+  /** The daemon's own call to the forge, with its credentials — this is never the agent's. */
+  postReview(opts: PostReviewOpts): Promise<ReviewResult>;
+  markPosted(opts: MarkPostedOpts): void | Promise<void>;
   exportBundle(opts: ExportOpts): void | Promise<void>;
+  log(message: string): void;
   now(): string;
 }
 
@@ -71,8 +96,17 @@ export interface ValidateRun extends RunLog {
   note: string | null;
 }
 
+/** The review the daemon put the alert findings on the pull request in. */
+export interface PostedReview {
+  at: string;
+  headSha: string;
+  url: string | null;
+  /** How many of the posted comments the forge gave an id back for. */
+  commentIds: number;
+}
+
 export type PrepareResult =
-  | { kind: 'prepared'; headSha: string; bundlePath: string; worktree: string; logPath: string; at: string; summary: string | null; alert: string | null; alertFindings: string[]; run: RunLog; validation: Validation; validateRun: ValidateRun | null }
+  | { kind: 'prepared'; headSha: string; bundlePath: string; worktree: string; logPath: string; at: string; summary: string | null; alert: string | null; alertFindings: string[]; posted: PostedReview | null; run: RunLog; validation: Validation; validateRun: ValidateRun | null }
   | { kind: 'skipped'; reason: string; logPath: string; run: RunLog }
   | { kind: 'failed'; reason: string; failure: PrepareFailure; worktree: string | null; logPath: string | null; run: RunLog; resetsAt?: string | null };
 
@@ -99,6 +133,8 @@ export interface PrepareOpts {
    * an earlier review sets it; the daemon always takes the current head.
    */
   pinHead?: string;
+  /** The head the alert findings have already been posted for, so no head is posted to twice. */
+  alreadyPostedHead?: string | null;
 }
 
 export async function preparePr(snapshot: PrSnapshot, config: InboxConfig, deps: PrepareDeps, opts: PrepareOpts = {}): Promise<PrepareResult> {
@@ -180,6 +216,13 @@ export async function preparePr(snapshot: PrSnapshot, config: InboxConfig, deps:
       ? 'not-needed'
       : validateRun.outcome === 'validated' ? 'validated' : 'unchecked';
 
+    // Before the bundle, so the threads it carries already know they are on the pull request; the
+    // worktree's own server is still up, which is what the thread listing reads through.
+    const posted = await postAlertFindings(snapshot, config, deps, {
+      worktree: dest, head, alert: verdict.alert, alertFindings: verdict.alertFindings,
+      alreadyPostedHead: opts.alreadyPostedHead ?? null,
+    });
+
     // The head actually checked out, which may be newer than the snapshot if the author pushed
     // between the search and the fetch; recording it keeps the next tick from calling it stale.
     const bundlePath = join(bundlesDir(), `${snapshot.owner}-${snapshot.repo}-${snapshot.number}-${head.slice(0, 12)}.json`);
@@ -192,12 +235,108 @@ export async function preparePr(snapshot: PrSnapshot, config: InboxConfig, deps:
     return {
       kind: 'prepared', headSha: head, bundlePath, worktree: dest, logPath, at: deps.now(),
       summary: withValidation(summarizeBundleFile(bundlePath), validation), alert: verdict.alert,
-      alertFindings: verdict.alertFindings, run, validation, validateRun,
+      alertFindings: verdict.alertFindings, posted, run, validation, validateRun,
     };
   } catch (err) {
     return { kind: 'failed', failure: 'agent', reason: err instanceof Error ? err.message : String(err), worktree: dest, logPath, run };
   } finally {
     server?.stop();
+  }
+}
+
+/**
+ * Puts the findings the agent named behind its alert on the pull request, as one `COMMENT` review
+ * in the reviewer's name, every comment opening with the configured prefix so nobody reads it as a
+ * verdict a human has stood behind. Null when nothing was posted: the setting is off, the agent
+ * raised no alert of its own, this head has been posted to already, or the post did not go through
+ * — the review is prepared either way, and the reviewer still has the alert and the findings.
+ */
+async function postAlertFindings(
+  snapshot: PrSnapshot,
+  config: InboxConfig,
+  deps: PrepareDeps,
+  ctx: { worktree: string; head: string; alert: string | null; alertFindings: string[]; alreadyPostedHead: string | null },
+): Promise<PostedReview | null> {
+  if (!config.postAlerts || ctx.alert === null || ctx.alreadyPostedHead === ctx.head) {
+    return null;
+  }
+  const id = prId(snapshot);
+  try {
+    const comments = alertComments(await deps.listThreads(ctx.worktree), ctx.alertFindings, config.postPrefix);
+    const result = await deps.postReview({
+      owner: snapshot.owner,
+      repo: snapshot.repo,
+      prNumber: snapshot.number,
+      headSha: ctx.head,
+      // Never a verdict: the reviewer has not read this yet, and only they approve or request changes.
+      submission: { event: 'COMMENT', body: `${config.postPrefix} ${ctx.alert}`, comments },
+    });
+    if (result.reviewUrl === null) {
+      deps.log(`could not post alert findings to ${id}: ${result.errors.join('; ') || 'the forge created no review'}`);
+      return null;
+    }
+    deps.log(`posted ${result.submitted} alert finding(s) to ${id} — ${result.reviewUrl}`);
+    if (result.errors.length > 0) {
+      deps.log(`${id}: ${result.errors.length} alert finding(s) were left off the review — ${result.errors.join('; ')}`);
+    }
+    await markPostedThreads(deps, { worktree: ctx.worktree, headSha: ctx.head, id, result });
+    return { at: deps.now(), headSha: ctx.head, url: result.reviewUrl, commentIds: result.commentIds.length };
+  } catch (err) {
+    deps.log(`could not post alert findings to ${id}: ${err instanceof Error ? err.message : err}`);
+    return null;
+  }
+}
+
+/**
+ * The named findings as forge comments, in the order the agent named them: the ones still open
+ * after the checking pass — a dismissed or resolved finding is settled and does not go out — each
+ * body opening with the prefix on a line of its own. The general summary is not a finding and is
+ * never posted as one; the review's body carries the reason instead.
+ */
+function alertComments(threads: ReviewThread[], named: string[], prefix: string): PrComment[] {
+  const postable = threads.filter(thread => thread.status === 'open' && thread.filePath !== GENERAL_THREAD_FILE_PATH);
+  const comments: PrComment[] = [];
+  for (const id of named) {
+    // The agent names findings by the 8-character prefix `agent comment` printed, or in full.
+    const thread = postable.find(one => one.threadId === id || one.threadId.startsWith(id));
+    const body = thread?.comments[0]?.body;
+    if (!thread || !body || comments.some(already => already.threadId === thread.threadId)) {
+      continue;
+    }
+    comments.push({
+      threadId: thread.threadId,
+      filePath: thread.filePath,
+      side: thread.side === 'old' ? 'LEFT' : 'RIGHT',
+      startLine: thread.startLine === thread.endLine ? null : thread.startLine,
+      endLine: thread.endLine,
+      body: `${prefix}\n\n${body}`,
+    });
+  }
+  return comments;
+}
+
+/**
+ * Marks what left the machine as sent, so the session the reviewer opens does not offer to send it
+ * again. A marking that fails is worth saying so and no more: the comments are on the pull request
+ * whether or not the local session knows it.
+ */
+async function markPostedThreads(
+  deps: PrepareDeps,
+  ctx: { worktree: string; headSha: string; id: string; result: ReviewResult },
+): Promise<void> {
+  if (ctx.result.submittedThreadIds.length === 0) {
+    return;
+  }
+  try {
+    await deps.markPosted({
+      worktree: ctx.worktree,
+      threadIds: ctx.result.submittedThreadIds,
+      commentIds: ctx.result.commentIds,
+      reviewUrl: ctx.result.reviewUrl,
+      headSha: ctx.headSha,
+    });
+  } catch (err) {
+    deps.log(`${ctx.id}: the posted findings could not be marked as sent — ${err instanceof Error ? err.message : err}`);
   }
 }
 

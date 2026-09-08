@@ -1,9 +1,10 @@
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { LiveRequest } from '@diffity/api';
+import { createReview } from '@diffity/github';
 import { createWriteStream, mkdirSync, readFileSync, rmSync, type WriteStream } from 'node:fs';
 import { dirname, join } from 'node:path';
-import type { ExportOpts, PrepareDeps, RunAgentOpts, ServerHandle } from './prepare.js';
+import type { ExportOpts, MarkPostedOpts, PrepareDeps, RunAgentOpts, ServerHandle } from './prepare.js';
 import type { InboxConfig } from './config.js';
 import { buildAgentArgv, skillBody } from './agent-argv.js';
 import { parseAgentOutput } from './agent-output.js';
@@ -51,7 +52,12 @@ export function realPrepareDeps(nodePath: string, entry: string, dataDirFor: (wo
     }),
     runAgent: opts => runAgent(opts, dataDirFor(opts.cwd), config.agent.mcpAllow, inflight),
     listThreads: worktree => listThreads(nodePath, entry, worktree, dataDirFor(worktree)),
+    // In this process, with the reviewer's own credentials: posting the alert findings is the
+    // daemon's own act, after the agent has finished, and never something the agent can reach.
+    postReview: opts => createReview(opts.owner, opts.repo, opts.prNumber, opts.headSha, opts.submission),
+    markPosted: opts => markPosted(nodePath, entry, opts, dataDirFor(opts.worktree)),
     exportBundle: opts => exportBundle(nodePath, entry, opts, dataDirFor(opts.worktree)),
+    log,
     now: () => new Date().toISOString(),
   };
 }
@@ -318,6 +324,24 @@ async function listThreads(nodePath: string, entry: string, worktree: string, da
     { env: { ...process.env, DIFFITY_DATA_DIR: dataDir }, maxBuffer: 64 * 1024 * 1024 },
   );
   return parseThreadList(stdout);
+}
+
+/** The posted findings marked as sent in the pull request's own diffity data directory. */
+async function markPosted(nodePath: string, entry: string, opts: MarkPostedOpts, dataDir: string): Promise<void> {
+  const idOf = new Map(opts.commentIds.map(comment => [comment.threadId, comment.githubCommentId]));
+  const args = opts.threadIds.map(threadId => {
+    const commentId = idOf.get(threadId);
+    return commentId === undefined ? threadId : `${threadId}=${commentId}`;
+  });
+  await promisify(execFile)(
+    nodePath,
+    [
+      entry, '--repo', opts.worktree, 'agent', 'mark-posted', '--head-sha', opts.headSha,
+      ...(opts.reviewUrl === null ? [] : ['--review-url', opts.reviewUrl]),
+      ...args,
+    ],
+    { env: { ...process.env, DIFFITY_DATA_DIR: dataDir } },
+  );
 }
 
 async function exportBundle(nodePath: string, entry: string, opts: ExportOpts, dataDir: string): Promise<void> {

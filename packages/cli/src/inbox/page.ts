@@ -41,6 +41,9 @@ export function inboxPage(): string {
   .settings textarea { display: block; width: 100%; margin-top: 4px; font: inherit; font-size: 13px; color: var(--ink);
     background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; resize: vertical; }
   .settings-row { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
+  .settings-row .check { display: flex; align-items: center; gap: 8px; margin-top: 0; white-space: nowrap; }
+  .settings-row input[type=text] { flex: 1; min-width: 120px; font: inherit; font-size: 13px; color: var(--ink);
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
   .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px 16px; margin-top: 4px; }
   .settings-grid input, .settings-grid select { display: block; width: 100%; margin-top: 4px; font: inherit; font-size: 13px; color: var(--ink);
     background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
@@ -149,6 +152,10 @@ export function inboxPage(): string {
     <label>Notify me if:
       <textarea id="alertWhen" rows="3" placeholder="e.g. there is a P1, or the change touches authentication (empty: every prepared review)"></textarea>
     </label>
+    <div class="settings-row">
+      <label class="check"><input id="postAlerts" type="checkbox"> Also post the alert findings to the pull request, each prefixed with</label>
+      <input id="postPrefix" type="text" placeholder="[Automated AI pre-review, not yet checked by human]">
+    </div>
     <label>Alert me if a changed file matches (one glob per line):
       <textarea id="alertPaths" rows="3" placeholder="e.g. packages/shared/src/model/** or **/dbref/**"></textarea>
     </label>
@@ -225,6 +232,11 @@ export function inboxPage(): string {
     return named ? named + ' finding' + (named === 1 ? '' : 's') : '';
   }
 
+  /** That the daemon has already put the alert findings on the pull request, and when. */
+  function postedLabel(r) {
+    return r.autoPosted ? 'posted to the pull request \\u00b7 ' + hhmm(r.autoPosted.at) : '';
+  }
+
   /** What the agent runs behind a prepared review came to; the hover has them one by one. */
   function spendLabel(r) {
     return r.spend ? Math.round(r.spend.minutes) + ' min \\u00b7 ' + money(r.spend.costUsd) : '';
@@ -251,6 +263,9 @@ export function inboxPage(): string {
     row.href = r.openUrl;
     row.target = '_blank';
     row.rel = 'noopener';
+    // The card is already a link to the review, so the posted review's own URL goes in the hover
+    // rather than into a link inside a link.
+    if (r.autoPosted && r.autoPosted.url) row.title = 'the alert findings were posted to ' + r.autoPosted.url;
     row.innerHTML =
       '<span class="dot"></span>' +
       '<span class="size">' + sizeLabel(r) + '</span>' +
@@ -258,7 +273,7 @@ export function inboxPage(): string {
       '<span class="title"><div><span class="repo">' + esc(r.repo) + '#' + r.number + '</span> ' +
       '<span class="name">' + esc(r.title) + '</span></div>' +
       metaLine(['by ' + esc(r.author), r.changedFiles + ' file(s)', esc(r.summary || ''), esc(r.alert || ''),
-        findingsLabel(r), spendLabel(r), times(r)], r.spend ? r.spend.detail : '') + '</span>' +
+        findingsLabel(r), postedLabel(r), spendLabel(r), times(r)], r.spend ? r.spend.detail : '') + '</span>' +
       (r.alert ? '<span class="badge alert" title="' + esc(r.alert) + '">alert</span>' : '') +
       (r.stale ? '<span class="badge stale">stale</span>' : '') +
       '<span class="open-hint">open \\u2197</span>';
@@ -388,7 +403,8 @@ export function inboxPage(): string {
         if (known.has(key)) continue;
         // With words on what matters, only what the agent flagged is worth interrupting for.
         if (settings.alertWhen.trim() && !r.alert) continue;
-        const body = [r.title, r.summary, r.alert].filter(Boolean).join('\\n');
+        const body = [r.title, r.summary, r.alert, r.autoPosted ? 'posted to the pull request' : '']
+          .filter(Boolean).join('\\n');
         const n = new Notification(r.repo + '#' + r.number + ' is ready to review', { body, tag: r.id });
         n.onclick = () => { window.open(r.openUrl, '_blank'); n.close(); };
       }
@@ -434,6 +450,8 @@ export function inboxPage(): string {
       el('skipTitles').value = (settings.skipTitles || []).join('\\n');
       el('alertWhen').value = settings.alertWhen;
       el('alertPaths').value = (settings.alertPaths || []).join('\\n');
+      el('postAlerts').checked = settings.postAlerts;
+      el('postPrefix').value = settings.postPrefix || '';
       for (const key of ['maxPrepared', 'pollMinutes', 'prepareTimeoutMinutes', 'liveTimeoutMinutes']) el(key).value = settings[key];
       el('live').checked = settings.live;
       el('waitForCi').checked = settings.waitForCi;
@@ -459,6 +477,8 @@ export function inboxPage(): string {
       skipTitles: el('skipTitles').value.split('\\n').map(line => line.trim()).filter(Boolean),
       alertWhen: el('alertWhen').value,
       alertPaths: el('alertPaths').value.split('\\n').map(line => line.trim()).filter(Boolean),
+      postAlerts: el('postAlerts').checked,
+      postPrefix: el('postPrefix').value.trim(),
       maxPrepared: Number(el('maxPrepared').value),
       pollMinutes: Number(el('pollMinutes').value),
       prepareTimeoutMinutes: Number(el('prepareTimeoutMinutes').value),

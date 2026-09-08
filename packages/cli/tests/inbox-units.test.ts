@@ -116,7 +116,8 @@ describe('parseInboxConfig', () => {
       const path = join(dir, 'config.json');
       writeFileSync(path, JSON.stringify({ port: 5399, filter: 'old', pollMinutes: 2 }, null, 2));
       const settings = {
-        filter: 'skip payments', skipTitles: ['\\(payments\\)'], alertWhen: 'a P1', alertPaths: ['packages/shared/**'], maxPrepared: 3, pollMinutes: 7,
+        filter: 'skip payments', skipTitles: ['\\(payments\\)'], alertWhen: 'a P1', alertPaths: ['packages/shared/**'],
+        postAlerts: true, postPrefix: '[a machine wrote this]', maxPrepared: 3, pollMinutes: 7,
         live: false, liveTimeoutMinutes: 4, prepareTimeoutMinutes: 20, waitForCi: true,
         agent: { model: 'opus', effort: 'high', mcpAllow: [], extraArgs: [], maxBudgetUsd: null },
         validate: { model: null, timeoutMinutes: 15, maxBudgetUsd: null },
@@ -139,6 +140,19 @@ describe('parseInboxConfig', () => {
     expect(parseInboxConfig({ liveTimeoutMinutes: 3 }).liveTimeoutMinutes).toBe(3);
     expect(() => parseInboxConfig({ live: 'yes' })).toThrow(/live must be true or false/);
     expect(() => parseInboxConfig({ liveTimeoutMinutes: 0 })).toThrow(/liveTimeoutMinutes must be a positive number/);
+  });
+
+  it('takes postAlerts as a boolean and refuses an empty prefix while it is on', () => {
+    expect([parseInboxConfig({}).postAlerts, parseInboxConfig({}).postPrefix])
+      .toEqual([false, '[Automated AI pre-review, not yet checked by human]']);
+    expect(parseInboxConfig({ postAlerts: true, postPrefix: '[a machine wrote this]' }))
+      .toMatchObject({ postAlerts: true, postPrefix: '[a machine wrote this]' });
+    // Off, so an empty prefix says nothing about anything.
+    expect(parseInboxConfig({ postPrefix: '' }).postPrefix).toBe('');
+    expect(() => parseInboxConfig({ postAlerts: 'yes' })).toThrow(/postAlerts must be true or false/);
+    expect(() => parseInboxConfig({ postPrefix: 3 })).toThrow(/postPrefix must be a string/);
+    expect(() => parseInboxConfig({ postAlerts: true, postPrefix: '   ' }))
+      .toThrow(/postPrefix must not be empty when postAlerts is on/);
   });
 
   it('takes maxPrepared as a positive integer only', () => {
@@ -291,7 +305,8 @@ describe('summarizeFindings', () => {
 
 describe('parseSettingsPatch', () => {
   const full = {
-    filter: 'a', skipTitles: ['Release$'], alertWhen: 'b', alertPaths: ['src/**'], maxPrepared: 2, pollMinutes: 3, live: false,
+    filter: 'a', skipTitles: ['Release$'], alertWhen: 'b', alertPaths: ['src/**'],
+    postAlerts: false, postPrefix: '[not yet checked by human]', maxPrepared: 2, pollMinutes: 3, live: false,
     liveTimeoutMinutes: 5, prepareTimeoutMinutes: 15, waitForCi: false,
     agent: { model: null, effort: null, mcpAllow: [], extraArgs: [], maxBudgetUsd: null },
     validate: { model: null, timeoutMinutes: 15, maxBudgetUsd: null },
@@ -314,6 +329,21 @@ describe('parseSettingsPatch', () => {
       .toMatchObject({ ok: false, message: 'skipTitles is missing' });
     expect(parseSettingsPatch(JSON.stringify({ ...full, skipTitles: ['ok', '(payments'] })))
       .toMatchObject({ ok: false, message: expect.stringContaining('skipTitles[1] is not a valid regular expression') });
+  });
+
+  it('takes the posting checkbox and its prefix, and refuses posting with nothing to prefix with', () => {
+    const edited = { ...full, postAlerts: true, postPrefix: '[a machine wrote this]' };
+    expect(parseSettingsPatch(JSON.stringify(edited))).toEqual({ ok: true, settings: edited });
+    expect(parseSettingsPatch(JSON.stringify({ ...full, postAlerts: undefined })))
+      .toMatchObject({ ok: false, message: 'postAlerts is missing' });
+    expect(parseSettingsPatch(JSON.stringify({ ...full, postPrefix: undefined })))
+      .toMatchObject({ ok: false, message: 'postPrefix is missing' });
+    expect(parseSettingsPatch(JSON.stringify({ ...full, postPrefix: 3 })))
+      .toMatchObject({ ok: false, message: 'postPrefix must be a string' });
+    expect(parseSettingsPatch(JSON.stringify({ ...full, postAlerts: true, postPrefix: '' })))
+      .toMatchObject({ ok: false, message: 'postPrefix must not be empty when postAlerts is on' });
+    expect(parseSettingsPatch(JSON.stringify({ ...full, postPrefix: 'x'.repeat(5000) })))
+      .toMatchObject({ ok: false, message: expect.stringContaining('postPrefix is longer than') });
   });
 
   it('takes the validate fields the page edits and refuses a bad one by name', () => {

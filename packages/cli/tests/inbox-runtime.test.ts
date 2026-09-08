@@ -31,6 +31,7 @@ function attendedPr(): AttendedPr {
 function liveConfig(): InboxConfig {
   return {
     pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', skipTitles: [], alertWhen: '', alertPaths: [],
+    postAlerts: false, postPrefix: '[not yet checked by human]',
     agent: { model: 'the-configured-model', effort: null, mcpAllow: [], extraArgs: [], maxBudgetUsd: null },
     validate: { model: null, timeoutMinutes: 15, maxBudgetUsd: null },
     waitForCi: false, prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10,
@@ -303,6 +304,66 @@ describe('the real listThreads', () => {
       expect(finding!.comments[0].id).toMatch(/\w/);
       expect(threadsToValidate(threads).map(thread => thread.threadId)).toEqual([finding!.threadId]);
       expect(generalCommentIdOf(threads)).toMatch(/\w/);
+    } finally {
+      server.stop();
+      await gone(dataDir);
+    }
+  }, 40_000);
+});
+
+describe('the real markPosted', () => {
+  it('marks the findings that went out in the pull request\'s own session, ids and all', async () => {
+    const repo = join(root, 'posted-repo');
+    const dataDir = join(root, 'posted-data');
+    execFileSync('git', ['init', '-b', 'main', repo], { stdio: 'pipe' });
+    execFileSync('git', ['config', 'user.email', 't@t'], { cwd: repo, stdio: 'pipe' });
+    execFileSync('git', ['config', 'user.name', 'T'], { cwd: repo, stdio: 'pipe' });
+    writeFileSync(join(repo, 'a.ts'), 'const a = 1;\n');
+    execFileSync('git', ['add', '.'], { cwd: repo, stdio: 'pipe' });
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: repo, stdio: 'pipe' });
+    execFileSync('git', ['checkout', '-q', '-b', 'work'], { cwd: repo, stdio: 'pipe' });
+    writeFileSync(join(repo, 'a.ts'), 'const a = 1;\nconst token = leak();\nconst b = 2;\n');
+    execFileSync('git', ['commit', '-qam', 'change'], { cwd: repo, stdio: 'pipe' });
+
+    const server = await startDiffityServer(process.execPath, ENTRY, repo, 'main', dataDir, 20_000);
+    try {
+      const agent = (args: string[]) => execFileSync(process.execPath, [ENTRY, '--repo', repo, 'agent', ...args], {
+        stdio: 'pipe', encoding: 'utf-8', env: { ...process.env, DIFFITY_DATA_DIR: dataDir },
+      });
+      agent(['comment', '--file', 'a.ts', '--line', '2', '--body', 'P1: this leaks the token']);
+      agent(['comment', '--file', 'a.ts', '--line', '3', '--body', 'P3: a nit']);
+
+      const deps = realPrepareDeps(process.execPath, ENTRY, () => dataDir, liveConfig(), () => {});
+      const before = await deps.listThreads(repo);
+      const sent = before.find(thread => thread.startLine === 2)!;
+      const kept = before.find(thread => thread.startLine === 3)!;
+
+      await deps.markPosted({
+        worktree: repo,
+        threadIds: [sent.threadId],
+        commentIds: [{ threadId: sent.threadId, githubCommentId: 901 }],
+        reviewUrl: 'https://github.com/o/r/pull/1#pullrequestreview-9',
+        headSha: 'abc1234',
+      });
+
+      const listed = JSON.parse(agent(['list', '--json'])) as {
+        id: string; submittedAt: string | null; submittedReviewUrl: string | null;
+        submittedHeadSha: string | null; githubCommentId: number | null;
+      }[];
+      expect(listed.find(thread => thread.id === sent.threadId)).toMatchObject({
+        submittedReviewUrl: 'https://github.com/o/r/pull/1#pullrequestreview-9',
+        submittedHeadSha: 'abc1234',
+        githubCommentId: 901,
+      });
+      expect(listed.find(thread => thread.id === kept.threadId)?.submittedAt).toBeNull();
+
+      // A review the forge gave no URL for still marks what went out in it.
+      await deps.markPosted({
+        worktree: repo, threadIds: [kept.threadId], commentIds: [], reviewUrl: null, headSha: 'abc1234',
+      });
+      const again = JSON.parse(agent(['list', '--json'])) as { id: string; submittedAt: string | null; submittedReviewUrl: string | null }[];
+      expect(again.find(thread => thread.id === kept.threadId)).toMatchObject({ submittedReviewUrl: null });
+      expect(again.find(thread => thread.id === kept.threadId)?.submittedAt).toBeTruthy();
     } finally {
       server.stop();
       await gone(dataDir);

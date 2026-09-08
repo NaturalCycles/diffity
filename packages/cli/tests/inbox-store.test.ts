@@ -143,6 +143,46 @@ describe('InboxStore migration', () => {
     store.close();
   });
 
+  it('remembers the head the alert findings were posted for, and the review they went out in', () => {
+    const store = new InboxStore(path);
+    store.observe(snapshot(), true, 'now');
+    expect(store.get('o/r#1')!.autoPosted).toBeNull();
+
+    store.markAutoPosted('o/r#1', {
+      at: '2026-09-02T12:00:00.000Z', headSha: 'aaa',
+      url: 'https://github.com/o/r/pull/1#pullrequestreview-9',
+    });
+    expect(store.get('o/r#1')!.autoPosted).toEqual({
+      at: '2026-09-02T12:00:00.000Z', headSha: 'aaa',
+      url: 'https://github.com/o/r/pull/1#pullrequestreview-9',
+    });
+
+    // The next head overwrites it: what the column answers is whether this head has been posted to.
+    store.markAutoPosted('o/r#1', { at: '2026-09-02T13:00:00.000Z', headSha: 'bbb', url: null });
+    expect(store.get('o/r#1')!.autoPosted).toEqual({ at: '2026-09-02T13:00:00.000Z', headSha: 'bbb', url: null });
+    store.close();
+  });
+
+  it('takes a posted review on a table that predates the columns', () => {
+    const seed = new DatabaseSync(path);
+    seed.exec(`CREATE TABLE inbox_prs (
+      id TEXT PRIMARY KEY, owner TEXT NOT NULL, repo TEXT NOT NULL, number INTEGER NOT NULL,
+      title TEXT NOT NULL, url TEXT NOT NULL, author TEXT NOT NULL, is_draft INTEGER NOT NULL,
+      head_sha TEXT NOT NULL, base_ref TEXT NOT NULL, additions INTEGER NOT NULL, deletions INTEGER NOT NULL,
+      changed_files INTEGER NOT NULL, requested INTEGER NOT NULL, status TEXT NOT NULL, status_reason TEXT,
+      attempts INTEGER NOT NULL DEFAULT 0, prepared_head_sha TEXT, prepared_at TEXT, bundle_path TEXT,
+      worktree_path TEXT, log_path TEXT, first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL,
+      summary TEXT, alert TEXT, alert_findings TEXT)`);
+    seed.close();
+
+    const store = new InboxStore(path);
+    store.observe(snapshot(), true, 'now');
+    expect(store.get('o/r#1')!.autoPosted).toBeNull();
+    store.markAutoPosted('o/r#1', { at: '2026-09-02T12:00:00.000Z', headSha: 'aaa', url: null });
+    expect(store.get('o/r#1')!.autoPosted).toEqual({ at: '2026-09-02T12:00:00.000Z', headSha: 'aaa', url: null });
+    store.close();
+  });
+
   it('reads a findings column that does not name a list of ids as naming none', () => {
     const store = new InboxStore(path);
     store.observe(snapshot(), true, 'now');

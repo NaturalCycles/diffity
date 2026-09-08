@@ -328,3 +328,38 @@ describe('one file at a time', () => {
     expect(status).toBe(400);
   });
 });
+
+describe('a finding the daemon already posted', () => {
+  it('reads back as sent, so the page does not offer it to the forge again', async () => {
+    const { findOrCreateSession } = await import('../src/session.js');
+    const { importBundle } = await import('../src/bundle.js');
+    const headSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoDir, encoding: 'utf-8' }).trim();
+    const session = findOrCreateSession('work');
+
+    importBundle(session, {
+      formatVersion: 1, headSha, ref: 'work', baseSha: null, repo: null, prNumber: 1,
+      createdAt: '2026-09-02T12:00:00.000Z', generator: 'the inbox daemon',
+      threads: [{
+        filePath: 'a.ts', side: 'new', startLine: 1, endLine: 1, status: 'open', anchorContent: null,
+        posted: { reviewUrl: 'https://github.com/o/r/pull/1#pullrequestreview-9', headSha, githubCommentId: 901 },
+        comments: [{
+          author: { name: 'Agent', type: 'agent' }, body: 'P1: this leaks the token',
+          kind: 'review', createdAt: '2026-09-02T12:00:00.000Z',
+        }],
+      }],
+      tours: [],
+    });
+
+    const { status, text } = await req('/api/threads');
+    const threads = JSON.parse(text) as { comments: { body: string }[]; submittedAt: string | null; submittedReviewUrl: string | null; githubCommentId: number | null }[];
+    const imported = threads.filter(thread => thread.comments[0]?.body === 'P1: this leaks the token');
+
+    expect(status).toBe(200);
+    expect(imported).toHaveLength(1);
+    expect(imported[0].submittedAt).toBeTruthy();
+    expect(imported[0].submittedReviewUrl).toBe('https://github.com/o/r/pull/1#pullrequestreview-9');
+    expect(imported[0].githubCommentId).toBe(901);
+    // Nothing else the session holds was touched by the import.
+    expect(threads.filter(thread => thread.submittedAt)).toHaveLength(1);
+  });
+});

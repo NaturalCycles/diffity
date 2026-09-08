@@ -11,6 +11,7 @@ import {
   addReply,
   updateThreadStatus,
   editComment,
+  markThreadsSubmitted,
   type Thread,
 } from './threads.js';
 import {
@@ -705,6 +706,24 @@ Examples:
       console.log(pc.green('Tour marked as ready'));
     });
 
+  // Not for a person to run: the inbox daemon calls this after posting the findings behind an
+  // alert itself, so the session it hands the reviewer shows those as already sent.
+  agent
+    .command('mark-posted', { hidden: true })
+    .description('Record that these threads are already on the forge')
+    .argument('<threads...>', 'Thread ids, each optionally <thread-id>=<github-comment-id>')
+    .option('--review-url <url>', 'The review they went out in')
+    .option('--head-sha <sha>', 'The commit they were posted against')
+    .action(async (threads: string[], opts: { reviewUrl?: string; headSha?: string }) => {
+      await requireSession(agent.opts().session);
+      const sent = threads.map(parsePostedThread).map(({ id, githubCommentId }) => ({
+        threadId: resolveThreadId(id).id,
+        ...(githubCommentId === null ? {} : { githubCommentId }),
+      }));
+      markThreadsSubmitted(sent, { reviewUrl: opts.reviewUrl ?? null, headSha: opts.headSha ?? null });
+      console.log(pc.green(`Marked ${sent.length} thread(s) as posted`));
+    });
+
   agent
     .command('export-bundle')
     .description('Write the session\'s threads and tours as a portable review bundle (JSON)')
@@ -770,6 +789,20 @@ Examples:
           : ''),
       ));
     });
+}
+
+/** `<thread-id>` or `<thread-id>=<github-comment-id>`, as `mark-posted` takes its arguments. */
+function parsePostedThread(argument: string): { id: string; githubCommentId: number | null } {
+  const [id, commentId] = argument.split('=');
+  if (commentId === undefined) {
+    return { id, githubCommentId: null };
+  }
+  const parsed = Number(commentId);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    console.error(pc.red(`Error: "${argument}" does not name a forge comment id`));
+    process.exit(1);
+  }
+  return { id, githubCommentId: parsed };
 }
 
 function positiveInteger(value: string): number {

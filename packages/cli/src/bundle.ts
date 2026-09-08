@@ -9,7 +9,7 @@ import { getCommitHash, resolveBaseRef } from '@diffity/git';
 import { detectRemote } from '@diffity/github';
 import { getDb } from './db.js';
 import type { Session } from './session.js';
-import { addReply, createThread, getThreadsForSession, updateThreadStatus, type Thread } from './threads.js';
+import { addReply, createThread, getThreadsForSession, markThreadsSubmitted, updateThreadStatus, type Thread } from './threads.js';
 import { addTourStep, createTour, getToursForSession, updateTourStatus, type Tour } from './tours.js';
 
 export interface BundleOrigin {
@@ -38,6 +38,15 @@ export function buildBundle(session: Session, origin: BundleOrigin): ReviewBundl
       endLine: thread.endLine,
       status: thread.status,
       anchorContent: thread.anchorContent,
+      ...(thread.submittedAt
+        ? {
+          posted: {
+            reviewUrl: thread.submittedReviewUrl,
+            headSha: thread.submittedHeadSha,
+            githubCommentId: thread.githubCommentId,
+          },
+        }
+        : {}),
       comments: thread.comments.map(comment => ({
         author: comment.author,
         body: comment.body,
@@ -180,6 +189,12 @@ function addBundle(session: Session, bundle: ReviewBundle): ImportOutcome {
     }
     if (incoming.status !== 'open') {
       updateThreadStatus(thread.id, incoming.status);
+    }
+    if (incoming.posted) {
+      markThreadsSubmitted(
+        [{ threadId: thread.id, githubCommentId: incoming.posted.githubCommentId ?? undefined }],
+        { reviewUrl: incoming.posted.reviewUrl, headSha: incoming.posted.headSha },
+      );
     }
     outcome.threadsCreated++;
   }

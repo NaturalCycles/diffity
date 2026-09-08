@@ -1,7 +1,7 @@
 import type { PrRef, PrSnapshot } from '@diffity/github';
 import { alertForPaths } from './paths-alert.js';
 import { reconcile } from './reconcile.js';
-import { isRetired, prId, prIdToRef, runRecordOf, type InboxPr, type InboxStore, type RunOutcome } from './store.js';
+import { isRetired, prId, prIdToRef, runRecordOf, type Handled, type InboxPr, type InboxStore, type RunOutcome } from './store.js';
 import { localHhMm } from './runs.js';
 import type { PrepareResult } from './prepare.js';
 
@@ -15,7 +15,7 @@ export interface Forge {
 export interface TickDeps {
   forge: Forge;
   /** Prepares one pull request; the daemon passes the real preparer, a test a fake. */
-  prepare(snapshot: PrSnapshot, opts: { bumped: boolean }): Promise<PrepareResult>;
+  prepare(snapshot: PrSnapshot, opts: { bumped: boolean; alreadyPostedHead: string | null }): Promise<PrepareResult>;
   removeWorktree(worktree: string, repo: string): void | Promise<void>;
   log(message: string): void;
   now(): string;
@@ -84,6 +84,9 @@ export async function runTick(store: InboxStore, deps: TickDeps): Promise<void> 
 
   // Rows the search no longer returns: retired against their latest detail, and their worktrees
   // reclaimed. A closed pull request may not be searchable at all, so it is asked about directly.
+  // One the daemon posted the alert findings to itself is the exception: that post is what
+  // withdrew the review request, so the pull request is still the reviewer's to review and is
+  // reconciled as though the search had listed it.
   for (const pr of store.all()) {
     if (requestedIds.has(pr.id) || isRetired(pr.status) || deps.inFlight.has(pr.id)) {
       continue;
@@ -92,11 +95,23 @@ export async function runTick(store: InboxStore, deps: TickDeps): Promise<void> 
     if (!snapshot) {
       continue;
     }
-    store.observe(snapshot, false, deps.now());
-    const transition = reconcile({ existing: pr, snapshot, requested: false, viewerLogin, handled: store.latestHandled(pr.id) });
+    const handled = store.latestHandled(pr.id);
+    const requested = autoPostConsumedRequest(pr, handled) && snapshot.state === 'OPEN';
+    store.observe(snapshot, requested, deps.now());
+    // The CI hold and the title patterns matter only where a preparation could follow, which is
+    // the row still asking for the reviewer.
+    const transition = reconcile({
+      existing: pr, snapshot, requested, viewerLogin, handled,
+      waitForCi: deps.waitForCi, skipTitles: deps.skipTitles,
+    });
     if (transition) {
       store.setStatus(pr.id, transition.status, transition.reason);
-      if (pr.worktreePath) {
+      if (transition.prepare) {
+        toPrepare.push(snapshot);
+      }
+      // The worktree goes only when nothing will be opened from it again: a row that stays
+      // openable, or is about to be prepared afresh, needs the checkout it has.
+      if (pr.worktreePath && (isRetired(transition.status) || transition.status === 'handled')) {
         await deps.removeWorktree(pr.worktreePath, pr.repo);
         store.setPaths(pr.id, { worktreePath: null });
       }
@@ -182,6 +197,15 @@ export async function runTick(store: InboxStore, deps: TickDeps): Promise<void> 
   }
 }
 
+/**
+ * Whether the reviewer's own review request was consumed by the daemon's post rather than by the
+ * reviewer. Once they have posted a review of their own, the pull request is theirs no longer and
+ * follows the ordinary handled rules.
+ */
+function autoPostConsumedRequest(pr: InboxPr, handled: Handled | null): boolean {
+  return pr.autoPosted !== null && (handled === null || handled.at < pr.autoPosted.at);
+}
+
 /** Prepared reviews waiting for the reviewer, stale ones included: they are still openable. */
 function countReady(store: InboxStore): number {
   return store.all().filter(pr => pr.status === 'prepared' || pr.status === 'stale').length;
@@ -243,13 +267,14 @@ async function prepareOne(store: InboxStore, snapshot: PrSnapshot, deps: TickDep
   if (deps.inFlight.has(id)) {
     return;
   }
+  const existing = store.get(id);
   deps.inFlight.add(id);
   store.setStatus(id, 'preparing', null);
   deps.log(`preparing ${id} — ${snapshot.title}`);
 
   let result: PrepareResult;
   try {
-    result = await deps.prepare(snapshot, { bumped });
+    result = await deps.prepare(snapshot, { bumped, alreadyPostedHead: existing?.autoPosted?.headSha ?? null });
   } finally {
     deps.inFlight.delete(id);
   }
@@ -270,6 +295,9 @@ async function prepareOne(store: InboxStore, snapshot: PrSnapshot, deps: TickDep
         // Only the agent names findings, so a path alert stands on its own with none.
         alertFindings: result.alertFindings,
       });
+      if (result.posted) {
+        store.markAutoPosted(id, result.posted);
+      }
       deps.log(`prepared ${id}`);
       if (result.validateRun?.note) {
         deps.log(`${id}: the drafted findings went unchecked — ${result.validateRun.note}`);

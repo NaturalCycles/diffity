@@ -140,6 +140,29 @@ describe('the inbox page', () => {
     expect(script).toContain('view.handled.length');
   });
 
+  it('has the posting checkbox and its prefix beside the alert words, and sends both back', () => {
+    const html = inboxPage();
+    expect(html).toContain('id="postAlerts" type="checkbox"');
+    expect(html).toContain('Also post the alert findings to the pull request, each prefixed with');
+    expect(html).toContain('id="postPrefix" type="text"');
+    // Next to the words that decide what an alert is, not among the numbers.
+    expect(html.indexOf('id="alertWhen"')).toBeLessThan(html.indexOf('id="postAlerts"'));
+    expect(html.indexOf('id="postPrefix"')).toBeLessThan(html.indexOf('id="alertPaths"'));
+    const script = pageScript();
+    expect(script).toContain("postAlerts: el('postAlerts').checked");
+    expect(script).toContain("postPrefix: el('postPrefix').value.trim()");
+    expect(script).toContain("el('postAlerts').checked = settings.postAlerts");
+  });
+
+  it('says on a posted card that the findings are already on the pull request, and where', () => {
+    const script = pageScript();
+    expect(script).toContain("'posted to the pull request \\u00b7 ' + hhmm(r.autoPosted.at)");
+    expect(script).toContain('findingsLabel(r), postedLabel(r)');
+    // The card is a link already, so the review's own URL is a hover rather than a nested link.
+    expect(script).toContain("row.title = 'the alert findings were posted to ' + r.autoPosted.url");
+    expect(script).toContain("r.autoPosted ? 'posted to the pull request' : ''");
+  });
+
   it('lists the alerted pull requests above ready, with the reason and how many findings it names', () => {
     const html = inboxPage();
     expect(html).toContain('<h2>Alerted</h2>');
