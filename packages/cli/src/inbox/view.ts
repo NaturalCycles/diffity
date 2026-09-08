@@ -1,5 +1,5 @@
 import type { CiState } from '@diffity/github';
-import { isRetired, type InboxPr, type InboxStore, type RunTotals } from './store.js';
+import { isRetired, type Handled, type InboxPr, type InboxStore, type RunTotals } from './store.js';
 import { costOf, minutesOf, runDetail } from './runs.js';
 import { BUMPABLE } from './open.js';
 
@@ -44,6 +44,8 @@ export interface InboxRow {
   bumped: boolean;
   /** What the prepared review cost in agent runs; null when none were recorded for that head. */
   spend: RunSpend | null;
+  /** The last review posted from diffity, and whether the author has pushed since; null when none was. */
+  handled: (Handled & { updated: boolean }) | null;
 }
 
 export interface InboxView {
@@ -51,6 +53,8 @@ export interface InboxView {
   ready: InboxRow[];
   /** Being prepared or waiting to be. */
   working: InboxRow[];
+  /** Reviewed from diffity: kept listed, the ones the author has pushed to since first. */
+  handled: InboxRow[];
   /** Skipped, drafts or failed — shown for the record, with the reason. */
   other: InboxRow[];
   /** Set aside by the reviewer; listed so a bump can bring one back. */
@@ -64,13 +68,36 @@ export interface InboxView {
 
 export function buildView(store: InboxStore, openBase: string, now: string): InboxView {
   const rows = store.all().map(pr => toRow(pr, openBase, store));
-  const ready = rows.filter(row => row.status === 'prepared' || row.status === 'stale')
+  const handled = rows.filter(isHandled).sort(byAttention);
+  const handledIds = new Set(handled.map(row => row.id));
+  const ready = rows.filter(row => (row.status === 'prepared' || row.status === 'stale') && !handledIds.has(row.id))
     .sort((a, b) => diffSize(a) - diffSize(b));
   const working = rows.filter(row => row.status === 'queued' || row.status === 'preparing')
     .sort((a, b) => Number(b.bumped) - Number(a.bumped));
   const dismissed = rows.filter(row => row.status === 'dismissed');
-  const other = rows.filter(row => !ready.includes(row) && !working.includes(row) && !dismissed.includes(row) && !isRetired(row.status));
-  return { ready, working, other, dismissed, generatedAt: now, runs: runWindows(store, now), pausedUntil: store.pausedUntil(now) };
+  const other = rows.filter(row => !ready.includes(row) && !working.includes(row) && !dismissed.includes(row)
+    && !handledIds.has(row.id) && !isRetired(row.status));
+  return { ready, working, handled, other, dismissed, generatedAt: now, runs: runWindows(store, now), pausedUntil: store.pausedUntil(now) };
+}
+
+type HandledRow = InboxRow & { handled: NonNullable<InboxRow['handled']> };
+
+/**
+ * Whether a row belongs in the handled list: the status the last poll settled on, or a prepared
+ * review the reviewer has since posted — the poll after the posting is what turns that one
+ * `handled`, and until then it would otherwise still read as ready to review.
+ */
+function isHandled(row: InboxRow): row is HandledRow {
+  if (row.handled === null) {
+    return false;
+  }
+  return row.status === 'handled'
+    || ((row.status === 'prepared' || row.status === 'stale') && row.handled.at > (row.preparedAt ?? ''));
+}
+
+/** The ones the author has pushed to since the review first, then the most recently reviewed. */
+function byAttention(a: HandledRow, b: HandledRow): number {
+  return Number(b.handled.updated) - Number(a.handled.updated) || b.handled.at.localeCompare(a.handled.at);
 }
 
 /** The two windows the footer shows, on the reviewer's own clock. */
@@ -92,6 +119,7 @@ function spendOf(store: InboxStore, pr: InboxPr): RunSpend | null {
 }
 
 function toRow(pr: InboxPr, openBase: string, store: InboxStore): InboxRow {
+  const handled = store.latestHandled(pr.id);
   const stale = pr.status === 'stale'
     || (pr.status === 'prepared' && pr.preparedHeadSha != null && pr.preparedHeadSha !== pr.headSha);
   const openable = pr.status === 'prepared' || pr.status === 'stale';
@@ -120,6 +148,7 @@ function toRow(pr: InboxPr, openBase: string, store: InboxStore): InboxRow {
     prepareUrl: bumpable && pr.bumpedAt === null ? `${openBase}/prepare/${encodeURIComponent(pr.id)}` : null,
     bumped: pr.bumpedAt !== null,
     spend: spendOf(store, pr),
+    handled: handled === null ? null : { ...handled, updated: handled.headSha !== pr.headSha },
   };
 }
 

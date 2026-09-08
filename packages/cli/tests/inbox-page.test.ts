@@ -120,4 +120,23 @@ describe('the inbox page', () => {
     // extraArgs is not editable here, so it has to travel back untouched.
     expect(script).toContain("extraArgs: (settings.agent && settings.agent.extraArgs) || []");
   });
+
+  it('lists a handled pull request with what was said, linked to GitHub', () => {
+    const html = inboxPage();
+    expect(html).toContain('<h2>Handled</h2>');
+    expect(html).toContain('id="handled"');
+    const script = pageScript();
+    expect(script).toContain("VERDICTS = { APPROVE: 'you approved', REQUEST_CHANGES: 'you requested changes', COMMENT: 'you commented' }");
+    expect(script).toContain("h.updated ? 'new commits since ' + said : said");
+    // No worktree is left to open, so the card is a link to the pull request itself.
+    expect(script).toContain('row.href = r.url;');
+    expect(script).toContain("(h.updated ? 'alert' : 'work')");
+    expect(script).toContain("(h.updated ? 'updated' : 'handled')");
+    // The full sha and the review's own URL are a hover away.
+    expect(script).toContain("'reviewed at ' + h.headSha");
+    expect(script).toContain("fill('handled-section', 'handled', view.handled, r => withActions(handledRow(r), r, REPREPARE_TITLE))");
+    expect(script).toContain("REPREPARE_TITLE = 'Prepare a fresh review of the current head'");
+    // An inbox holding nothing but handled rows is not an empty one.
+    expect(script).toContain('view.handled.length');
+  });
 });

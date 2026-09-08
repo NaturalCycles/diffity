@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { reconcile, titleSkipReason } from '../src/inbox/reconcile.js';
-import type { InboxPr } from '../src/inbox/store.js';
+import type { Handled, InboxPr } from '../src/inbox/store.js';
 import type { PrCheck, PrSnapshot } from '@diffity/github';
 
 function snapshot(over: Partial<PrSnapshot> = {}): PrSnapshot {
@@ -265,5 +265,82 @@ describe('reconcile with skipTitles', () => {
       .toEqual({ status: 'draft', reason: 'draft', prepare: false });
     expect(reconcile({ existing: existing(), snapshot: snapshot({ title: 'feat(payments): a new card', state: 'MERGED' }), requested: false, viewerLogin: 'me', skipTitles: patterns }))
       .toEqual({ status: 'done', reason: 'merged', prepare: false });
+  });
+});
+
+describe('a pull request whose review diffity posted', () => {
+  function handled(over: Partial<Handled> = {}): Handled {
+    return {
+      headSha: 'aaa', event: 'APPROVE',
+      reviewUrl: 'https://github.com/o/r/pull/1#pullrequestreview-9',
+      at: '2026-09-02T12:00:00Z', ...over,
+    };
+  }
+
+  const notRequested = { requested: false, viewerLogin: 'me' } as const;
+
+  it('stays listed as handled instead of being hidden', () => {
+    expect(reconcile({ existing: existing(), snapshot: snapshot(), ...notRequested, handled: handled() }))
+      .toEqual({ status: 'handled', reason: 'you approved', prepare: false });
+  });
+
+  it('says what was said, and whether the author has pushed since', () => {
+    const said = [
+      ['APPROVE', 'you approved'],
+      ['REQUEST_CHANGES', 'you requested changes'],
+      ['COMMENT', 'you commented'],
+    ] as const;
+    for (const [event, phrase] of said) {
+      expect(reconcile({ existing: existing(), snapshot: snapshot(), ...notRequested, handled: handled({ event }) }))
+        .toEqual({ status: 'handled', reason: phrase, prepare: false });
+      expect(reconcile({ existing: existing(), snapshot: snapshot({ headSha: 'bbb' }), ...notRequested, handled: handled({ event }) }))
+        .toEqual({ status: 'handled', reason: `new commits since ${phrase}`, prepare: false });
+    }
+  });
+
+  it('is retired once it is merged or closed', () => {
+    expect(reconcile({ existing: existing(), snapshot: snapshot({ state: 'MERGED' }), ...notRequested, handled: handled() }))
+      .toEqual({ status: 'done', reason: 'merged', prepare: false });
+    expect(reconcile({ existing: existing(), snapshot: snapshot({ state: 'CLOSED' }), ...notRequested, handled: handled() }))
+      .toEqual({ status: 'done', reason: 'closed', prepare: false });
+  });
+
+  it('stays dismissed while its head is unchanged, and comes back when it moves', () => {
+    const dismissed = existing({ status: 'dismissed', headSha: 'aaa' });
+    expect(reconcile({ existing: dismissed, snapshot: snapshot({ headSha: 'aaa' }), ...notRequested, handled: handled() })).toBeNull();
+    expect(reconcile({ existing: dismissed, snapshot: snapshot({ headSha: 'bbb' }), ...notRequested, handled: handled() }))
+      .toEqual({ status: 'handled', reason: 'new commits since you approved', prepare: false });
+  });
+
+  it('leaves a bump\'s preparation to own the row', () => {
+    for (const status of ['queued', 'preparing'] as const) {
+      expect(reconcile({ existing: existing({ status }), snapshot: snapshot(), ...notRequested, handled: handled() })).toBeNull();
+    }
+  });
+
+  it('leaves a review prepared since the posting openable, until that one is posted too', () => {
+    const bumped = existing({ status: 'prepared', preparedAt: '2026-09-02T13:00:00Z' });
+    expect(reconcile({ existing: bumped, snapshot: snapshot(), ...notRequested, handled: handled({ at: '2026-09-02T12:00:00Z' }) })).toBeNull();
+    expect(reconcile({ existing: existing({ status: 'stale', preparedAt: '2026-09-02T13:00:00Z' }), snapshot: snapshot(), ...notRequested, handled: handled({ at: '2026-09-02T12:00:00Z' }) })).toBeNull();
+    expect(reconcile({ existing: bumped, snapshot: snapshot(), ...notRequested, handled: handled({ at: '2026-09-02T14:00:00Z' }) }))
+      .toEqual({ status: 'handled', reason: 'you approved', prepare: false });
+  });
+
+  it('goes back in the queue when the author asks for another review', () => {
+    const settled = existing({ status: 'handled', statusReason: 'you approved', preparedHeadSha: null, preparedAt: null });
+    expect(reconcile({ existing: settled, snapshot: snapshot({ headSha: 'bbb' }), requested: true, viewerLogin: 'me', handled: handled() }))
+      .toEqual({ status: 'queued', reason: null, prepare: true });
+  });
+
+  it('is skipped by title, and held by CI, like anything else the author asks about again', () => {
+    const settled = existing({ status: 'handled', statusReason: 'you approved', preparedHeadSha: null, preparedAt: null });
+    expect(reconcile({
+      existing: settled, snapshot: snapshot({ headSha: 'bbb', title: 'chore: 1.2.3 Release' }),
+      requested: true, viewerLogin: 'me', handled: handled(), skipTitles: ['Release$'],
+    })).toEqual({ status: 'skipped', reason: 'title matches /Release$/', prepare: false });
+    expect(reconcile({
+      existing: settled, snapshot: snapshot({ headSha: 'bbb', checks: checks(['check-job', 'failure']) }),
+      requested: true, viewerLogin: 'me', handled: handled(), waitForCi: true,
+    })).toEqual({ status: 'skipped', reason: 'CI failed: check-job', prepare: false });
   });
 });

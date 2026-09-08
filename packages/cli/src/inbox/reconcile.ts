@@ -1,5 +1,5 @@
 import { ciState, type PrCheck, type PrSnapshot } from '@diffity/github';
-import type { InboxPr, InboxStatus } from './store.js';
+import type { Handled, InboxPr, InboxStatus } from './store.js';
 
 /** How many times preparation is retried at one head before the pull request is left as failed. */
 export const MAX_PREPARE_ATTEMPTS = 3;
@@ -20,6 +20,11 @@ export interface ReconcileInput {
   /** Whether this poll's search listed the PR as awaiting the reviewer. */
   requested: boolean;
   viewerLogin: string | null;
+  /**
+   * The last review diffity posted for this pull request; absent or null is none, as an unreviewed
+   * one has.
+   */
+  handled?: Handled | null;
   /**
    * Whether a pull request waits for its CI before an agent is spent on it; absent is off, as the
    * config's default is.
@@ -42,8 +47,9 @@ const TITLE_MATCHES = 'title matches';
  * The status a pull request should move to, given what the forge now says and what the inbox
  * already did — the whole decision in one pure function, so every branch is a plain test.
  *
- * Nothing prepares a draft, the reviewer's own pull request, or a bot's. A closed or merged one, or
- * one no longer asking for the review, is retired but keeps whatever was prepared. A new commit
+ * Nothing prepares a draft, the reviewer's own pull request, or a bot's. A closed or merged one is
+ * retired but keeps whatever was prepared; one no longer asking for the review is retired too,
+ * unless a review was posted for it from diffity — that one stays listed as handled. A new commit
  * makes a prepared review stale and worth redoing. One the reviewer dismissed stays dismissed until
  * it gets new commits; one they bumped is prepared whatever else would have held it back, drafts
  * apart. A title matching one of the reviewer's patterns is skipped before any agent is spent on
@@ -143,8 +149,26 @@ function decide(input: ReconcileInput): Transition | null {
   if (!requested) {
     if (snapshot.state === 'MERGED') return settled('done', 'merged');
     if (snapshot.state === 'CLOSED') return settled('done', 'closed');
-    // Open, but no longer in the review-requested search: the request was withdrawn or already met.
-    return settled('hidden', 'review no longer requested');
+    const handled = input.handled ?? null;
+    if (!handled) {
+      // Open, but never reviewed from diffity and no longer in the review-requested search: the
+      // request was withdrawn, or met somewhere else.
+      return settled('hidden', 'review no longer requested');
+    }
+    // A dismissal covers this version of the pull request here as it does everywhere else.
+    if (existing?.status === 'dismissed' && existing.headSha === snapshot.headSha) {
+      return null;
+    }
+    // A bump on a handled pull request owns the row while its preparation runs, and the review it
+    // produced stays openable until that one is posted too.
+    if (existing?.status === 'queued' || existing?.status === 'preparing') {
+      return null;
+    }
+    if ((existing?.status === 'prepared' || existing?.status === 'stale')
+      && (existing.preparedAt ?? '') > handled.at) {
+      return null;
+    }
+    return settled('handled', handledReason(handled, snapshot));
   }
 
   // A dismissal is the reviewer's word on this version of the pull request; a new head is a new
@@ -197,6 +221,18 @@ function decide(input: ReconcileInput): Transition | null {
   // did not finish (a Ctrl-C, a crash). Re-queue it rather than leave it stuck forever.
   return { status: 'queued', reason: null, prepare: true };
 }
+
+/** What the reviewer said, and whether the author has pushed since they said it. */
+function handledReason(handled: Handled, snapshot: PrSnapshot): string {
+  const verdict = HANDLED_VERDICTS[handled.event];
+  return handled.headSha === snapshot.headSha ? verdict : `new commits since ${verdict}`;
+}
+
+const HANDLED_VERDICTS: Record<Handled['event'], string> = {
+  APPROVE: 'you approved',
+  REQUEST_CHANGES: 'you requested changes',
+  COMMENT: 'you commented',
+};
 
 /** A resolved status that needs no preparation — a skip, a draft, or a retirement. */
 function settled(status: InboxStatus, reason: string): Transition {

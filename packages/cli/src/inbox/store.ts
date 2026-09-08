@@ -1,7 +1,8 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { ciState, type CiState, type PrSnapshot } from '@diffity/github';
+import { REVIEW_EVENTS, type ReviewEvent } from '@diffity/api';
+import { ciState, type CiState, type PrRef, type PrSnapshot } from '@diffity/github';
 import type { RunStats } from './agent-output.js';
 
 export const INBOX_STATUSES = [
@@ -14,6 +15,7 @@ export const INBOX_STATUSES = [
   'draft',
   'hidden',
   'dismissed',
+  'handled',
   'done',
 ] as const;
 export type InboxStatus = (typeof INBOX_STATUSES)[number];
@@ -69,6 +71,18 @@ export interface Prepared {
   summary: string | null;
   /** Why the agent judged this one to need the reviewer now, when it did. */
   alert: string | null;
+}
+
+/** A review diffity posted to the forge: the head it was posted against, and what it said. */
+export interface Handled {
+  headSha: string;
+  event: ReviewEvent;
+  reviewUrl: string | null;
+  at: string;
+}
+
+export interface HandledMark extends Handled {
+  prId: string;
 }
 
 /** Which agent pass a run was: the drafting one, the one that checks its findings, or an answer. */
@@ -158,6 +172,12 @@ export function prId(ref: { owner: string; repo: string; number: number }): stri
   return `${ref.owner}/${ref.repo}#${ref.number}`;
 }
 
+/** A row id back to the ref it names, or null when it does not name one. */
+export function prIdToRef(id: string): PrRef | null {
+  const match = /^([^/]+)\/([^#]+)#(\d+)$/.exec(id);
+  return match ? { owner: match[1], repo: match[2], number: Number(match[3]) } : null;
+}
+
 /**
  * Statuses the inbox is finished with: no poll re-queues them and no surface lists them. A
  * dismissal is not one — it stays listed so the reviewer can take it back with a bump.
@@ -179,6 +199,9 @@ export class InboxStore {
     }
     this.db = new DatabaseSync(path);
     this.db.exec('PRAGMA journal_mode = WAL');
+    // Two processes write here: the daemon's poll and whichever diffity posted a review. Each waits
+    // for the other's write rather than failing on it.
+    this.db.exec('PRAGMA busy_timeout = 5000');
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS inbox_prs (
         id TEXT PRIMARY KEY,
@@ -234,6 +257,17 @@ export class InboxStore {
       )
     `);
     this.db.exec('CREATE INDEX IF NOT EXISTS inbox_runs_pr_started ON inbox_runs (pr_id, started_at)');
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS inbox_handled (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        pr_id TEXT NOT NULL,
+        head_sha TEXT NOT NULL,
+        event TEXT NOT NULL,
+        review_url TEXT,
+        at TEXT NOT NULL
+      )
+    `);
+    this.db.exec('CREATE INDEX IF NOT EXISTS inbox_handled_pr_at ON inbox_handled (pr_id, at)');
     this.db.exec('CREATE TABLE IF NOT EXISTS inbox_state (key TEXT PRIMARY KEY, value TEXT)');
     // A table from an earlier build gains the columns it lacks; a fresh one already has them.
     for (const column of ['attempts INTEGER NOT NULL DEFAULT 0', 'created_at TEXT', 'updated_at TEXT', 'bumped_at TEXT', 'summary TEXT', 'alert TEXT', 'ci_state TEXT']) {
@@ -326,6 +360,31 @@ export class InboxStore {
           bundle_path = ?, worktree_path = ?, log_path = ?, summary = ?, alert = ?
       WHERE id = ?
     `).run(prepared.headSha, prepared.at, prepared.bundlePath, prepared.worktreePath, prepared.logPath, prepared.summary, prepared.alert, id);
+  }
+
+  /**
+   * A review diffity posted for a pull request. The log is append-only: a pull request can be
+   * handled at one head and then again at the next.
+   */
+  recordHandled(mark: HandledMark): void {
+    this.db.prepare('INSERT INTO inbox_handled (pr_id, head_sha, event, review_url, at) VALUES (?, ?, ?, ?, ?)')
+      .run(mark.prId, mark.headSha, mark.event, mark.reviewUrl, mark.at);
+  }
+
+  /** The last review posted for a pull request, or null when none was. */
+  latestHandled(prId: string): Handled | null {
+    const row = this.db.prepare(
+      'SELECT head_sha, event, review_url, at FROM inbox_handled WHERE pr_id = ? ORDER BY at DESC, id DESC LIMIT 1',
+    ).get(prId) as unknown as HandledDbRow | undefined;
+    return row
+      ? { headSha: row.head_sha, event: normaliseEvent(row.event), reviewUrl: row.review_url, at: row.at }
+      : null;
+  }
+
+  /** Every pull request diffity has posted a review for, whether the inbox has a row for it or not. */
+  handledIds(): string[] {
+    return (this.db.prepare('SELECT DISTINCT pr_id FROM inbox_handled ORDER BY pr_id').all() as unknown as { pr_id: string }[])
+      .map(row => row.pr_id);
   }
 
   recordRun(run: RunRecord): void {
@@ -465,6 +524,13 @@ function rowToPr(row: Row): InboxPr {
   };
 }
 
+interface HandledDbRow {
+  head_sha: string;
+  event: string;
+  review_url: string | null;
+  at: string;
+}
+
 interface RunDbRow {
   id: number;
   pr_id: string;
@@ -513,6 +579,11 @@ const CI_STATES: readonly string[] = ['passing', 'failing', 'running', 'none'];
 
 function normaliseCiState(value: string | null): CiState | null {
   return value !== null && CI_STATES.includes(value) ? (value as CiState) : null;
+}
+
+/** A mark from a build that posted other kinds of review still reads as something the reviewer said. */
+function normaliseEvent(value: string): ReviewEvent {
+  return (REVIEW_EVENTS as readonly string[]).includes(value) ? (value as ReviewEvent) : 'COMMENT';
 }
 
 /** A row from a build that knew other statuses is shown as needing work rather than crashing the list. */

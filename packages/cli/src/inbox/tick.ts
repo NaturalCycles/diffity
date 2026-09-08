@@ -1,7 +1,7 @@
 import type { PrRef, PrSnapshot } from '@diffity/github';
 import { alertForPaths } from './paths-alert.js';
 import { reconcile } from './reconcile.js';
-import { isRetired, prId, runRecordOf, type InboxPr, type InboxStore, type RunOutcome } from './store.js';
+import { isRetired, prId, prIdToRef, runRecordOf, type InboxPr, type InboxStore, type RunOutcome } from './store.js';
 import { localHhMm } from './runs.js';
 import type { PrepareResult } from './prepare.js';
 
@@ -46,8 +46,9 @@ export interface TickDeps {
 
 /**
  * One poll of the forge turned into inbox state: every requested pull request is observed and
- * reconciled, every pull request the inbox already knew but the search no longer lists is retired,
- * and everything the reconcile marked for preparation is prepared, one at a time.
+ * reconciled, every pull request the inbox already knew but the search no longer lists is retired
+ * or listed as handled, every pull request handled from elsewhere is adopted, and everything the
+ * reconcile marked for preparation is prepared, one at a time.
  */
 export async function runTick(store: InboxStore, deps: TickDeps): Promise<void> {
   const viewerLogin = await deps.forge.viewerLogin();
@@ -69,7 +70,10 @@ export async function runTick(store: InboxStore, deps: TickDeps): Promise<void> 
     }
     const existing = store.get(prId(ref));
     const pr = store.observe(snapshot, true, deps.now());
-    const transition = reconcile({ existing, snapshot, requested: true, viewerLogin, waitForCi: deps.waitForCi, skipTitles: deps.skipTitles });
+    const transition = reconcile({
+      existing, snapshot, requested: true, viewerLogin, handled: store.latestHandled(pr.id),
+      waitForCi: deps.waitForCi, skipTitles: deps.skipTitles,
+    });
     if (transition) {
       store.setStatus(pr.id, transition.status, transition.reason);
       if (transition.prepare) {
@@ -89,13 +93,35 @@ export async function runTick(store: InboxStore, deps: TickDeps): Promise<void> 
       continue;
     }
     store.observe(snapshot, false, deps.now());
-    const transition = reconcile({ existing: pr, snapshot, requested: false, viewerLogin });
+    const transition = reconcile({ existing: pr, snapshot, requested: false, viewerLogin, handled: store.latestHandled(pr.id) });
     if (transition) {
       store.setStatus(pr.id, transition.status, transition.reason);
       if (pr.worktreePath) {
         await deps.removeWorktree(pr.worktreePath, pr.repo);
         store.setPaths(pr.id, { worktreePath: null });
       }
+    }
+  }
+
+  // A review posted from a checkout the inbox never polled — the reviewer's own clone — leaves
+  // nothing behind but its mark. Each such pull request is asked about once: observing it gives it
+  // a row, and the loop above takes it over from the next tick.
+  for (const id of store.handledIds()) {
+    if (requestedIds.has(id) || deps.inFlight.has(id) || store.get(id)) {
+      continue;
+    }
+    const ref = prIdToRef(id);
+    if (!ref) {
+      continue;
+    }
+    const snapshot = await deps.forge.viewPr(ref);
+    if (!snapshot) {
+      continue;
+    }
+    store.observe(snapshot, false, deps.now());
+    const transition = reconcile({ existing: null, snapshot, requested: false, viewerLogin, handled: store.latestHandled(id) });
+    if (transition) {
+      store.setStatus(id, transition.status, transition.reason);
     }
   }
 
@@ -189,6 +215,7 @@ export async function prepareBumped(store: InboxStore, deps: TickDeps, id: strin
   // merged or closed while it waited is retired rather than reviewed.
   const transition = reconcile({
     existing, snapshot, requested: snapshot.state === 'OPEN', viewerLogin,
+    handled: store.latestHandled(id),
     waitForCi: deps.waitForCi, skipTitles: deps.skipTitles,
   });
   if (transition) {
