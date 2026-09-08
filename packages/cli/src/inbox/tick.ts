@@ -267,6 +267,8 @@ async function prepareOne(store: InboxStore, snapshot: PrSnapshot, deps: TickDep
         summary: result.summary,
         // The agent's judgement first; the reviewer's own paths stand in when it raised nothing.
         alert: result.alert ?? alertForPaths(snapshot.files, deps.alertPaths),
+        // Only the agent names findings, so a path alert stands on its own with none.
+        alertFindings: result.alertFindings,
       });
       deps.log(`prepared ${id}`);
       if (result.validateRun?.note) {

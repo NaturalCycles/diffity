@@ -72,7 +72,7 @@ export interface ValidateRun extends RunLog {
 }
 
 export type PrepareResult =
-  | { kind: 'prepared'; headSha: string; bundlePath: string; worktree: string; logPath: string; at: string; summary: string | null; alert: string | null; run: RunLog; validation: Validation; validateRun: ValidateRun | null }
+  | { kind: 'prepared'; headSha: string; bundlePath: string; worktree: string; logPath: string; at: string; summary: string | null; alert: string | null; alertFindings: string[]; run: RunLog; validation: Validation; validateRun: ValidateRun | null }
   | { kind: 'skipped'; reason: string; logPath: string; run: RunLog }
   | { kind: 'failed'; reason: string; failure: PrepareFailure; worktree: string | null; logPath: string | null; run: RunLog; resetsAt?: string | null };
 
@@ -192,7 +192,7 @@ export async function preparePr(snapshot: PrSnapshot, config: InboxConfig, deps:
     return {
       kind: 'prepared', headSha: head, bundlePath, worktree: dest, logPath, at: deps.now(),
       summary: withValidation(summarizeBundleFile(bundlePath), validation), alert: verdict.alert,
-      run, validation, validateRun,
+      alertFindings: verdict.alertFindings, run, validation, validateRun,
     };
   } catch (err) {
     return { kind: 'failed', failure: 'agent', reason: err instanceof Error ? err.message : String(err), worktree: dest, logPath, run };

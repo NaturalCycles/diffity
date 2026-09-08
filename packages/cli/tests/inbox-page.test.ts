@@ -139,4 +139,20 @@ describe('the inbox page', () => {
     // An inbox holding nothing but handled rows is not an empty one.
     expect(script).toContain('view.handled.length');
   });
+
+  it('lists the alerted pull requests above ready, with the reason and how many findings it names', () => {
+    const html = inboxPage();
+    expect(html).toContain('<h2>Alerted</h2>');
+    expect(html).toContain('id="alerted"');
+    expect(html.indexOf('id="alerted-section"')).toBeLessThan(html.indexOf('id="ready-section"'));
+    const script = pageScript();
+    // The same card as a ready row, with the alert and the count on its meta line.
+    expect(script).toContain("fill('alerted-section', 'alerted', view.alerted, r => withActions(readyRow(r), r))");
+    expect(script).toContain("esc(r.alert || ''),\n        findingsLabel(r)");
+    expect(script).toContain("named + ' finding' + (named === 1 ? '' : 's')");
+    // An alert notifies from whichever of the two lists it is in, and counts towards the header.
+    expect(script).toContain('[...view.alerted, ...view.ready]');
+    expect(script).toContain("view.alerted.length + ' alerted'");
+    expect(script).toContain('const total = view.alerted.length + view.ready.length');
+  });
 });

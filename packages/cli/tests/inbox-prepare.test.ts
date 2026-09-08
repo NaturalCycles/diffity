@@ -395,7 +395,7 @@ describe('the inbox JSON server', () => {
   it('answers /api/inbox with the current view', async () => {
     const store = new InboxStore(':memory:');
     store.observe({ ...snapshot(), headSha: 'aaa' }, true, 'now');
-    store.markPrepared('o/demo#4', { headSha: 'aaa', bundlePath: '/b.json', worktreePath: '/wt', logPath: '/l', at: 'now', summary: null, alert: null });
+    store.markPrepared('o/demo#4', { headSha: 'aaa', bundlePath: '/b.json', worktreePath: '/wt', logPath: '/l', at: 'now', summary: null, alert: null, alertFindings: [] });
     const noOpenDeps = { baseRefOf: () => 'x', ensureServer: () => Promise.resolve(1), importBundle: () => {} };
     const server = startInboxServer(store, { ...config(), port: 0 }, () => {}, noOpenDeps);
     await new Promise(resolve => server.on('listening', resolve));
@@ -418,7 +418,7 @@ describe('the inbox JSON server', () => {
   it('shapes a prepared row as ready and openable', () => {
     const store = new InboxStore(':memory:');
     store.observe({ ...snapshot(), headSha: 'aaa' }, true, 'now');
-    store.markPrepared('o/demo#4', { headSha: 'aaa', bundlePath: '/b', worktreePath: '/wt', logPath: '/l', at: 'now', summary: null, alert: null });
+    store.markPrepared('o/demo#4', { headSha: 'aaa', bundlePath: '/b', worktreePath: '/wt', logPath: '/l', at: 'now', summary: null, alert: null, alertFindings: [] });
     const view = buildView(store, 'http://localhost:5390', 'now');
     expect(view.ready[0].openUrl).toBe('http://localhost:5390/open/o%2Fdemo%234');
     expect(view.ready[0].stale).toBe(false);
@@ -428,7 +428,7 @@ describe('the inbox JSON server', () => {
   it('carries what the agent spent on a prepared review, and the pause, to the page', async () => {
     const store = new InboxStore(':memory:');
     store.observe({ ...snapshot(), headSha: 'aaa' }, true, 'now');
-    store.markPrepared('o/demo#4', { headSha: 'aaa', bundlePath: '/b.json', worktreePath: '/wt', logPath: '/l', at: 'now', summary: '1 P1', alert: null });
+    store.markPrepared('o/demo#4', { headSha: 'aaa', bundlePath: '/b.json', worktreePath: '/wt', logPath: '/l', at: 'now', summary: '1 P1', alert: null, alertFindings: [] });
     store.recordRun({
       prId: 'o/demo#4', headSha: 'aaa', phase: 'prepare', model: 'claude-x',
       startedAt: new Date().toISOString(), endedAt: new Date().toISOString(), durationMs: 480_000,
@@ -458,7 +458,7 @@ describe('the inbox JSON server', () => {
   it('lists the checking pass beside the drafting one on the card\'s hover', async () => {
     const store = new InboxStore(':memory:');
     store.observe({ ...snapshot(), headSha: 'aaa' }, true, 'now');
-    store.markPrepared('o/demo#4', { headSha: 'aaa', bundlePath: '/b.json', worktreePath: '/wt', logPath: '/l', at: 'now', summary: '1 P1', alert: null });
+    store.markPrepared('o/demo#4', { headSha: 'aaa', bundlePath: '/b.json', worktreePath: '/wt', logPath: '/l', at: 'now', summary: '1 P1', alert: null, alertFindings: [] });
     const base = {
       prId: 'o/demo#4', headSha: 'aaa', inputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0, note: null,
     };

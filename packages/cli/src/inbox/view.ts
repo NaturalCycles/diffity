@@ -36,6 +36,8 @@ export interface InboxRow {
   summary: string | null;
   /** The agent's reason this one needs the reviewer now, when it raised one. */
   alert: string | null;
+  /** The findings it named as that reason, by thread id; empty when it named none. */
+  alertFindings: string[];
   openUrl: string | null;
   /** Where a POST dismisses it; null while it is being prepared, and once it is retired. */
   dismissUrl: string | null;
@@ -49,7 +51,9 @@ export interface InboxRow {
 }
 
 export interface InboxView {
-  /** Ready to open, smallest first — what the reviewer acts on. */
+  /** Prepared with an alert on it, most recently prepared first — what the reviewer sees first. */
+  alerted: InboxRow[];
+  /** Ready to open with nothing raised about them, smallest first. */
   ready: InboxRow[];
   /** Being prepared or waiting to be. */
   working: InboxRow[];
@@ -70,14 +74,16 @@ export function buildView(store: InboxStore, openBase: string, now: string): Inb
   const rows = store.all().map(pr => toRow(pr, openBase, store));
   const handled = rows.filter(isHandled).sort(byAttention);
   const handledIds = new Set(handled.map(row => row.id));
-  const ready = rows.filter(row => (row.status === 'prepared' || row.status === 'stale') && !handledIds.has(row.id))
-    .sort((a, b) => diffSize(a) - diffSize(b));
+  const openable = rows.filter(row => (row.status === 'prepared' || row.status === 'stale') && !handledIds.has(row.id));
+  const alerted = openable.filter(row => row.alert !== null)
+    .sort((a, b) => (b.preparedAt ?? '').localeCompare(a.preparedAt ?? ''));
+  const ready = openable.filter(row => row.alert === null).sort((a, b) => diffSize(a) - diffSize(b));
   const working = rows.filter(row => row.status === 'queued' || row.status === 'preparing')
     .sort((a, b) => Number(b.bumped) - Number(a.bumped));
   const dismissed = rows.filter(row => row.status === 'dismissed');
-  const other = rows.filter(row => !ready.includes(row) && !working.includes(row) && !dismissed.includes(row)
+  const other = rows.filter(row => !openable.includes(row) && !working.includes(row) && !dismissed.includes(row)
     && !handledIds.has(row.id) && !isRetired(row.status));
-  return { ready, working, handled, other, dismissed, generatedAt: now, runs: runWindows(store, now), pausedUntil: store.pausedUntil(now) };
+  return { alerted, ready, working, handled, other, dismissed, generatedAt: now, runs: runWindows(store, now), pausedUntil: store.pausedUntil(now) };
 }
 
 type HandledRow = InboxRow & { handled: NonNullable<InboxRow['handled']> };
@@ -143,6 +149,7 @@ function toRow(pr: InboxPr, openBase: string, store: InboxStore): InboxRow {
     preparedAt: pr.preparedAt,
     summary: pr.summary,
     alert: pr.alert,
+    alertFindings: pr.alertFindings,
     openUrl: openable ? `${openBase}/open/${encodeURIComponent(pr.id)}` : null,
     dismissUrl: pr.status === 'preparing' || pr.status === 'dismissed' || isRetired(pr.status) ? null : `${openBase}/dismiss/${encodeURIComponent(pr.id)}`,
     prepareUrl: bumpable && pr.bumpedAt === null ? `${openBase}/prepare/${encodeURIComponent(pr.id)}` : null,

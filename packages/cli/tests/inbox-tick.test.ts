@@ -87,7 +87,8 @@ beforeEach(() => {
   prepareResult = (snap) => ({
     kind: 'prepared', headSha: snap.headSha, bundlePath: `/b/${snap.number}.json`,
     worktree: `/wt/${snap.number}`, logPath: `/l/${snap.number}.log`, at: '2026-09-02T12:00:00.000Z',
-    summary: '1 P2', alert: snap.number === 2 ? 'touches auth' : null, run: run(),
+    summary: '1 P2', alert: snap.number === 2 ? 'touches auth' : null,
+    alertFindings: snap.number === 2 ? ['cf15e689', '7b2a10c4'] : [], run: run(),
     validation: 'not-needed', validateRun: null,
   });
 });
@@ -155,15 +156,29 @@ describe('runTick', () => {
     expect(pr.worktreePath).toBeNull();
   });
 
-  it('sorts the ready list smallest first for the surface, carrying summary and alert', async () => {
+  it('sorts the ready list smallest first for the surface, carrying the summary', async () => {
     forge.set(snapshot({ number: 1, additions: 200, deletions: 100 }));
-    forge.set(snapshot({ number: 2, additions: 3, deletions: 1 }));
+    forge.set(snapshot({ number: 3, additions: 3, deletions: 1 }));
     await runTick(store, deps());
 
     const view = buildView(store, 'http://localhost:5390', '2026-09-02T12:00:00.000Z');
-    expect(view.ready.map(row => row.number)).toEqual([2, 1]);
-    expect(view.ready.map(row => [row.summary, row.alert])).toEqual([['1 P2', 'touches auth'], ['1 P2', null]]);
-    expect(view.ready[0].openUrl).toBe('http://localhost:5390/open/o%2Fr%232');
+    expect(view.ready.map(row => row.number)).toEqual([3, 1]);
+    expect(view.ready.map(row => [row.summary, row.alert])).toEqual([['1 P2', null], ['1 P2', null]]);
+    expect(view.ready[0].openUrl).toBe('http://localhost:5390/open/o%2Fr%233');
+  });
+
+  it('lists the one the agent alerted on above the rest, with the findings it named', async () => {
+    forge.set(snapshot({ number: 1, additions: 3, deletions: 1 }));
+    forge.set(snapshot({ number: 2, additions: 200, deletions: 100 }));
+    await runTick(store, deps());
+
+    const view = buildView(store, 'http://localhost:5390', '2026-09-02T12:00:00.000Z');
+    // Number 2 is the one the fake agent alerts on, and its size does not put it behind number 1.
+    expect(view.alerted.map(row => [row.number, row.alert, row.alertFindings]))
+      .toEqual([[2, 'touches auth', ['cf15e689', '7b2a10c4']]]);
+    expect(view.ready.map(row => row.number)).toEqual([1]);
+    expect(view.other).toEqual([]);
+    expect(view.alerted[0].openUrl).toBe('http://localhost:5390/open/o%2Fr%232');
   });
 
   it('alerts on the reviewer\'s own paths when the agent raised nothing, and defers to it when it did', async () => {
@@ -176,6 +191,9 @@ describe('runTick', () => {
     // Number 2 is the one the fake agent alerts on: its own words stand.
     expect(store.get('o/r#2')!.alert).toBe('touches auth');
     expect(store.get('o/r#3')!.alert).toBeNull();
+    // Only the agent names findings: the path alert has the reviewer's own rule behind it and none.
+    expect(store.get('o/r#1')!.alertFindings).toEqual([]);
+    expect(store.get('o/r#2')!.alertFindings).toEqual(['cf15e689', '7b2a10c4']);
   });
 
   it('carries what CI said about each head to the surface', async () => {
@@ -185,7 +203,7 @@ describe('runTick', () => {
     await runTick(store, deps());
 
     const view = buildView(store, 'http://localhost:5390', '2026-09-02T12:00:00.000Z');
-    expect(new Map(view.ready.map(row => [row.number, row.ciState])))
+    expect(new Map([...view.alerted, ...view.ready].map(row => [row.number, row.ciState])))
       .toEqual(new Map([[1, 'passing'], [2, 'running'], [3, 'none']]));
   });
 
@@ -305,7 +323,9 @@ describe('runTick', () => {
     expect(prepared).toEqual(['o/r#2']);
 
     const view = buildView(store, 'http://localhost:5390', '2026-09-02T12:00:00.000Z');
-    expect(view.ready.map(row => row.number)).toEqual([2]);
+    // Number 2 is the one the fake agent alerts on, so it is listed above the rest.
+    expect(view.alerted.map(row => row.number)).toEqual([2]);
+    expect(view.ready).toEqual([]);
     expect(view.other).toEqual([]);
     // Listed as dismissed, with a way back and no second dismiss.
     expect(view.dismissed.map(row => [row.number, row.prepareUrl, row.dismissUrl]))
@@ -429,7 +449,7 @@ describe('runTick', () => {
     const logged: string[] = [];
     prepareResult = snap => ({
       kind: 'prepared', headSha: snap.headSha, bundlePath: '/b.json', worktree: '/wt', logPath: '/l.log',
-      at: '2026-09-02T12:00:00.000Z', summary: '1 P1', alert: null, run: run(),
+      at: '2026-09-02T12:00:00.000Z', summary: '1 P1', alert: null, alertFindings: [], run: run(),
       validation: 'validated',
       validateRun: {
         startedAt: '2026-09-02T12:00:00.000Z', endedAt: '2026-09-02T12:03:00.000Z',
@@ -452,7 +472,7 @@ describe('runTick', () => {
     const logged: string[] = [];
     prepareResult = snap => ({
       kind: 'prepared', headSha: snap.headSha, bundlePath: '/b.json', worktree: '/wt', logPath: '/l.log',
-      at: '2026-09-02T12:00:00.000Z', summary: '1 P1 \u00b7 unchecked', alert: null, run: run(),
+      at: '2026-09-02T12:00:00.000Z', summary: '1 P1 \u00b7 unchecked', alert: null, alertFindings: [], run: run(),
       validation: 'unchecked',
       validateRun: {
         startedAt: '2026-09-02T12:00:00.000Z', endedAt: '2026-09-02T12:15:00.000Z', stats: null,
@@ -472,7 +492,7 @@ describe('runTick', () => {
     forge.set(snapshot());
     prepareResult = snap => ({
       kind: 'prepared', headSha: snap.headSha, bundlePath: '/b.json', worktree: '/wt', logPath: '/l.log',
-      at: '2026-09-02T12:00:00.000Z', summary: null, alert: null, run: run({ stats: null }),
+      at: '2026-09-02T12:00:00.000Z', summary: null, alert: null, alertFindings: [], run: run({ stats: null }),
       validation: 'not-needed', validateRun: null,
     });
     await runTick(store, deps());
@@ -741,7 +761,7 @@ describe('a posted review', () => {
     prepareResult = snap => ({
       kind: 'prepared', headSha: snap.headSha, bundlePath: '/b/1.json', worktree: '/wt/1',
       logPath: '/l/1.log', at: '2026-09-02T13:05:00.000Z', summary: '1 P2', alert: null,
-      run: run(), validation: 'not-needed', validateRun: null,
+      alertFindings: [], run: run(), validation: 'not-needed', validateRun: null,
     });
     await prepareBumped(store, deps(), 'o/r#1');
     expect(prepared).toEqual(['o/r#1']);

@@ -6,7 +6,7 @@ import { inboxConfigPath, inboxStorePath } from '../inbox/paths.js';
 import { InboxStore, type RunTotals } from '../inbox/store.js';
 import { runDaemon } from '../inbox/daemon.js';
 import { allowFromEnv, mcpGateDecision } from '../inbox/mcp-gate.js';
-import { buildView } from '../inbox/view.js';
+import { buildView, type InboxRow } from '../inbox/view.js';
 import { localHhMm, localWhen, minutesOf, money, tokensLabel } from '../inbox/runs.js';
 
 export function registerInboxCommand(program: Command): void {
@@ -87,16 +87,15 @@ export function registerInboxCommand(program: Command): void {
         return;
       }
 
-      if (view.ready.length === 0 && view.working.length === 0 && view.handled.length === 0
-        && view.other.length === 0 && view.dismissed.length === 0) {
+      if (view.alerted.length === 0 && view.ready.length === 0 && view.working.length === 0
+        && view.handled.length === 0 && view.other.length === 0 && view.dismissed.length === 0) {
         console.log(pc.dim('Nothing in the inbox yet. Run `diffity inbox` to start watching.'));
         spent(view);
         return;
       }
 
-      section('Ready to review', view.ready.map(row =>
-        `  ${sizeBadge(row)} ${pc.bold(`${row.repo}#${row.number}`)} ${row.title}${row.summary ? pc.dim(`  ${row.summary}`) : ''}${row.alert ? pc.red(`  ⚠ ${row.alert}`) : ''}${row.stale ? pc.yellow('  (stale — new commits)') : ''}`,
-      ));
+      section('Alerted', view.alerted.map(preparedLine));
+      section('Ready to review', view.ready.map(preparedLine));
       section('Queue', view.working.map(row =>
         `  ${pc.dim(row.status.padEnd(9))} ${row.repo}#${row.number} ${row.title} ${pc.dim(row.statusReason ?? '')}`,
       ));
@@ -197,6 +196,16 @@ function section(title: string, lines: string[]): void {
   for (const line of lines) {
     console.log(line);
   }
+}
+
+/** A prepared review as one line: its size, what was found, and what was raised about it. */
+function preparedLine(row: InboxRow): string {
+  const findings = row.alertFindings.length;
+  return `  ${sizeBadge(row)} ${pc.bold(`${row.repo}#${row.number}`)} ${row.title}`
+    + `${row.summary ? pc.dim(`  ${row.summary}`) : ''}`
+    + `${row.alert ? pc.red(`  ⚠ ${row.alert}`) : ''}`
+    + `${findings ? pc.red(`  ${findings} finding${findings === 1 ? '' : 's'}`) : ''}`
+    + `${row.stale ? pc.yellow('  (stale — new commits)') : ''}`;
 }
 
 function sizeBadge(row: { additions: number; deletions: number }): string {
