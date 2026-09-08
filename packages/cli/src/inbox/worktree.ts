@@ -41,6 +41,11 @@ async function runGit(cwd: string, args: string[]): Promise<string> {
  *
  * `pinHead` cuts the worktree at that commit instead of wherever the pull request has got to,
  * which is how a review is re-run against the head an earlier one was written at.
+ *
+ * Each fetch lands in a ref of its own under `refs/diffity/` and is read back from there rather
+ * than from `FETCH_HEAD`: two preparations may be fetching in the same clone at once — a bumped
+ * pull request is prepared alongside whatever the daemon is already on — and one clone has a
+ * single `FETCH_HEAD`.
  */
 export async function prepareWorktree(clone: string, dest: string, ref: PrRef, baseRef: string, pinHead?: string): Promise<{ head: string; diffRef: string }> {
   if (!existsSync(clone)) {
@@ -51,13 +56,15 @@ export async function prepareWorktree(clone: string, dest: string, ref: PrRef, b
   }
   await requireMatchingOrigin(clone, ref);
 
-  await runGit(clone, ['fetch', 'origin', `refs/pull/${ref.number}/head`]);
+  const headRef = `refs/diffity/pull/${ref.number}`;
+  await runGit(clone, ['fetch', 'origin', `+refs/pull/${ref.number}/head:${headRef}`]);
   const head = pinHead === undefined
-    ? await runGit(clone, ['rev-parse', 'FETCH_HEAD'])
+    ? await runGit(clone, ['rev-parse', headRef])
     : await reachable(clone, pinHead);
   // `refs/heads/` so a tag sharing the branch's name cannot be fetched in its place.
-  await runGit(clone, ['fetch', 'origin', `refs/heads/${baseRef}`]);
-  const diffRef = await runGit(clone, ['rev-parse', 'FETCH_HEAD']);
+  const localBaseRef = `refs/diffity/base/${baseRef}`;
+  await runGit(clone, ['fetch', 'origin', `+refs/heads/${baseRef}:${localBaseRef}`]);
+  const diffRef = await runGit(clone, ['rev-parse', localBaseRef]);
 
   if (existsSync(join(dest, '.git'))) {
     try {

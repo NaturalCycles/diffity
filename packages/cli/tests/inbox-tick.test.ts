@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { InboxStore, prId } from '../src/inbox/store.js';
-import { runTick, type Forge, type TickDeps } from '../src/inbox/tick.js';
+import { prepareBumped, runTick, type Forge, type TickDeps } from '../src/inbox/tick.js';
 import { buildView } from '../src/inbox/view.js';
 import { localHhMm } from '../src/inbox/runs.js';
 import type { PrRef, PrSnapshot } from '@diffity/github';
@@ -61,6 +61,7 @@ function deps(over: Partial<TickDeps> = {}): TickDeps {
     removeWorktree: (worktree) => { removed.push(worktree); },
     log: () => {},
     now: () => '2026-09-02T12:00:00.000Z',
+    inFlight: new Set<string>(),
     maxPrepared: 100,
     waitForCi: false,
     skipTitles: [],
@@ -523,6 +524,41 @@ describe('runTick', () => {
     expect(store.get('o/r#1')!.status).toBe('prepared');
   });
 
+  it('leaves a pull request alone while a preparation for it is running', async () => {
+    forge.set(snapshot());
+    store.observe(snapshot(), true, 'now');
+    store.setStatus('o/r#1', 'preparing', 'a bump got there first');
+
+    await runTick(store, deps({ inFlight: new Set(['o/r#1']) }));
+
+    expect(prepared).toEqual([]);
+    expect(store.get('o/r#1')!.status).toBe('preparing');
+    expect(store.get('o/r#1')!.statusReason).toBe('a bump got there first');
+
+    // The same row with nothing running for it is a crash's leftover, and is taken up again.
+    await runTick(store, deps());
+    expect(prepared).toEqual(['o/r#1']);
+    expect(store.get('o/r#1')!.status).toBe('prepared');
+  });
+
+  it('does not prepare a pull request a bump started preparing while the tick was busy', async () => {
+    forge.set(snapshot({ number: 1, additions: 10, deletions: 0 }));
+    forge.set(snapshot({ number: 2, additions: 20, deletions: 0 }));
+    const inFlight = new Set<string>();
+    const prepare = (snap: PrSnapshot) => {
+      prepared.push(prId(snap));
+      // A bump takes #2 on while this tick is on #1.
+      if (snap.number === 1) {
+        inFlight.add('o/r#2');
+      }
+      return Promise.resolve(prepareResult(snap));
+    };
+    await runTick(store, deps({ prepare, inFlight }));
+
+    expect(prepared).toEqual(['o/r#1']);
+    expect(store.get('o/r#2')!.status).toBe('queued');
+  });
+
   it('offers a bump on queued, skipped and failed rows only, and lists a bumped row first', async () => {
     forge.set(snapshot({ number: 1, additions: 10, deletions: 0 }));
     forge.set(snapshot({ number: 2, additions: 20, deletions: 0 }));
@@ -536,5 +572,88 @@ describe('runTick', () => {
       [3, true, null],
       [2, false, 'http://localhost:5390/prepare/o%2Fr%232'],
     ]);
+  });
+});
+
+describe('prepareBumped', () => {
+  /** A row the reviewer has just pressed \u2191 on, as `handleBump` leaves it. */
+  function bumpedRow(over: Partial<PrSnapshot> = {}): PrSnapshot {
+    const snap = snapshot(over);
+    store.observe(snap, true, '2026-09-02T11:00:00.000Z');
+    store.bump(prId(snap), '2026-09-07T10:00:00Z');
+    // Not listed: the bump has no poll behind it, so the search is never asked.
+    forge.set(snap, false);
+    return snap;
+  }
+
+  it('prepares the bumped pull request there and then, and spends the bump', async () => {
+    bumpedRow();
+
+    await prepareBumped(store, deps(), 'o/r#1');
+
+    expect(prepared).toEqual(['o/r#1']);
+    expect(bumpedFlags).toEqual([true]);
+    expect(store.get('o/r#1')!.status).toBe('prepared');
+    expect(store.get('o/r#1')!.bumpedAt).toBeNull();
+  });
+
+  it('prepares past the CI hold and the reviewer\'s own title patterns', async () => {
+    bumpedRow({ title: 'chore: 1.2.3 Release', checks: [{ name: 'check-job', status: 'failure' }] });
+
+    await prepareBumped(store, deps({ waitForCi: true, skipTitles: ['Release$'] }), 'o/r#1');
+
+    expect(prepared).toEqual(['o/r#1']);
+    expect(store.get('o/r#1')!.status).toBe('prepared');
+  });
+
+  it('leaves it queued while preparing is paused', async () => {
+    bumpedRow();
+    const until = '2026-09-02T14:00:00.000Z';
+
+    await prepareBumped(store, deps({ pausedUntil: () => until }), 'o/r#1');
+
+    expect(prepared).toEqual([]);
+    const pr = store.get('o/r#1')!;
+    expect(pr.status).toBe('queued');
+    expect(pr.statusReason).toBe(`waiting: preparing paused until ${localHhMm(until)}`);
+    // The bump is not spent: the pause lifts and the queue takes it first.
+    expect(pr.bumpedAt).not.toBeNull();
+  });
+
+  it('does nothing when a preparation for it is already running', async () => {
+    bumpedRow();
+
+    await prepareBumped(store, deps({ inFlight: new Set(['o/r#1']) }), 'o/r#1');
+
+    expect(prepared).toEqual([]);
+    expect(store.get('o/r#1')!.status).toBe('queued');
+    expect(store.get('o/r#1')!.bumpedAt).not.toBeNull();
+  });
+
+  it('retires one merged since it was queued, and leaves a draft a draft', async () => {
+    bumpedRow({ state: 'MERGED' });
+
+    await prepareBumped(store, deps(), 'o/r#1');
+
+    expect(prepared).toEqual([]);
+    expect(store.get('o/r#1')!.status).toBe('done');
+    expect(store.get('o/r#1')!.statusReason).toBe('merged');
+
+    bumpedRow({ number: 2, isDraft: true });
+    await prepareBumped(store, deps(), 'o/r#2');
+    expect(prepared).toEqual([]);
+    expect(store.get('o/r#2')!.status).toBe('draft');
+  });
+
+  it('says so when there is no such row, or the forge cannot be read', async () => {
+    const logged: string[] = [];
+
+    await prepareBumped(store, deps({ log: message => { logged.push(message); } }), 'o/r#9');
+    expect(logged.some(line => line.includes('no such pull request'))).toBe(true);
+
+    store.observe(snapshot(), true, 'now');
+    await prepareBumped(store, deps({ log: message => { logged.push(message); } }), 'o/r#1');
+    expect(logged.some(line => line.includes('could not read'))).toBe(true);
+    expect(prepared).toEqual([]);
   });
 });

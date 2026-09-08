@@ -2,18 +2,18 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { MAX_SETTINGS_TEXT, parseSettingsPatch } from './settings.js';
 import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import { getViewerLogin, searchReviewRequested, viewPr } from '@diffity/github';
+import { getViewerLogin, searchReviewRequested, viewPr, type PrSnapshot } from '@diffity/github';
 import { saveInboxSettings, type InboxConfig, type InboxSettings } from './config.js';
 import { inboxDir } from './paths.js';
-import { logsDir, preparePr, type PrepareDeps } from './prepare.js';
-import { realAttendantDeps, realPrepareDeps, type Inflight } from './runtime.js';
+import { logsDir, preparePr, type PrepareDeps, type PrepareResult } from './prepare.js';
+import { noneInflight, realAttendantDeps, realPrepareDeps, type Inflight } from './runtime.js';
 import { Attendants, type AttendedPr } from './attendant.js';
 import { removeWorktree, cloneDir } from './worktree.js';
 import { localHhMm } from './runs.js';
 import { findInstanceForRepo, killInstance } from '../registry.js';
 import { repoHash } from './open-session.js';
 import { InboxStore } from './store.js';
-import { runTick, type Forge } from './tick.js';
+import { prepareBumped, runTick, type Forge } from './tick.js';
 import { buildView } from './view.js';
 import { resolveBump, resolveDismiss, resolveOpen } from './open.js';
 import { openPreparedSession, realOpenSessionDeps, type OpenSessionDeps } from './open-session.js';
@@ -44,6 +44,10 @@ export interface DaemonOptions {
   openDeps?: OpenSessionDeps;
   /** Who parks on an opened review; defaults to the real attendants. Tests override it. */
   attendants?: AttendantHost;
+  /** How one pull request is prepared; defaults to the real preparation. Tests override it. */
+  prepare?: (snapshot: PrSnapshot, opts: { bumped: boolean }) => Promise<PrepareResult>;
+  /** Where the prepares register what they have running, for the shutdown to stop; its own by default. */
+  inflight?: Inflight;
   /** Where the page's settings are written; without it they change the running daemon only. */
   configPath?: string;
 }
@@ -51,8 +55,8 @@ export interface DaemonOptions {
 /** What the page may ask of the daemon beyond the store: park agents, tick, settings, and how the tick is doing. */
 export interface ServerHooks {
   attendants?: AttendantHost | null;
-  /** A bump wants a tick now, or right after the one in flight. */
-  onBump?: (() => void) | null;
+  /** A bump wants this pull request prepared now, whatever else is being prepared. */
+  onBump?: ((id: string) => void) | null;
   /** The page's ⟳: the same tick, asked for by hand. */
   onTick?: (() => void) | null;
   settings?: SettingsHost | null;
@@ -118,18 +122,20 @@ export async function runDaemon(
   let ticking = false;
   let lastPollAt: string | null = null;
 
-  const inflight: Inflight = {};
+  const inflight = options.inflight ?? noneInflight();
   const prepareDeps: PrepareDeps = realPrepareDeps(nodePath, entry, inboxDataDir, config, log, inflight);
   // The pause outlives this process: a session limit is the reviewer's, not the daemon's, so it is
   // kept in the store and a restart does not spend a run rediscovering it.
   const pausedUntil = () => store.pausedUntil(new Date().toISOString());
   const deps = {
     forge: options.forge ?? realForge,
-    prepare: (snapshot: Parameters<typeof preparePr>[0], opts: { bumped: boolean }) => preparePr(snapshot, config, prepareDeps, opts),
+    prepare: options.prepare ?? ((snapshot: PrSnapshot, opts: { bumped: boolean }) => preparePr(snapshot, config, prepareDeps, opts)),
     removeWorktree: (worktree: string, repo: string) => reclaimWorktree(config, worktree, repo),
     log,
     now: () => new Date().toISOString(),
     shouldContinue: () => !stopping,
+    // One set for the tick and the bumps: each knows what the other is already preparing.
+    inFlight: new Set<string>(),
     // Read at each tick, not copied: the page can change it while the daemon runs.
     get maxPrepared() { return config.maxPrepared; },
     get waitForCi() { return config.waitForCi; },
@@ -144,7 +150,7 @@ export async function runDaemon(
     pausedUntil,
   };
 
-  // A bump arriving mid-tick is served by another tick right after, not by the next poll.
+  // A ⟳ arriving mid-tick is served by another tick right after it, not by the next poll.
   let tickWanted = false;
   const tick = async () => {
     if (ticking || stopping) {
@@ -192,7 +198,11 @@ export async function runDaemon(
   };
   const settings = settingsHost(config, options.configPath, armPoll);
   const server = await bindInboxServer(store, config, log, openDeps, {
-    attendants, onBump: requestTick, onTick: requestTick, settings, status: () => ({ ticking, lastPollAt, pausedUntil: pausedUntil() }),
+    attendants, onTick: requestTick, settings, status: () => ({ ticking, lastPollAt, pausedUntil: pausedUntil() }),
+    // Not a tick: the ↑ prepares that one at once, beside whatever a tick is already preparing, and
+    // the page's next refresh finds it `preparing`.
+    onBump: id => void prepareBumped(store, deps, id)
+      .catch(err => log(`could not prepare ${id}: ${err instanceof Error ? err.message : err}`)),
   });
   reclaimLeftoverServers(log);
   armPoll();
@@ -205,10 +215,11 @@ export async function runDaemon(
       if (timer) {
         clearInterval(timer);
       }
-      // Kill whatever a prepare has running right now — the detached diffity server and the agent
-      // and its group — so nothing outlives the daemon.
-      inflight.agentKill?.();
-      inflight.serverStop?.();
+      // Kill whatever the prepares have running right now — every detached diffity server and every
+      // agent with its group — so nothing outlives the daemon.
+      for (const stop of [...inflight.stops]) {
+        stop();
+      }
       attendants.stopAll();
       server.close(() => {
         store.close();
@@ -414,8 +425,8 @@ function stateChangingId(req: IncomingMessage, res: ServerResponse, prefix: stri
   }
 }
 
-/** Puts a pull request at the front of the queue and asks for a tick, so it is prepared now. */
-function handleBump(store: InboxStore, id: string, onBump: (() => void) | null, log: (message: string) => void, res: ServerResponse): void {
+/** Puts a pull request at the front of the queue and has it prepared at once. */
+function handleBump(store: InboxStore, id: string, onBump: ((id: string) => void) | null, log: (message: string) => void, res: ServerResponse): void {
   const resolution = resolveBump(store, id);
   if (!resolution.ok) {
     res.writeHead(resolution.status, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -423,10 +434,10 @@ function handleBump(store: InboxStore, id: string, onBump: (() => void) | null, 
     return;
   }
   store.bump(resolution.pr.id, new Date().toISOString());
-  log(`${id} bumped to the front of the queue`);
+  log(`${id} bumped — preparing it now`);
   res.writeHead(204);
   res.end();
-  onBump?.();
+  onBump?.(resolution.pr.id);
 }
 
 /** Marks a pull request as one the reviewer will not review, and reclaims its worktree. */

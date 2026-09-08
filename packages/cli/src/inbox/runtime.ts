@@ -13,12 +13,18 @@ import { parseThreadList, type ReviewThread } from './validate.js';
 import { diffityDir } from '../registry.js';
 
 /**
- * What a prepare currently has running, so the daemon can stop it on shutdown. Set as a server or
- * an agent starts and cleared as it ends; a shutdown mid-prepare calls whichever is set.
+ * What the prepares currently have running, so the daemon can stop them on shutdown. A server's
+ * stop and an agent's kill join the set as they start and leave it as they end; a shutdown calls
+ * whatever is still in it. A set, not one of each: a bumped pull request is prepared alongside
+ * whatever the daemon is already preparing, so several servers and agents are running at once.
  */
 export interface Inflight {
-  serverStop?: () => void;
-  agentKill?: () => void;
+  stops: Set<() => void>;
+}
+
+/** An `Inflight` of its own, for a caller that is not sharing the daemon's. */
+export function noneInflight(): Inflight {
+  return { stops: new Set() };
 }
 
 /**
@@ -27,12 +33,13 @@ export interface Inflight {
  * `dataDirFor` gives each pull request its own diffity data directory, so a prepared session never
  * mixes with the reviewer's own diffity or with the previous run's findings on a re-prepare.
  */
-export function realPrepareDeps(nodePath: string, entry: string, dataDirFor: (worktree: string) => string, config: InboxConfig, log: (message: string) => void, inflight: Inflight = {}): PrepareDeps {
+export function realPrepareDeps(nodePath: string, entry: string, dataDirFor: (worktree: string) => string, config: InboxConfig, log: (message: string) => void, inflight: Inflight = noneInflight()): PrepareDeps {
   return {
     startServer: async (worktree, diffRef) => {
       const handle = await startDiffityServer(nodePath, entry, worktree, diffRef, dataDirFor(worktree));
-      inflight.serverStop = () => { handle.stop(); inflight.serverStop = undefined; };
-      return { port: handle.port, stop: () => { handle.stop(); inflight.serverStop = undefined; } };
+      const stop = () => { handle.stop(); inflight.stops.delete(stop); };
+      inflight.stops.add(stop);
+      return { port: handle.port, stop };
     },
     agentArgv: () => buildAgentArgv({ nodePath, entry, agent: config.agent, systemPrompt: skillBody(entry, 'diffity-review', log) }),
     // No review skill: this pass checks findings that are already written, and is told how in its
@@ -121,7 +128,7 @@ function stopServer(pid: number | undefined): void {
  * not rest on the prompt alone. On a timeout the whole process group is killed, not just the direct
  * child, so a tool the agent spawned cannot outlive it.
  */
-export function runAgent(opts: RunAgentOpts, dataDir: string, mcpAllow: string[] = [], inflight: Inflight = {}): Promise<{ stdout: string; timedOut: boolean }> {
+export function runAgent(opts: RunAgentOpts, dataDir: string, mcpAllow: string[] = [], inflight: Inflight = noneInflight()): Promise<{ stdout: string; timedOut: boolean }> {
   mkdirSync(dirname(opts.logPath), { recursive: true });
   const log = createWriteStream(opts.logPath, { flags: opts.appendLog ? 'a' : 'w' });
   // The log is a convenience, not the contract: a path that cannot be opened or written must not
@@ -136,11 +143,12 @@ export function runAgent(opts: RunAgentOpts, dataDir: string, mcpAllow: string[]
       detached: true,
       env: agentEnv(dataDir, mcpAllow),
     });
-    inflight.agentKill = () => killGroup(child.pid, 'SIGTERM');
+    const kill = () => killGroup(child.pid, 'SIGTERM');
+    inflight.stops.add(kill);
     let stdout = '';
     let settled = false;
     let escalate: ReturnType<typeof setTimeout> | undefined;
-    const clearInflight = () => { inflight.agentKill = undefined; };
+    const clearInflight = () => { inflight.stops.delete(kill); };
 
     const timer = setTimeout(() => {
       killGroup(child.pid, 'SIGTERM');
@@ -250,8 +258,8 @@ export function realAttendantDeps(
       child.on('close', code => { signal.removeEventListener('abort', onAbort); resolve(parseAwaitOutcome(code, stdout, stderr)); });
     }),
     answer: async (worktree, pr, prompt, signal) => {
-      const inflight: Inflight = {};
-      const onAbort = () => inflight.agentKill?.();
+      const inflight = noneInflight();
+      const onAbort = () => inflight.stops.forEach(stop => stop());
       signal.addEventListener('abort', onAbort, { once: true });
       const startedAt = new Date().toISOString();
       // A question is about a finding, which is the checking model's job when one is set.
