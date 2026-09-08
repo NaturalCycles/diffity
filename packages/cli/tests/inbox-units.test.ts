@@ -31,6 +31,24 @@ describe('parseInboxConfig', () => {
     expect(() => parseInboxConfig({ alertPaths: [' '] })).toThrow(/alertPaths must be an array of non-empty globs/);
   });
 
+  it('takes the title patterns, and refuses a bad one by name', () => {
+    expect(parseInboxConfig({ skipTitles: ['\\(payments\\)', 'Release$'] }).skipTitles)
+      .toEqual(['\\(payments\\)', 'Release$']);
+    expect(DEFAULT_INBOX_CONFIG.skipTitles).toEqual([]);
+    expect(() => parseInboxConfig({ skipTitles: '\\(payments\\)' })).toThrow(/skipTitles must be an array of non-empty regular expressions/);
+    expect(() => parseInboxConfig({ skipTitles: ['ok', ' '] })).toThrow(/skipTitles must be an array of non-empty regular expressions/);
+    expect(() => parseInboxConfig({ skipTitles: ['ok', 3] })).toThrow(/skipTitles must be an array of non-empty regular expressions/);
+    // The index says which line to go and fix, and the engine's own words say what is wrong with it.
+    expect(() => parseInboxConfig({ skipTitles: ['fine', 'also fine', '(payments'] }))
+      .toThrow(/skipTitles\[2\] is not a valid regular expression: /);
+  });
+
+  it('hands out a fresh skipTitles array, so a parsed config cannot change the raw one', () => {
+    const raw = { skipTitles: ['Release$'] };
+    parseInboxConfig(raw).skipTitles.push('extra');
+    expect(raw.skipTitles).toEqual(['Release$']);
+  });
+
   it('refuses a non-positive interval, by name', () => {
     expect(() => parseInboxConfig({ pollMinutes: 0 })).toThrow(/pollMinutes must be a positive number/);
     expect(() => parseInboxConfig([])).toThrow(/must be a JSON object/);
@@ -98,7 +116,7 @@ describe('parseInboxConfig', () => {
       const path = join(dir, 'config.json');
       writeFileSync(path, JSON.stringify({ port: 5399, filter: 'old', pollMinutes: 2 }, null, 2));
       const settings = {
-        filter: 'skip payments', alertWhen: 'a P1', alertPaths: ['packages/shared/**'], maxPrepared: 3, pollMinutes: 7,
+        filter: 'skip payments', skipTitles: ['\\(payments\\)'], alertWhen: 'a P1', alertPaths: ['packages/shared/**'], maxPrepared: 3, pollMinutes: 7,
         live: false, liveTimeoutMinutes: 4, prepareTimeoutMinutes: 20, waitForCi: true,
         agent: { model: 'opus', effort: 'high', mcpAllow: [], extraArgs: [], maxBudgetUsd: null },
         validate: { model: null, timeoutMinutes: 15, maxBudgetUsd: null },
@@ -269,7 +287,7 @@ describe('summarizeFindings', () => {
 
 describe('parseSettingsPatch', () => {
   const full = {
-    filter: 'a', alertWhen: 'b', alertPaths: ['src/**'], maxPrepared: 2, pollMinutes: 3, live: false,
+    filter: 'a', skipTitles: ['Release$'], alertWhen: 'b', alertPaths: ['src/**'], maxPrepared: 2, pollMinutes: 3, live: false,
     liveTimeoutMinutes: 5, prepareTimeoutMinutes: 15, waitForCi: false,
     agent: { model: null, effort: null, mcpAllow: [], extraArgs: [], maxBudgetUsd: null },
     validate: { model: null, timeoutMinutes: 15, maxBudgetUsd: null },
@@ -283,6 +301,15 @@ describe('parseSettingsPatch', () => {
     expect(parseSettingsPatch(JSON.stringify({ ...full, filter: 'x'.repeat(5000) }))).toMatchObject({ ok: false });
     expect(parseSettingsPatch('nope')).toMatchObject({ ok: false });
     expect(parseSettingsPatch('[]')).toMatchObject({ ok: false });
+  });
+
+  it('round-trips the title patterns and refuses one that does not compile', () => {
+    const edited = { ...full, skipTitles: ['\\(payments\\)', 'Release$'] };
+    expect(parseSettingsPatch(JSON.stringify(edited))).toEqual({ ok: true, settings: edited });
+    expect(parseSettingsPatch(JSON.stringify({ ...full, skipTitles: undefined })))
+      .toMatchObject({ ok: false, message: 'skipTitles is missing' });
+    expect(parseSettingsPatch(JSON.stringify({ ...full, skipTitles: ['ok', '(payments'] })))
+      .toMatchObject({ ok: false, message: expect.stringContaining('skipTitles[1] is not a valid regular expression') });
   });
 
   it('takes the validate fields the page edits and refuses a bad one by name', () => {

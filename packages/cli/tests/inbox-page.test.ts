@@ -76,6 +76,23 @@ describe('the inbox page', () => {
     expect(script).toContain("waitForCi: el('waitForCi').checked");
   });
 
+  it('has a settings field for the title patterns, sends them back as lines, and says what the filter costs', () => {
+    const html = inboxPage();
+    expect(html).toContain('id="skipTitles"');
+    expect(html).toContain('Skip pull requests whose title matches (one regular expression per line)');
+    // The placeholder has to reach the browser with its backslashes intact.
+    expect(html).toContain('placeholder="e.g. \\(payments\\)  or  Release$"');
+    // The division between the two ways to skip: one is free, the other is an agent run per skip.
+    expect(html).toContain('spends a run on every pull request it skips');
+    const script = pageScript();
+    expect(script).toContain("skipTitles: el('skipTitles').value.split('\\n')");
+    expect(script).toContain("el('skipTitles').value = (settings.skipTitles || []).join('\\n')");
+  });
+
+  it('names the prepared cap for what it does, leaving bumps out of it', () => {
+    expect(inboxPage()).toContain('Auto-prepare from queue<input id="maxPrepared"');
+  });
+
   it('sends the agent block back with the settings, empty fields as null', () => {
     const script = pageScript();
     expect(script).toContain("model: el('agentModel').value.trim() || null");

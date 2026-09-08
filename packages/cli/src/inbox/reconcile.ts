@@ -25,10 +25,18 @@ export interface ReconcileInput {
    * config's default is.
    */
   waitForCi?: boolean;
+  /**
+   * Regular-expression sources the reviewer wants skipped by title; absent skips nothing, as the
+   * config's default does.
+   */
+  skipTitles?: string[];
 }
 
 /** The mark of a CI hold on a row, so the next poll re-decides it instead of leaving it settled. */
 const CI_FAILED = 'CI failed:';
+
+/** The same for a title skip: a retitled pull request is re-decided rather than left settled. */
+const TITLE_MATCHES = 'title matches';
 
 /**
  * The status a pull request should move to, given what the forge now says and what the inbox
@@ -38,11 +46,53 @@ const CI_FAILED = 'CI failed:';
  * one no longer asking for the review, is retired but keeps whatever was prepared. A new commit
  * makes a prepared review stale and worth redoing. One the reviewer dismissed stays dismissed until
  * it gets new commits; one they bumped is prepared whatever else would have held it back, drafts
- * apart. Everything else asked of the reviewer is queued.
+ * apart. A title matching one of the reviewer's patterns is skipped before any agent is spent on
+ * it. Everything else asked of the reviewer is queued.
  */
 export function reconcile(input: ReconcileInput): Transition | null {
   const transition = decide(input);
-  return transition && input.waitForCi ? heldForCi(transition, input) : transition;
+  if (!transition) {
+    return null;
+  }
+  // A title the reviewer said to skip is answered before CI: there is nothing to wait for.
+  return skippedByTitle(transition, input)
+    ?? (input.waitForCi ? heldForCi(transition, input) : transition);
+}
+
+/** Which pattern a title matches, as the reason on the row, or null when none does. */
+export function titleSkipReason(title: string, skipTitles: string[]): string | null {
+  for (const pattern of skipTitles) {
+    let regex: RegExp;
+    try {
+      regex = new RegExp(pattern);
+    } catch {
+      // The config refuses a pattern that does not compile; one that got here anyway is not worth
+      // a failed poll.
+      continue;
+    }
+    if (regex.test(title)) {
+      return `${TITLE_MATCHES} /${pattern}/`;
+    }
+  }
+  return null;
+}
+
+/**
+ * What the reviewer's title patterns do to a transition that was about to spend an agent: nothing
+ * is spent on a title they said to skip. As with the CI hold, a bumped pull request is prepared
+ * regardless, and a review already prepared for an older head stays openable.
+ */
+function skippedByTitle(transition: Transition, input: ReconcileInput): Transition | null {
+  const { existing, snapshot } = input;
+  if (!transition.prepare || !snapshot || existing?.bumpedAt) {
+    return null;
+  }
+  const reason = titleSkipReason(snapshot.title, input.skipTitles ?? []);
+  if (!reason) {
+    return null;
+  }
+  const refresh = existing?.status === 'prepared' || existing?.status === 'stale';
+  return { status: refresh ? 'stale' : 'skipped', reason, prepare: false };
 }
 
 /**
@@ -127,10 +177,11 @@ function decide(input: ReconcileInput): Transition | null {
   }
 
   // A settled skip stays settled until its head moves; re-running the filter on every poll would
-  // just spend the same tokens on the same answer. A CI failure is not the reviewer's verdict on
-  // the pull request, though: it is re-decided every poll, and green checks put it back in the queue.
+  // just spend the same tokens on the same answer. A CI failure and a title match cost nothing to
+  // decide, though: both are re-decided every poll, so green checks and a retitle put the pull
+  // request back in the queue.
   if (existing && existing.status === 'skipped' && existing.headSha === snapshot.headSha
-    && !existing.statusReason?.startsWith(CI_FAILED)) {
+    && !existing.statusReason?.startsWith(CI_FAILED) && !existing.statusReason?.startsWith(TITLE_MATCHES)) {
     return null;
   }
 

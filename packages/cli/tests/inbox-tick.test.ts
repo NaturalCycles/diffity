@@ -63,6 +63,7 @@ function deps(over: Partial<TickDeps> = {}): TickDeps {
     now: () => '2026-09-02T12:00:00.000Z',
     maxPrepared: 100,
     waitForCi: false,
+    skipTitles: [],
     alertPaths: [],
     agentModel: 'the-configured-model',
     validateModel: 'the-checking-model',
@@ -193,6 +194,18 @@ describe('runTick', () => {
     expect(store.get('o/r#1')!.statusReason).toBe('waiting: CI running (1 checks)');
     expect(store.get('o/r#2')!.status).toBe('skipped');
     expect(store.get('o/r#2')!.statusReason).toBe('CI failed: check-job');
+  });
+
+  it('never reaches an agent with a title the reviewer said to skip', async () => {
+    forge.set(snapshot({ number: 1, title: 'feat(payments): a new card' }));
+    forge.set(snapshot({ number: 2, title: 'chore: 1.2.3 Release' }));
+    forge.set(snapshot({ number: 3, title: 'feat: a new card' }));
+    await runTick(store, deps({ skipTitles: ['\\(payments\\)', 'Release$'] }));
+
+    expect(prepared).toEqual(['o/r#3']);
+    expect(store.get('o/r#1')!.status).toBe('skipped');
+    expect(store.get('o/r#1')!.statusReason).toBe('title matches /\\(payments\\)/');
+    expect(store.get('o/r#2')!.statusReason).toBe('title matches /Release$/');
   });
 
   it('holds a failed preparation with its reason and log, and stops after the attempt cap', async () => {

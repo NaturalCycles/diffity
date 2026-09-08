@@ -30,7 +30,7 @@ function attendedPr(): AttendedPr {
 
 function liveConfig(): InboxConfig {
   return {
-    pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', alertWhen: '', alertPaths: [],
+    pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', skipTitles: [], alertWhen: '', alertPaths: [],
     agent: { model: 'the-configured-model', effort: null, mcpAllow: [], extraArgs: [], maxBudgetUsd: null },
     validate: { model: null, timeoutMinutes: 15, maxBudgetUsd: null },
     waitForCi: false, prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10,

@@ -25,6 +25,8 @@ export interface TickDeps {
   maxPrepared: number;
   /** Whether a pull request waits for its CI to pass before an agent is spent on it. */
   waitForCi: boolean;
+  /** The title patterns that skip a pull request before an agent is spent on it. */
+  skipTitles: string[];
   /** The changed paths that make a review worth the reviewer's attention now. */
   alertPaths: string[];
   /** `agent.model`, recorded for a run that did not report which models it spent on. */
@@ -57,7 +59,7 @@ export async function runTick(store: InboxStore, deps: TickDeps): Promise<void> 
     }
     const existing = store.get(prId(ref));
     const pr = store.observe(snapshot, true, deps.now());
-    const transition = reconcile({ existing, snapshot, requested: true, viewerLogin, waitForCi: deps.waitForCi });
+    const transition = reconcile({ existing, snapshot, requested: true, viewerLogin, waitForCi: deps.waitForCi, skipTitles: deps.skipTitles });
     if (transition) {
       store.setStatus(pr.id, transition.status, transition.reason);
       if (transition.prepare) {

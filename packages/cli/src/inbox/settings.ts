@@ -3,7 +3,7 @@ import { parseInboxConfig, type InboxSettings } from './config.js';
 /** Longer than any sensible instruction to an agent; a guard on the request, not a design limit. */
 export const MAX_SETTINGS_TEXT = 4000;
 
-export const SETTINGS_KEYS = ['filter', 'alertWhen', 'alertPaths', 'maxPrepared', 'pollMinutes', 'live', 'liveTimeoutMinutes', 'prepareTimeoutMinutes', 'waitForCi', 'agent', 'validate'] as const;
+export const SETTINGS_KEYS = ['filter', 'skipTitles', 'alertWhen', 'alertPaths', 'maxPrepared', 'pollMinutes', 'live', 'liveTimeoutMinutes', 'prepareTimeoutMinutes', 'waitForCi', 'agent', 'validate'] as const;
 
 export type SettingsPatch =
   | { ok: true; settings: InboxSettings }
