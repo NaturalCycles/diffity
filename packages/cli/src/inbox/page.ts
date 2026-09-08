@@ -1,6 +1,6 @@
 /**
  * The inbox page, served at `/`. Self-contained (no build step, no external requests): it polls
- * `/api/inbox` and renders the three groups, opening a prepared review in a new tab via `/open/:id`.
+ * `/api/inbox` and renders its groups, opening a prepared review in a new tab via `/open/:id`.
  */
 export function inboxPage(): string {
   return `<!doctype html>
@@ -120,6 +120,10 @@ export function inboxPage(): string {
   <section id="working-section" hidden>
     <h2>Queue</h2>
     <div id="working"></div>
+  </section>
+  <section id="handled-section" hidden>
+    <h2>Handled</h2>
+    <div id="handled"></div>
   </section>
   <section id="other-section" hidden>
     <h2>Other</h2>
@@ -251,6 +255,34 @@ export function inboxPage(): string {
     return row;
   }
 
+  const VERDICTS = { APPROVE: 'you approved', REQUEST_CHANGES: 'you requested changes', COMMENT: 'you commented' };
+
+  /** What the reviewer said about a pull request, and whether the author has pushed since. */
+  function verdict(h) {
+    const said = VERDICTS[h.event] || 'you reviewed';
+    return h.updated ? 'new commits since ' + said : said;
+  }
+
+  // A handled row has no worktree left to open — it was reclaimed when the review was posted — so
+  // it links to the pull request itself.
+  function handledRow(r) {
+    const h = r.handled;
+    const row = document.createElement('a');
+    row.className = 'row open';
+    row.href = r.url;
+    row.target = '_blank';
+    row.rel = 'noopener';
+    row.innerHTML =
+      '<span class="size">' + sizeLabel(r) + '</span>' +
+      ciDot(r) +
+      '<span class="title"><div><span class="repo">' + esc(r.repo) + '#' + r.number + '</span> ' +
+      '<span class="name">' + esc(r.title) + '</span></div>' +
+      metaLine(['by ' + esc(r.author), verdict(h), ago(h.at), esc(h.headSha.slice(0, 7))],
+        'reviewed at ' + h.headSha + (h.reviewUrl ? '\\n' + h.reviewUrl : '')) + '</span>' +
+      '<span class="badge ' + (h.updated ? 'alert' : 'work') + '">' + (h.updated ? 'updated' : 'handled') + '</span>';
+    return row;
+  }
+
   function plainRow(r, badgeClass, badgeText, busy) {
     const row = document.createElement('div');
     row.className = busy ? 'row busy' : 'row';
@@ -274,7 +306,10 @@ export function inboxPage(): string {
     return plainRow(r, busy ? 'work busy' : 'work', label, busy);
   }
 
-  function withActions(row, r) {
+  const BUMP_TITLE = 'Prepare this one now: at once and beside whatever is being prepared, past the auto-prepare count, the skips and the CI hold set aside';
+  const REPREPARE_TITLE = 'Prepare a fresh review of the current head';
+
+  function withActions(row, r, bumpTitle) {
     if (!r.dismissUrl && !r.prepareUrl) return row;
     const wrap = document.createElement('div');
     wrap.className = 'entry';
@@ -283,7 +318,7 @@ export function inboxPage(): string {
       const up = document.createElement('button');
       up.type = 'button';
       up.className = 'bump';
-      up.title = 'Prepare this one now: at once and beside whatever is being prepared, past the auto-prepare count, the skips and the CI hold set aside';
+      up.title = bumpTitle || BUMP_TITLE;
       up.textContent = '\\u2191';
       up.onclick = () => bump(r);
       wrap.append(up);
@@ -450,12 +485,13 @@ export function inboxPage(): string {
       announce(view);
       fill('ready-section', 'ready', view.ready, r => withActions(readyRow(r), r));
       fill('working-section', 'working', view.working, r => withActions(workingRow(r), r));
+      fill('handled-section', 'handled', view.handled, r => withActions(handledRow(r), r, REPREPARE_TITLE));
       fill('other-section', 'other', view.other, r => {
         const bad = r.status === 'failed';
         return withActions(plainRow(r, bad ? 'bad' : 'work', r.status), r);
       });
       fill('dismissed-section', 'dismissed', view.dismissed, r => withActions(plainRow(r, 'work', 'dismissed'), r));
-      const total = view.ready.length + view.working.length + view.other.length + view.dismissed.length;
+      const total = view.ready.length + view.working.length + view.handled.length + view.other.length + view.dismissed.length;
       el('all-empty').hidden = total > 0;
       el('status').textContent = view.ready.length + ' ready \\u00b7 ' + view.working.length + ' queued';
       showReload(view.ticking === true);

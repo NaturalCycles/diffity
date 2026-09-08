@@ -1,6 +1,6 @@
 import type { InboxPr, InboxStore } from './store.js';
 
-export const BUMPABLE: ReadonlySet<InboxPr['status']> = new Set(['queued', 'skipped', 'failed', 'dismissed']);
+export const BUMPABLE: ReadonlySet<InboxPr['status']> = new Set(['queued', 'skipped', 'failed', 'dismissed', 'handled']);
 
 export type Resolution =
   | { ok: true; pr: InboxPr }
@@ -42,8 +42,8 @@ export function resolveDismiss(store: InboxStore, id: string): Resolution {
 
 /**
  * Whether a pull request can be bumped to the front of the queue: one that is waiting, one a verdict
- * or a failure set aside, or one the reviewer dismissed and wants back. A prepared, stale or
- * in-flight one has nothing to gain.
+ * or a failure set aside, one the reviewer dismissed and wants back, or one already reviewed whose
+ * current head they want a fresh review of. A prepared, stale or in-flight one has nothing to gain.
  */
 export function resolveBump(store: InboxStore, id: string): Resolution {
   const pr = store.get(id);
@@ -51,7 +51,7 @@ export function resolveBump(store: InboxStore, id: string): Resolution {
     return { ok: false, status: 404, message: `No pull request ${id} in the inbox.` };
   }
   if (!BUMPABLE.has(pr.status)) {
-    return { ok: false, status: 409, message: `${id} is ${pr.status}; only a queued, skipped, failed or dismissed pull request can be bumped.` };
+    return { ok: false, status: 409, message: `${id} is ${pr.status}; only a queued, skipped, failed, dismissed or handled pull request can be bumped.` };
   }
   return { ok: true, pr };
 }

@@ -20,6 +20,7 @@ import {
 } from '@diffity/api';
 import type {
   ClaimResponse,
+  ReviewEvent,
   ReviewSession,
   DiffFileResponse,
   DiffFingerprint,
@@ -84,6 +85,7 @@ import { noteViewerSeen, markViewerGone, viewerSnapshot, viewerIsPresent, viewer
 import { sinceLastWait } from './live-events.js';
 import pc from 'picocolors';
 import { shouldShutDown, IDLE_CHECK_MS } from './idle-shutdown.js';
+import { recordHandledReview } from './inbox/handled.js';
 import { handleReviewRoute } from './review-routes.js';
 import { serializer } from './serialize.js';
 import { handleTourRoute } from './tour-routes.js';
@@ -270,6 +272,27 @@ function refusedDirtyFiles(res: ServerResponse, filePaths: string[]): boolean {
   }
   sendError(res, 409, `Uncommitted local changes in ${blocked.join(', ')}. Commit or stash them first.`);
   return true;
+}
+
+/**
+ * Tells the review inbox that this pull request has had its review, so it keeps listing it once
+ * GitHub withdraws the review request. Nothing about the posted review depends on the note landing,
+ * so a store that cannot be written is a warning and no more.
+ */
+function markInboxHandled(
+  remote: { owner: string; repo: string },
+  number: number,
+  headSha: string,
+  event: ReviewEvent,
+  reviewUrl: string,
+): void {
+  try {
+    recordHandledReview({ ...remote, number, headSha, event, reviewUrl, now: new Date().toISOString() });
+  } catch (err) {
+    console.warn(
+      `  Warning: the review was posted, but the inbox could not be told about it: ${err instanceof Error ? err.message : err}`,
+    );
+  }
 }
 
 function descriptionForRef(ref: string): string {
@@ -761,6 +784,11 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
               details.headSha,
               submission,
             );
+            // Only the reader's own submit counts as the pull request being handled; an agent
+            // posting through this route is not the reviewer having reviewed it.
+            if (result.reviewUrl !== null && req.headers[AGENT_TRAFFIC_HEADER] !== '1') {
+              markInboxHandled(githubRemote, details.prNumber, details.headSha, submission.event, result.reviewUrl);
+            }
             const sentBodies = new Map(submission.comments.map(comment => [comment.threadId, comment.body]));
             const forgeIds = new Map(result.commentIds.map(entry => [entry.threadId, entry.githubCommentId]));
             markThreadsSubmitted(

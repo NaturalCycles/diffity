@@ -87,7 +87,8 @@ export function registerInboxCommand(program: Command): void {
         return;
       }
 
-      if (view.ready.length === 0 && view.working.length === 0 && view.other.length === 0 && view.dismissed.length === 0) {
+      if (view.ready.length === 0 && view.working.length === 0 && view.handled.length === 0
+        && view.other.length === 0 && view.dismissed.length === 0) {
         console.log(pc.dim('Nothing in the inbox yet. Run `diffity inbox` to start watching.'));
         spent(view);
         return;
@@ -98,6 +99,9 @@ export function registerInboxCommand(program: Command): void {
       ));
       section('Queue', view.working.map(row =>
         `  ${pc.dim(row.status.padEnd(9))} ${row.repo}#${row.number} ${row.title} ${pc.dim(row.statusReason ?? '')}`,
+      ));
+      section('Handled', view.handled.map(row =>
+        `  ${pc.dim((row.handled?.updated ? 'updated' : 'handled').padEnd(9))} ${row.repo}#${row.number} ${row.title} ${pc.dim(row.statusReason ?? '')}`,
       ));
       section('Other', view.other.map(row =>
         `  ${pc.dim(row.status.padEnd(9))} ${row.repo}#${row.number} ${pc.dim(row.statusReason ?? '')}`,

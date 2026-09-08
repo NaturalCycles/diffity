@@ -33,6 +33,7 @@ class FakeForge implements Forge {
   login: string | null = 'me';
   requested: PrRef[] = [];
   snapshots = new Map<string, PrSnapshot | null>();
+  views: string[] = [];
 
   set(snap: PrSnapshot, listed = true): void {
     this.snapshots.set(prId(snap), snap);
@@ -43,7 +44,10 @@ class FakeForge implements Forge {
 
   viewerLogin() { return Promise.resolve(this.login); }
   searchReviewRequested() { return Promise.resolve(this.requested); }
-  viewPr(ref: PrRef) { return Promise.resolve(this.snapshots.get(prId(ref)) ?? null); }
+  viewPr(ref: PrRef) {
+    this.views.push(prId(ref));
+    return Promise.resolve(this.snapshots.get(prId(ref)) ?? null);
+  }
 }
 
 let store: InboxStore;
@@ -655,5 +659,195 @@ describe('prepareBumped', () => {
     await prepareBumped(store, deps({ log: message => { logged.push(message); } }), 'o/r#1');
     expect(logged.some(line => line.includes('could not read'))).toBe(true);
     expect(prepared).toEqual([]);
+  });
+});
+
+describe('a posted review', () => {
+  /** The tick that follows a review reaching GitHub: the mark is there and the search has dropped it. */
+  async function postAndPoll(at = '2026-09-02T12:30:00.000Z', event: 'APPROVE' | 'COMMENT' = 'APPROVE'): Promise<void> {
+    store.recordHandled({ prId: 'o/r#1', headSha: 'aaa', event, reviewUrl: 'https://github.com/o/r/pull/1#pullrequestreview-9', at });
+    forge.requested = [];
+    await runTick(store, deps());
+  }
+
+  it('keeps the pull request listed, reclaims its worktree once, and follows its head', async () => {
+    forge.set(snapshot());
+    await runTick(store, deps());
+    expect(store.get('o/r#1')!.worktreePath).toBe('/wt/1');
+
+    await postAndPoll();
+    let pr = store.get('o/r#1')!;
+    expect(pr.status).toBe('handled');
+    expect(pr.statusReason).toBe('you approved');
+    expect(removed).toEqual(['/wt/1']);
+    expect(pr.worktreePath).toBeNull();
+
+    // The author pushes: still handled, and the row says the review is behind the head.
+    removed = [];
+    prepared = [];
+    forge.snapshots.set('o/r#1', snapshot({ headSha: 'bbb' }));
+    await runTick(store, deps());
+    pr = store.get('o/r#1')!;
+    expect(pr.status).toBe('handled');
+    expect(pr.statusReason).toBe('new commits since you approved');
+    expect(removed).toEqual([]);
+    expect(prepared).toEqual([]);
+  });
+
+  it('lists it under handled rather than ready or other', async () => {
+    forge.set(snapshot());
+    await runTick(store, deps());
+    await postAndPoll();
+
+    const view = buildView(store, 'http://localhost:5390', '2026-09-02T12:00:00.000Z');
+    expect(view.handled.map(row => row.id)).toEqual(['o/r#1']);
+    expect(view.ready).toEqual([]);
+    expect(view.other).toEqual([]);
+  });
+
+  it('retires it once the pull request is merged', async () => {
+    forge.set(snapshot());
+    await runTick(store, deps());
+    await postAndPoll();
+
+    forge.snapshots.set('o/r#1', snapshot({ state: 'MERGED' }));
+    await runTick(store, deps());
+    expect(store.get('o/r#1')!.status).toBe('done');
+    expect(buildView(store, 'http://localhost:5390', '2026-09-02T12:00:00.000Z').handled).toEqual([]);
+  });
+
+  it('goes back in the queue when the author asks for the review again', async () => {
+    forge.set(snapshot());
+    await runTick(store, deps());
+    await postAndPoll();
+
+    prepared = [];
+    forge.requested = [{ owner: 'o', repo: 'r', number: 1 }];
+    forge.snapshots.set('o/r#1', snapshot({ headSha: 'bbb' }));
+    await runTick(store, deps());
+
+    expect(prepared).toEqual(['o/r#1']);
+    expect(store.get('o/r#1')!.status).toBe('prepared');
+  });
+
+  it('keeps a bumped preparation on a handled row, until that review is posted too', async () => {
+    forge.set(snapshot());
+    await runTick(store, deps());
+    await postAndPoll();
+    expect(store.get('o/r#1')!.status).toBe('handled');
+
+    store.bump('o/r#1', '2026-09-02T13:00:00.000Z');
+    prepared = [];
+    prepareResult = snap => ({
+      kind: 'prepared', headSha: snap.headSha, bundlePath: '/b/1.json', worktree: '/wt/1',
+      logPath: '/l/1.log', at: '2026-09-02T13:05:00.000Z', summary: '1 P2', alert: null,
+      run: run(), validation: 'not-needed', validateRun: null,
+    });
+    await prepareBumped(store, deps(), 'o/r#1');
+    expect(prepared).toEqual(['o/r#1']);
+    expect(store.get('o/r#1')!.status).toBe('prepared');
+
+    // The poll that follows leaves the fresh review where the reviewer can open it.
+    await runTick(store, deps());
+    expect(store.get('o/r#1')!.status).toBe('prepared');
+    expect(buildView(store, 'http://localhost:5390', '2026-09-02T12:00:00.000Z').ready.map(row => row.id)).toEqual(['o/r#1']);
+
+    // Posting that one settles the row again.
+    await postAndPoll('2026-09-02T13:30:00.000Z', 'COMMENT');
+    expect(store.get('o/r#1')!.status).toBe('handled');
+    expect(store.get('o/r#1')!.statusReason).toBe('you commented');
+  });
+
+  it('adopts a pull request the inbox never polled, asking about it once', async () => {
+    store.recordHandled({ prId: 'o/r#7', headSha: 'ggg', event: 'COMMENT', reviewUrl: null, at: '2026-09-02T11:00:00.000Z' });
+    forge.set(snapshot({ number: 7, headSha: 'ggg' }), false);
+
+    await runTick(store, deps());
+    const pr = store.get('o/r#7')!;
+    expect(pr.status).toBe('handled');
+    expect(pr.statusReason).toBe('you commented');
+    expect(prepared).toEqual([]);
+    expect(forge.views).toEqual(['o/r#7']);
+
+    // From here it is an ordinary row: the loop over what the search dropped keeps it current.
+    forge.views = [];
+    forge.snapshots.set('o/r#7', snapshot({ number: 7, headSha: 'hhh' }));
+    await runTick(store, deps());
+    expect(forge.views).toEqual(['o/r#7']);
+    expect(store.get('o/r#7')!.statusReason).toBe('new commits since you commented');
+  });
+
+  it('takes a review posted after the request had already been withdrawn', async () => {
+    forge.set(snapshot());
+    await runTick(store, deps());
+
+    // The request goes away with no review posted: the row is retired and its worktree freed.
+    forge.requested = [];
+    await runTick(store, deps());
+    expect(store.get('o/r#1')!.status).toBe('hidden');
+    expect(store.get('o/r#1')!.worktreePath).toBeNull();
+
+    // The reviewer posts from their own clone afterwards.
+    prepared = [];
+    removed = [];
+    store.recordHandled({ prId: 'o/r#1', headSha: 'aaa', event: 'APPROVE', reviewUrl: null, at: '2026-09-02T13:00:00.000Z' });
+    await runTick(store, deps());
+
+    const pr = store.get('o/r#1')!;
+    expect(pr.status).toBe('handled');
+    expect(pr.statusReason).toBe('you approved');
+    expect(pr.worktreePath).toBeNull();
+    expect(prepared).toEqual([]);
+    expect(removed).toEqual([]);
+    expect(buildView(store, 'http://localhost:5390', '2026-09-02T12:00:00.000Z').handled.map(row => row.id))
+      .toEqual(['o/r#1']);
+  });
+
+  it('leaves a bumped preparation that failed on a handled row saying so', async () => {
+    forge.set(snapshot());
+    await runTick(store, deps());
+    await postAndPoll();
+
+    store.bump('o/r#1', '2026-09-02T13:00:00.000Z');
+    prepareResult = () => ({
+      kind: 'failed', failure: 'timeout', reason: 'the agent timed out',
+      worktree: null, logPath: '/l/1.log', run: run(),
+    });
+    await prepareBumped(store, deps(), 'o/r#1');
+    expect(store.get('o/r#1')!.status).toBe('failed');
+
+    await runTick(store, deps());
+    let pr = store.get('o/r#1')!;
+    expect(pr.status).toBe('failed');
+    expect(pr.statusReason).toBe('the agent timed out');
+
+    // The next push is a new change, and the row goes back to what the posted review said about it.
+    forge.snapshots.set('o/r#1', snapshot({ headSha: 'bbb' }));
+    await runTick(store, deps());
+    pr = store.get('o/r#1')!;
+    expect(pr.status).toBe('handled');
+    expect(pr.statusReason).toBe('new commits since you approved');
+  });
+
+  it('retires an adopted pull request that has since been merged, and asks no more', async () => {
+    store.recordHandled({ prId: 'o/r#8', headSha: 'ggg', event: 'APPROVE', reviewUrl: null, at: '2026-09-02T11:00:00.000Z' });
+    forge.set(snapshot({ number: 8, state: 'MERGED' }), false);
+
+    await runTick(store, deps());
+    expect(store.get('o/r#8')!.status).toBe('done');
+
+    forge.views = [];
+    await runTick(store, deps());
+    expect(forge.views).toEqual([]);
+  });
+
+  it('leaves a mark the forge knows nothing about alone', async () => {
+    store.recordHandled({ prId: 'o/r#9', headSha: 'ggg', event: 'APPROVE', reviewUrl: null, at: '2026-09-02T11:00:00.000Z' });
+    store.recordHandled({ prId: 'not-a-pull-request', headSha: 'ggg', event: 'APPROVE', reviewUrl: null, at: '2026-09-02T11:00:00.000Z' });
+
+    await runTick(store, deps());
+
+    expect(store.get('o/r#9')).toBeNull();
+    expect(forge.views).toEqual(['o/r#9']);
   });
 });
