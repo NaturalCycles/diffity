@@ -117,7 +117,10 @@ export function inboxPage(): string {
   <div id="all-empty" class="empty" hidden>Nothing waiting for your review right now.</div>
   <details class="settings" id="settings">
     <summary>Settings</summary>
-    <label>Skip PRs if:
+    <label>Skip pull requests whose title matches (one regular expression per line):
+      <textarea id="skipTitles" rows="3" placeholder="e.g. \\(payments\\)  or  Release$"></textarea>
+    </label>
+    <label>Skip PRs if (judged by the review agent, which spends a run on every pull request it skips; the title patterns above cost nothing):
       <textarea id="filter" rows="3" placeholder="e.g. the change is payments-focused, or only touches translations"></textarea>
     </label>
     <label>Notify me if:
@@ -130,7 +133,7 @@ export function inboxPage(): string {
       <textarea id="agentMcpAllow" rows="3" placeholder="e.g. mcp__claude_ai_Atlassian__getJiraIssue (empty: no MCP servers at all)"></textarea>
     </label>
     <div class="settings-grid">
-      <label>Max prepared at once<input id="maxPrepared" type="number" min="1" step="1"></label>
+      <label>Auto-prepare from queue<input id="maxPrepared" type="number" min="1" step="1"></label>
       <label>Poll every (minutes)<input id="pollMinutes" type="number" min="1" step="1"></label>
       <label>Preparation timeout (minutes)<input id="prepareTimeoutMinutes" type="number" min="1" step="1"></label>
       <label>Answer timeout (minutes)<input id="liveTimeoutMinutes" type="number" min="1" step="1"></label>
@@ -255,7 +258,7 @@ export function inboxPage(): string {
       const up = document.createElement('button');
       up.type = 'button';
       up.className = 'bump';
-      up.title = 'Prepare this one next: ahead of the queue, past the limit, filter set aside';
+      up.title = 'Prepare this one next: ahead of the queue, past the limit, the skips set aside';
       up.textContent = '\\u2191';
       up.onclick = () => bump(r);
       wrap.append(up);
@@ -358,6 +361,7 @@ export function inboxPage(): string {
       if (!res.ok) return;
       settings = await res.json();
       el('filter').value = settings.filter;
+      el('skipTitles').value = (settings.skipTitles || []).join('\\n');
       el('alertWhen').value = settings.alertWhen;
       el('alertPaths').value = (settings.alertPaths || []).join('\\n');
       for (const key of ['maxPrepared', 'pollMinutes', 'prepareTimeoutMinutes', 'liveTimeoutMinutes']) el(key).value = settings[key];
@@ -382,6 +386,7 @@ export function inboxPage(): string {
     const checkBudget = el('validateMaxBudgetUsd').value.trim();
     const next = {
       filter: el('filter').value,
+      skipTitles: el('skipTitles').value.split('\\n').map(line => line.trim()).filter(Boolean),
       alertWhen: el('alertWhen').value,
       alertPaths: el('alertPaths').value.split('\\n').map(line => line.trim()).filter(Boolean),
       maxPrepared: Number(el('maxPrepared').value),

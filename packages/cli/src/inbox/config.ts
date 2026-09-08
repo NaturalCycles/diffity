@@ -51,6 +51,11 @@ export interface InboxConfig {
    */
   filter: string;
   /**
+   * Regular-expression sources matched against the pull request title; a match skips the pull
+   * request before an agent is spent on it.
+   */
+  skipTitles: string[];
+  /**
    * The reviewer's own words on what needs their attention now. The preparing agent judges each
    * review against them and marks the ones that match, and the inbox page notifies for those only;
    * empty means every prepared review is worth a notification.
@@ -86,6 +91,7 @@ export const DEFAULT_INBOX_CONFIG: InboxConfig = {
   reposDir: '~/repos',
   worktreesDir: '~/.diffity/inbox/worktrees',
   filter: '',
+  skipTitles: [],
   alertWhen: '',
   alertPaths: [],
   agent: { model: null, effort: null, mcpAllow: [], extraArgs: [], maxBudgetUsd: null },
@@ -122,7 +128,7 @@ export function parseInboxConfig(raw: unknown, source = 'inbox config'): InboxCo
     throw new Error(`${source} must be a JSON object`);
   }
   const obj = raw as Record<string, unknown>;
-  const config: InboxConfig = { ...DEFAULT_INBOX_CONFIG, alertPaths: [], agent: defaultAgent(), validate: defaultValidate() };
+  const config: InboxConfig = { ...DEFAULT_INBOX_CONFIG, alertPaths: [], skipTitles: [], agent: defaultAgent(), validate: defaultValidate() };
 
   if (obj.prepare !== undefined) {
     throw new Error(`${source}: "prepare" was replaced by the "agent" block — delete it (the built-in command applies) and put extra flags in agent.extraArgs`);
@@ -144,6 +150,9 @@ export function parseInboxConfig(raw: unknown, source = 'inbox config'): InboxCo
       throw new Error(`${source}: filter must be a string`);
     }
     config.filter = obj.filter;
+  }
+  if (obj.skipTitles !== undefined) {
+    config.skipTitles = parseSkipTitles(obj.skipTitles, source);
   }
   if (obj.alertWhen !== undefined) {
     if (typeof obj.alertWhen !== 'string') {
@@ -185,6 +194,21 @@ export function parseInboxConfig(raw: unknown, source = 'inbox config'): InboxCo
     config.liveTimeoutMinutes = positive(obj.liveTimeoutMinutes, 'liveTimeoutMinutes', source);
   }
   return config;
+}
+
+/** Compiled here rather than at the first poll, so a typo is a refused config and not a lost skip. */
+function parseSkipTitles(raw: unknown, source: string): string[] {
+  if (!Array.isArray(raw) || !raw.every(pattern => typeof pattern === 'string' && pattern.trim() !== '')) {
+    throw new Error(`${source}: skipTitles must be an array of non-empty regular expressions`);
+  }
+  return (raw as string[]).map((pattern, index) => {
+    try {
+      new RegExp(pattern);
+    } catch (err) {
+      throw new Error(`${source}: skipTitles[${index}] is not a valid regular expression: ${err instanceof Error ? err.message : err}`);
+    }
+    return pattern;
+  });
 }
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -255,7 +279,7 @@ function parseValidateConfig(raw: unknown, source: string): ValidateConfig {
 }
 
 /** The settings the inbox page edits, kept in the config file beside the keys only the file holds. */
-export type InboxSettings = Pick<InboxConfig, 'filter' | 'alertWhen' | 'alertPaths' | 'maxPrepared' | 'pollMinutes' | 'live' | 'liveTimeoutMinutes' | 'prepareTimeoutMinutes' | 'waitForCi' | 'agent' | 'validate'>;
+export type InboxSettings = Pick<InboxConfig, 'filter' | 'skipTitles' | 'alertWhen' | 'alertPaths' | 'maxPrepared' | 'pollMinutes' | 'live' | 'liveTimeoutMinutes' | 'prepareTimeoutMinutes' | 'waitForCi' | 'agent' | 'validate'>;
 
 /**
  * Writes the page-editable settings into the config file, leaving every other key as the reviewer

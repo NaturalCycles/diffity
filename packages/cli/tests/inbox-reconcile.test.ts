@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { reconcile } from '../src/inbox/reconcile.js';
+import { reconcile, titleSkipReason } from '../src/inbox/reconcile.js';
 import type { InboxPr } from '../src/inbox/store.js';
 import type { PrCheck, PrSnapshot } from '@diffity/github';
 
@@ -185,6 +185,85 @@ describe('reconcile with waitForCi', () => {
     expect(reconcile({ existing: null, snapshot: { ...failing, isDraft: true }, requested: true, viewerLogin: 'me', waitForCi: true }))
       .toEqual({ status: 'draft', reason: 'draft', prepare: false });
     expect(reconcile({ existing: existing(), snapshot: { ...failing, state: 'MERGED' }, requested: false, viewerLogin: 'me', waitForCi: true }))
+      .toEqual({ status: 'done', reason: 'merged', prepare: false });
+  });
+});
+
+describe('titleSkipReason', () => {
+  it('names the first pattern that matches, and nothing when none does', () => {
+    const patterns = ['^fix', '\\(payments\\)', 'Release$'];
+    expect(titleSkipReason('feat(payments): a new card', patterns)).toBe('title matches /\\(payments\\)/');
+    expect(titleSkipReason('fix(payments): a card', patterns)).toBe('title matches /^fix/');
+    expect(titleSkipReason('chore: 1.2.3 Release', patterns)).toBe('title matches /Release$/');
+    expect(titleSkipReason('feat: a new card', patterns)).toBeNull();
+    expect(titleSkipReason('anything at all', [])).toBeNull();
+  });
+
+  it('reads each entry as a regular expression, matched as written', () => {
+    // The parentheses are the title's, not a group: an escaped source is what the reviewer writes.
+    expect(titleSkipReason('feat[payments]: a card', ['\\(payments\\)'])).toBeNull();
+    // Unanchored and case-sensitive, both as JavaScript has it.
+    expect(titleSkipReason('a release of everything', ['Release$'])).toBeNull();
+    expect(titleSkipReason('DEV-1 chore: bump deps', ['^DEV-\\d+ '])).toBe('title matches /^DEV-\\d+ /');
+  });
+
+  it('ignores a pattern that does not compile rather than failing the poll', () => {
+    // The config refuses one; a pattern that reached here anyway must not cost the whole tick.
+    expect(titleSkipReason('(payments) a card', ['(payments', '\\(payments\\)']))
+      .toBe('title matches /\\(payments\\)/');
+  });
+});
+
+describe('reconcile with skipTitles', () => {
+  const patterns = ['\\(payments\\)', 'Release$'];
+
+  it('skips a matching title before an agent is spent on it', () => {
+    expect(reconcile({ existing: null, snapshot: snapshot({ title: 'feat(payments): a new card' }), requested: true, viewerLogin: 'me', skipTitles: patterns }))
+      .toEqual({ status: 'skipped', reason: 'title matches /\\(payments\\)/', prepare: false });
+  });
+
+  it('prepares a title no pattern matches, and everything when there are no patterns', () => {
+    expect(reconcile({ existing: null, snapshot: snapshot({ title: 'feat: a new card' }), requested: true, viewerLogin: 'me', skipTitles: patterns }))
+      .toEqual({ status: 'queued', reason: null, prepare: true });
+    expect(reconcile({ existing: null, snapshot: snapshot({ title: 'feat(payments): a new card' }), requested: true, viewerLogin: 'me' }))
+      .toEqual({ status: 'queued', reason: null, prepare: true });
+  });
+
+  it('prepares a bumped pull request whatever its title says', () => {
+    const bumped = existing({ status: 'skipped', statusReason: 'title matches /\\(payments\\)/', preparedHeadSha: null, bumpedAt: '2026-09-07T10:00:00Z' });
+    expect(reconcile({ existing: bumped, snapshot: snapshot({ title: 'feat(payments): a new card' }), requested: true, viewerLogin: 'me', skipTitles: patterns }))
+      .toEqual({ status: 'queued', reason: 'bumped by the reviewer', prepare: true });
+  });
+
+  it('re-decides a title skip every poll, so a retitled pull request goes back in the queue', () => {
+    const held = existing({ status: 'skipped', statusReason: 'title matches /\\(payments\\)/', preparedHeadSha: null, headSha: 'aaa' });
+    expect(reconcile({ existing: held, snapshot: snapshot({ title: 'feat(payments): a new card' }), requested: true, viewerLogin: 'me', skipTitles: patterns }))
+      .toEqual({ status: 'skipped', reason: 'title matches /\\(payments\\)/', prepare: false });
+    expect(reconcile({ existing: held, snapshot: snapshot({ title: 'feat: a new card' }), requested: true, viewerLogin: 'me', skipTitles: patterns }))
+      .toEqual({ status: 'queued', reason: null, prepare: true });
+  });
+
+  it('answers a matching title before CI, with nothing to wait for', () => {
+    const failing = snapshot({ title: 'chore: 1.2.3 Release', checks: checks(['check-job', 'failure']) });
+    expect(reconcile({ existing: null, snapshot: failing, requested: true, viewerLogin: 'me', waitForCi: true, skipTitles: patterns }))
+      .toEqual({ status: 'skipped', reason: 'title matches /Release$/', prepare: false });
+    const running = snapshot({ title: 'chore: 1.2.3 Release', checks: checks(['check-job', 'pending']) });
+    expect(reconcile({ existing: null, snapshot: running, requested: true, viewerLogin: 'me', waitForCi: true, skipTitles: patterns }))
+      .toEqual({ status: 'skipped', reason: 'title matches /Release$/', prepare: false });
+  });
+
+  it('keeps a review prepared for an older head openable, as the CI hold does', () => {
+    const prepared = existing({ status: 'prepared', preparedHeadSha: 'aaa' });
+    expect(reconcile({ existing: prepared, snapshot: snapshot({ title: 'feat(payments): a new card', headSha: 'bbb' }), requested: true, viewerLogin: 'me', skipTitles: patterns }))
+      .toEqual({ status: 'stale', reason: 'title matches /\\(payments\\)/', prepare: false });
+    expect(reconcile({ existing: existing({ status: 'stale', preparedHeadSha: 'aaa', headSha: 'bbb' }), snapshot: snapshot({ title: 'feat(payments): a new card', headSha: 'ccc' }), requested: true, viewerLogin: 'me', skipTitles: patterns }))
+      .toEqual({ status: 'stale', reason: 'title matches /\\(payments\\)/', prepare: false });
+  });
+
+  it('says nothing about the title on a pull request it would not have prepared anyway', () => {
+    expect(reconcile({ existing: null, snapshot: snapshot({ title: 'feat(payments): a new card', isDraft: true }), requested: true, viewerLogin: 'me', skipTitles: patterns }))
+      .toEqual({ status: 'draft', reason: 'draft', prepare: false });
+    expect(reconcile({ existing: existing(), snapshot: snapshot({ title: 'feat(payments): a new card', state: 'MERGED' }), requested: false, viewerLogin: 'me', skipTitles: patterns }))
       .toEqual({ status: 'done', reason: 'merged', prepare: false });
   });
 });

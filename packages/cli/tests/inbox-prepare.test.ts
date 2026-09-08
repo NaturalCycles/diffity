@@ -41,7 +41,7 @@ function snapshot(): PrSnapshot {
 
 function config(): InboxConfig {
   return {
-    pollMinutes: 5, port: 0, reposDir, worktreesDir, filter: '', alertWhen: '', alertPaths: [],
+    pollMinutes: 5, port: 0, reposDir, worktreesDir, filter: '', skipTitles: [], alertWhen: '', alertPaths: [],
     agent: agentConfig(), validate: validateConfig(), waitForCi: false, prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10,
   };
 }
