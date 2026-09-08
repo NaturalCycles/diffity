@@ -503,7 +503,19 @@ describe('posting the findings behind an alert', () => {
     expect(submissions).toHaveLength(1);
   });
 
-  it('leaves out a finding that is settled, the general summary, and one nobody drafted', async () => {
+  it('posts the reason alone when the agent named no findings for it', async () => {
+    const result = await preparePr(snapshot(), posting(), deps({
+      ...alerting(),
+      listThreads: () => Promise.resolve([named()]),
+    }));
+
+    expect(submissions[0].submission.comments).toEqual([]);
+    expect(submissions[0].submission.body).toBe('[not yet checked by human] touches auth');
+    expect(result.kind === 'prepared' && result.posted?.commentIds).toBe(0);
+    expect(daemonLog).toContain('posted 0 alert finding(s) to o/demo#4 — https://github.com/o/demo/pull/4#pullrequestreview-9');
+  });
+
+  it('posts nothing when every finding the alert named has been settled', async () => {
     const result = await preparePr(snapshot(), posting(), deps({
       ...alerting('cf15e689', 'aaaabbbb', '11112222', '99999999'),
       listThreads: () => Promise.resolve([
@@ -513,10 +525,26 @@ describe('posting the findings behind an alert', () => {
       ]),
     }));
 
-    expect(submissions[0].submission.comments).toEqual([]);
-    expect(submissions[0].submission.body).toBe('[not yet checked by human] touches auth');
-    expect(result.kind === 'prepared' && result.posted?.commentIds).toBe(0);
-    expect(daemonLog).toContain('posted 0 alert finding(s) to o/demo#4 — https://github.com/o/demo/pull/4#pullrequestreview-9');
+    expect(submissions).toEqual([]);
+    expect(daemonLog).toContain('o/demo#4: the alert\'s findings did not survive the check — nothing posted');
+    // The reviewer still gets the alert; it is the author who is not told about a rejected finding.
+    expect(result.kind === 'prepared' && [result.alert, result.posted]).toEqual(['touches auth', null]);
+  });
+
+  it('posts the findings that survived, leaving out the settled one beside them', async () => {
+    const survivor = 'aaaabbbb-1111-2222-3333-444455556666';
+    await preparePr(snapshot(), posting(), deps({
+      ...alerting('cf15e689', 'aaaabbbb'),
+      listThreads: () => Promise.resolve([
+        named({ status: 'dismissed' }),
+        named({ threadId: survivor, startLine: 2, endLine: 2, comments: [{ id: 'c2', body: 'P1: and this one holds' }] }),
+      ]),
+    }));
+
+    expect(submissions[0].submission.comments).toEqual([{
+      threadId: survivor, filePath: 'a.ts', side: 'RIGHT', startLine: null, endLine: 2,
+      body: '[not yet checked by human]\n\nP1: and this one holds',
+    }]);
   });
 
   it('names a finding by its printed prefix or in full, and posts it once either way', async () => {

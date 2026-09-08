@@ -247,9 +247,12 @@ export async function preparePr(snapshot: PrSnapshot, config: InboxConfig, deps:
 /**
  * Puts the findings the agent named behind its alert on the pull request, as one `COMMENT` review
  * in the reviewer's name, every comment opening with the configured prefix so nobody reads it as a
- * verdict a human has stood behind. Null when nothing was posted: the setting is off, the agent
- * raised no alert of its own, this head has been posted to already, or the post did not go through
- * — the review is prepared either way, and the reviewer still has the alert and the findings.
+ * verdict a human has stood behind. An alert that named no findings is posted as its reason alone,
+ * which is all there is to say; one whose named findings are all settled by the time the review
+ * goes out is not posted at all, because the checking pass has just rejected everything the alert
+ * rests on. Null when nothing was posted: that case, the setting being off, no alert of the
+ * agent's own, a head that has been posted to already, or a post that did not go through — the
+ * review is prepared either way, and the reviewer still has the alert and the findings.
  */
 async function postAlertFindings(
   snapshot: PrSnapshot,
@@ -263,6 +266,10 @@ async function postAlertFindings(
   const id = prId(snapshot);
   try {
     const comments = alertComments(await deps.listThreads(ctx.worktree), ctx.alertFindings, config.postPrefix);
+    if (ctx.alertFindings.length > 0 && comments.length === 0) {
+      deps.log(`${id}: the alert's findings did not survive the check — nothing posted`);
+      return null;
+    }
     const result = await deps.postReview({
       owner: snapshot.owner,
       repo: snapshot.repo,
