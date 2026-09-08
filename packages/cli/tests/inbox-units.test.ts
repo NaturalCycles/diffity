@@ -243,12 +243,16 @@ describe('composePrompt alerts', () => {
     checks: [], files: [],
   };
 
-  it('asks for an ALERT line only when the reviewer said what matters', () => {
+  it('asks for an ALERT line, and the findings behind it, only when the reviewer said what matters', () => {
     const quiet = composePrompt({ snapshot, worktreePath: '/wt', port: 5555, filter: '', alertWhen: '', mcpAllow: [] });
     expect(quiet).not.toContain('ALERT:');
+    expect(quiet).not.toContain('ALERT-FINDINGS');
     const loud = composePrompt({ snapshot, worktreePath: '/wt', port: 5555, filter: '', alertWhen: 'there is a P1', mcpAllow: [] });
     expect(loud).toContain('  there is a P1');
     expect(loud).toContain('ALERT: <short reason>');
+    expect(loud).toContain('ALERT-FINDINGS: <thread id> <thread id>');
+    // The ids to name are the ones the agent has already been given, once per finding it left.
+    expect(loud).toContain('Created thread cf15e689');
     expect(loud.trim().endsWith('PREPARED')).toBe(true);
   });
 });
@@ -333,19 +337,43 @@ describe('parseSettingsPatch', () => {
 
 describe('verdictOf', () => {
   it('reads PREPARED, SKIP with a reason, and neither', () => {
-    expect(verdictOf('working...\nPREPARED\n')).toEqual({ kind: 'prepared', alert: null });
-    expect(verdictOf('working...\nALERT: touches auth\nPREPARED\n')).toEqual({ kind: 'prepared', alert: 'touches auth' });
+    expect(verdictOf('working...\nPREPARED\n')).toEqual({ kind: 'prepared', alert: null, alertFindings: [] });
+    expect(verdictOf('working...\nALERT: touches auth\nPREPARED\n')).toEqual({ kind: 'prepared', alert: 'touches auth', alertFindings: [] });
     expect(verdictOf('ALERT: early\nSKIP: payments PR\n')).toEqual({ kind: 'skipped', reason: 'payments PR' });
     expect(verdictOf('looking\nSKIP: payments PR\n')).toEqual({ kind: 'skipped', reason: 'payments PR' });
     expect(verdictOf('done thinking\n')).toEqual({ kind: 'none' });
   });
 
   it('takes the last verdict, so echoed instructions do not pre-empt the real one', () => {
-    expect(verdictOf('I will print SKIP: x or PREPARED.\nreviewing\nPREPARED')).toEqual({ kind: 'prepared', alert: null });
+    expect(verdictOf('I will print SKIP: x or PREPARED.\nreviewing\nPREPARED')).toEqual({ kind: 'prepared', alert: null, alertFindings: [] });
   });
 
   it('defaults a reasonless skip rather than reading an empty reason', () => {
     expect(verdictOf('SKIP:')).toEqual({ kind: 'skipped', reason: 'no reason given' });
+  });
+
+  it('reads the findings behind an alert, as printed ids or full uuids, spaced or comma-separated', () => {
+    expect(verdictOf('ALERT: a P1 in payments\nALERT-FINDINGS: cf15e689 7b2a10c4\nPREPARED'))
+      .toEqual({ kind: 'prepared', alert: 'a P1 in payments', alertFindings: ['cf15e689', '7b2a10c4'] });
+    expect(verdictOf('ALERT: x\nALERT-FINDINGS: cf15e689-1c3d-4a1f-8b21-0123456789ab, 7b2a10c4\nPREPARED'))
+      .toEqual({ kind: 'prepared', alert: 'x', alertFindings: ['cf15e689-1c3d-4a1f-8b21-0123456789ab', '7b2a10c4'] });
+    // The line can come before the reason it belongs to.
+    expect(verdictOf('ALERT-FINDINGS: cf15e689\nALERT: x\nPREPARED'))
+      .toEqual({ kind: 'prepared', alert: 'x', alertFindings: ['cf15e689'] });
+  });
+
+  it('names each finding once, whatever case it was printed in, and nothing that is not an id', () => {
+    expect(verdictOf('ALERT: x\nALERT-FINDINGS: CF15E689 cf15e689 the-P1 cf15, 7b2a10c4\nPREPARED'))
+      .toEqual({ kind: 'prepared', alert: 'x', alertFindings: ['cf15e689', '7b2a10c4'] });
+    expect(verdictOf('ALERT: x\nALERT-FINDINGS:\nPREPARED'))
+      .toEqual({ kind: 'prepared', alert: 'x', alertFindings: [] });
+  });
+
+  it('ignores findings nobody raised an alert for, and takes the last of each line', () => {
+    expect(verdictOf('ALERT-FINDINGS: cf15e689\nPREPARED'))
+      .toEqual({ kind: 'prepared', alert: null, alertFindings: [] });
+    expect(verdictOf('ALERT: first\nALERT-FINDINGS: aaaaaaaa\nALERT: second\nALERT-FINDINGS: bbbbbbbb\nPREPARED'))
+      .toEqual({ kind: 'prepared', alert: 'second', alertFindings: ['bbbbbbbb'] });
   });
 });
 

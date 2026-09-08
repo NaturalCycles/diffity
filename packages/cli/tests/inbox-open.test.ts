@@ -38,7 +38,7 @@ function snapshot(): PrSnapshot {
 function preparedStore(): InboxStore {
   const store = new InboxStore(':memory:');
   store.observe(snapshot(), true, 'now');
-  store.markPrepared('o/r#4', { headSha: 'aaa', bundlePath: '/b.json', worktreePath: '/wt', logPath: '/l', at: 'now', summary: null, alert: null });
+  store.markPrepared('o/r#4', { headSha: 'aaa', bundlePath: '/b.json', worktreePath: '/wt', logPath: '/l', at: 'now', summary: null, alert: null, alertFindings: [] });
   return store;
 }
 

@@ -110,14 +110,52 @@ describe('InboxStore migration', () => {
   it('opens a fresh database and round-trips a prepared row', () => {
     const store = new InboxStore(path);
     store.observe(snapshot(), true, 'now');
-    store.markPrepared('o/r#1', { headSha: 'aaa', bundlePath: '/b', worktreePath: '/wt', logPath: '/l', at: 'now', summary: '1 P1', alert: 'touches auth' });
+    store.markPrepared('o/r#1', { headSha: 'aaa', bundlePath: '/b', worktreePath: '/wt', logPath: '/l', at: 'now', summary: '1 P1', alert: 'touches auth', alertFindings: ['cf15e689', '7b2a10c4'] });
     const pr = store.get('o/r#1')!;
     expect(pr.status).toBe('prepared');
     expect(pr.preparedHeadSha).toBe('aaa');
     expect(pr.attempts).toBe(0);
     expect(pr.summary).toBe('1 P1');
     expect(pr.alert).toBe('touches auth');
+    expect(pr.alertFindings).toEqual(['cf15e689', '7b2a10c4']);
     store.close();
+  });
+
+  it('takes the findings behind an alert on a table that predates the column', () => {
+    const seed = new DatabaseSync(path);
+    seed.exec(`CREATE TABLE inbox_prs (
+      id TEXT PRIMARY KEY, owner TEXT NOT NULL, repo TEXT NOT NULL, number INTEGER NOT NULL,
+      title TEXT NOT NULL, url TEXT NOT NULL, author TEXT NOT NULL, is_draft INTEGER NOT NULL,
+      head_sha TEXT NOT NULL, base_ref TEXT NOT NULL, additions INTEGER NOT NULL, deletions INTEGER NOT NULL,
+      changed_files INTEGER NOT NULL, requested INTEGER NOT NULL, status TEXT NOT NULL, status_reason TEXT,
+      attempts INTEGER NOT NULL DEFAULT 0, prepared_head_sha TEXT, prepared_at TEXT, bundle_path TEXT,
+      worktree_path TEXT, log_path TEXT, first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL,
+      summary TEXT, alert TEXT)`);
+    seed.exec(`INSERT INTO inbox_prs (id, owner, repo, number, title, url, author, is_draft, head_sha, base_ref,
+      additions, deletions, changed_files, requested, status, first_seen_at, last_seen_at, alert)
+      VALUES ('o/r#1', 'o', 'r', 1, 'T', 'u', 'alice', 0, 'aaa', 'main', 1, 0, 1, 1, 'prepared', 'x', 'y', 'touches auth')`);
+    seed.close();
+
+    const store = new InboxStore(path);
+    expect(store.get('o/r#1')!.alertFindings).toEqual([]);
+    store.markPrepared('o/r#1', { headSha: 'aaa', bundlePath: '/b', worktreePath: '/wt', logPath: '/l', at: 'now', summary: '1 P1', alert: 'touches auth', alertFindings: ['cf15e689'] });
+    expect(store.get('o/r#1')!.alertFindings).toEqual(['cf15e689']);
+    store.close();
+  });
+
+  it('reads a findings column that does not name a list of ids as naming none', () => {
+    const store = new InboxStore(path);
+    store.observe(snapshot(), true, 'now');
+    store.close();
+
+    for (const [written, expected] of [['not json', []], ['{"a":1}', []], ['["cf15e689", 3]', ['cf15e689']]] as const) {
+      const raw = new DatabaseSync(path);
+      raw.prepare('UPDATE inbox_prs SET alert_findings = ? WHERE id = ?').run(written, 'o/r#1');
+      raw.close();
+      const reopened = new InboxStore(path);
+      expect(reopened.get('o/r#1')!.alertFindings).toEqual(expected);
+      reopened.close();
+    }
   });
 });
 

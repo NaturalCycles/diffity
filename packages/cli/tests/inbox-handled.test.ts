@@ -173,7 +173,7 @@ describe('the handled list', () => {
     store.observe(snapshot(), true, 'now');
     store.markPrepared('o/r#1', {
       headSha: 'aaa', bundlePath: '/b', worktreePath: '/wt', logPath: '/l',
-      at: '2026-09-08T09:00:00.000Z', summary: '1 P2', alert: null,
+      at: '2026-09-08T09:00:00.000Z', summary: '1 P2', alert: null, alertFindings: [],
     });
 
     expect(buildView(store, 'http://localhost:5390', 'now').ready.map(row => row.id)).toEqual(['o/r#1']);
@@ -191,7 +191,7 @@ describe('the handled list', () => {
     store.recordHandled(mark({ at: '2026-09-08T09:00:00.000Z' }));
     store.markPrepared('o/r#1', {
       headSha: 'aaa', bundlePath: '/b', worktreePath: '/wt', logPath: '/l',
-      at: '2026-09-08T10:00:00.000Z', summary: '1 P2', alert: null,
+      at: '2026-09-08T10:00:00.000Z', summary: '1 P2', alert: null, alertFindings: [],
     });
 
     const view = buildView(store, 'http://localhost:5390', 'now');
@@ -212,7 +212,64 @@ describe('the handled list', () => {
   });
 });
 
+describe('the alerted list', () => {
+  /** A prepared review, with whatever the agent raised about it. */
+  function preparedRow(
+    store: InboxStore,
+    over: Partial<PrSnapshot>,
+    prepared: { at: string; alert?: string; alertFindings?: string[] },
+  ): void {
+    const snap = snapshot(over);
+    store.observe(snap, true, 'now');
+    store.markPrepared(`o/r#${snap.number}`, {
+      headSha: snap.headSha, bundlePath: '/b', worktreePath: '/wt', logPath: '/l', at: prepared.at,
+      summary: '1 P1', alert: prepared.alert ?? null, alertFindings: prepared.alertFindings ?? [],
+    });
+  }
+
+  it('lists the alerted ones most recently prepared first, leaving the rest ready', () => {
+    const store = new InboxStore(':memory:');
+    preparedRow(store, { number: 1, additions: 1, deletions: 0 }, { at: '2026-09-08T09:00:00.000Z', alert: 'touches auth', alertFindings: ['cf15e689'] });
+    preparedRow(store, { number: 2 }, { at: '2026-09-08T10:00:00.000Z' });
+    preparedRow(store, { number: 3, additions: 900, deletions: 0 }, { at: '2026-09-08T11:00:00.000Z', alert: 'a P1 in payments' });
+
+    const view = buildView(store, 'http://localhost:5390', 'now');
+    // The largest of the three, and the newest: size orders the ready list, not this one.
+    expect(view.alerted.map(row => [row.number, row.alertFindings])).toEqual([[3, []], [1, ['cf15e689']]]);
+    expect(view.ready.map(row => row.number)).toEqual([2]);
+    expect(view.other).toEqual([]);
+    store.close();
+  });
+
+  it('keeps a stale alerted review listed, and lets a posted one go to handled', () => {
+    const store = new InboxStore(':memory:');
+    preparedRow(store, {}, { at: '2026-09-08T09:00:00.000Z', alert: 'touches auth' });
+    store.observe(snapshot({ headSha: 'bbb' }), true, 'now');
+
+    const pushed = buildView(store, 'http://localhost:5390', 'now');
+    expect(pushed.alerted.map(row => [row.id, row.stale])).toEqual([['o/r#1', true]]);
+
+    store.recordHandled(mark({ at: '2026-09-08T10:00:00.000Z' }));
+    const posted = buildView(store, 'http://localhost:5390', 'now');
+    expect(posted.alerted).toEqual([]);
+    expect(posted.ready).toEqual([]);
+    expect(posted.handled.map(row => row.id)).toEqual(['o/r#1']);
+    store.close();
+  });
+});
+
 describe('diffity inbox status', () => {
+  /** Everything the command printed, as one string. */
+  async function statusOutput(): Promise<string> {
+    const lines: string[] = [];
+    const log = vi.spyOn(console, 'log').mockImplementation((message: unknown) => { lines.push(String(message)); });
+    const program = new Command();
+    registerInboxCommand(program);
+    await program.parseAsync(['node', 'diffity', 'inbox', 'status']);
+    log.mockRestore();
+    return lines.join('\n');
+  }
+
   it('prints a Handled section with what was said about each one', async () => {
     process.env.DIFFITY_DATA_DIR = join(dir, 'data');
     const store = new InboxStore(inboxStorePath());
@@ -221,18 +278,32 @@ describe('diffity inbox status', () => {
     store.setStatus('o/r#1', 'handled', 'new commits since you approved');
     store.close();
 
-    const lines: string[] = [];
-    const log = vi.spyOn(console, 'log').mockImplementation((message: unknown) => { lines.push(String(message)); });
-    const program = new Command();
-    registerInboxCommand(program);
-    await program.parseAsync(['node', 'diffity', 'inbox', 'status']);
-    log.mockRestore();
-
-    const printed = lines.join('\n');
+    const printed = await statusOutput();
     expect(printed).toContain('Handled');
     expect(printed).toContain('updated');
     expect(printed).toContain('r#1 A change');
     expect(printed).toContain('new commits since you approved');
     expect(printed).not.toContain('Nothing in the inbox yet');
+  });
+
+  it('prints an Alerted section above Ready, with the reason and the findings named', async () => {
+    process.env.DIFFITY_DATA_DIR = join(dir, 'data');
+    const store = new InboxStore(inboxStorePath());
+    for (const number of [1, 2]) {
+      store.observe(snapshot({ number, title: number === 1 ? 'Touch auth' : 'A tidy-up' }), true, 'now');
+      store.markPrepared(`o/r#${number}`, {
+        headSha: 'aaa', bundlePath: '/b', worktreePath: '/wt', logPath: '/l', at: 'now', summary: '1 P1',
+        alert: number === 1 ? 'touches auth' : null, alertFindings: number === 1 ? ['cf15e689', '7b2a10c4'] : [],
+      });
+    }
+    store.close();
+
+    const printed = await statusOutput();
+    expect(printed).toContain('Alerted');
+    expect(printed).toContain('touches auth');
+    expect(printed).toContain('2 findings');
+    expect(printed.indexOf('Alerted')).toBeLessThan(printed.indexOf('Ready to review'));
+    // The one nothing was raised about is still listed, below.
+    expect(printed).toContain('A tidy-up');
   });
 });

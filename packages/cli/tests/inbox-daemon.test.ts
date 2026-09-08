@@ -38,7 +38,7 @@ function snapshot(number: number, additions: number): PrSnapshot {
 function preparedResult(snapshot: PrSnapshot): PrepareResult {
   return {
     kind: 'prepared', headSha: snapshot.headSha, bundlePath: '/b.json', worktree: '/wt', logPath: '/l.log',
-    at: 'now', summary: '1 P2', alert: null, validation: 'not-needed', validateRun: null,
+    at: 'now', summary: '1 P2', alert: null, alertFindings: [], validation: 'not-needed', validateRun: null,
     run: { startedAt: 'now', endedAt: 'now', stats: null },
   };
 }

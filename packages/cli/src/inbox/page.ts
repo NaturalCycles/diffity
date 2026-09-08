@@ -113,6 +113,10 @@ export function inboxPage(): string {
   </span>
 </header>
 <main>
+  <section id="alerted-section" hidden>
+    <h2>Alerted</h2>
+    <div id="alerted"></div>
+  </section>
   <section id="ready-section" hidden>
     <h2>Ready to review</h2>
     <div id="ready"></div>
@@ -215,6 +219,12 @@ export function inboxPage(): string {
     return String(at.getHours()).padStart(2, '0') + ':' + String(at.getMinutes()).padStart(2, '0');
   }
 
+  /** How many findings the agent named as the reason for the alert, when it named any. */
+  function findingsLabel(r) {
+    const named = (r.alertFindings || []).length;
+    return named ? named + ' finding' + (named === 1 ? '' : 's') : '';
+  }
+
   /** What the agent runs behind a prepared review came to; the hover has them one by one. */
   function spendLabel(r) {
     return r.spend ? Math.round(r.spend.minutes) + ' min \\u00b7 ' + money(r.spend.costUsd) : '';
@@ -247,8 +257,8 @@ export function inboxPage(): string {
       ciDot(r) +
       '<span class="title"><div><span class="repo">' + esc(r.repo) + '#' + r.number + '</span> ' +
       '<span class="name">' + esc(r.title) + '</span></div>' +
-      metaLine(['by ' + esc(r.author), r.changedFiles + ' file(s)', esc(r.summary || ''), spendLabel(r), times(r)],
-        r.spend ? r.spend.detail : '') + '</span>' +
+      metaLine(['by ' + esc(r.author), r.changedFiles + ' file(s)', esc(r.summary || ''), esc(r.alert || ''),
+        findingsLabel(r), spendLabel(r), times(r)], r.spend ? r.spend.detail : '') + '</span>' +
       (r.alert ? '<span class="badge alert" title="' + esc(r.alert) + '">alert</span>' : '') +
       (r.stale ? '<span class="badge stale">stale</span>' : '') +
       '<span class="open-hint">open \\u2197</span>';
@@ -372,7 +382,7 @@ export function inboxPage(): string {
   }
 
   function announce(view) {
-    const current = new Map(view.ready.map(r => [r.id + '@' + (r.preparedAt || ''), r]));
+    const current = new Map([...view.alerted, ...view.ready].map(r => [r.id + '@' + (r.preparedAt || ''), r]));
     if (known !== null && canNotify()) {
       for (const [key, r] of current) {
         if (known.has(key)) continue;
@@ -483,6 +493,7 @@ export function inboxPage(): string {
       const res = await fetch('/api/inbox', { cache: 'no-store' });
       const view = await res.json();
       announce(view);
+      fill('alerted-section', 'alerted', view.alerted, r => withActions(readyRow(r), r));
       fill('ready-section', 'ready', view.ready, r => withActions(readyRow(r), r));
       fill('working-section', 'working', view.working, r => withActions(workingRow(r), r));
       fill('handled-section', 'handled', view.handled, r => withActions(handledRow(r), r, REPREPARE_TITLE));
@@ -491,9 +502,14 @@ export function inboxPage(): string {
         return withActions(plainRow(r, bad ? 'bad' : 'work', r.status), r);
       });
       fill('dismissed-section', 'dismissed', view.dismissed, r => withActions(plainRow(r, 'work', 'dismissed'), r));
-      const total = view.ready.length + view.working.length + view.handled.length + view.other.length + view.dismissed.length;
+      const total = view.alerted.length + view.ready.length + view.working.length + view.handled.length
+        + view.other.length + view.dismissed.length;
       el('all-empty').hidden = total > 0;
-      el('status').textContent = view.ready.length + ' ready \\u00b7 ' + view.working.length + ' queued';
+      el('status').textContent = [
+        view.alerted.length ? view.alerted.length + ' alerted' : '',
+        view.ready.length + ' ready',
+        view.working.length + ' queued',
+      ].filter(Boolean).join(' \\u00b7 ');
       showReload(view.ticking === true);
       el('foot').textContent = [
         'Updated ' + new Date().toLocaleTimeString() + (view.lastPollAt ? ' \\u00b7 last poll ' + ago(view.lastPollAt) : ''),

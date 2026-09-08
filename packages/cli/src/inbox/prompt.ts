@@ -82,8 +82,12 @@ export function composePrompt(ctx: PromptContext): string {
       '',
       indent(alertWhen.trim()),
       '',
-      'If it does, print exactly one line, before the final line below:',
+      'If it does, print this line, before the final line below:',
       '  ALERT: <short reason>',
+      'and, when particular findings are the reason, a second line naming them:',
+      '  ALERT-FINDINGS: <thread id> <thread id> \u2026',
+      'The ids are the ones `diffity agent comment` printed ("Created thread cf15e689"), separated',
+      'by spaces; name the findings the author should see now.',
       'If it does not, print nothing about it.',
       '',
     );
@@ -128,10 +132,10 @@ function checkName(name: string): string {
 
 /**
  * What the agent's run amounted to, read from the last verdict line it printed; a prepared review
- * carries the alert the agent raised on the way, if any.
+ * carries the alert the agent raised on the way, if any, and the findings it named as the reason.
  */
 export type Verdict =
-  | { kind: 'prepared'; alert: string | null }
+  | { kind: 'prepared'; alert: string | null; alertFindings: string[] }
   | { kind: 'skipped'; reason: string }
   | { kind: 'none' };
 
@@ -141,7 +145,8 @@ export function verdictOf(stdout: string): Verdict {
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i];
     if (line === 'PREPARED') {
-      return { kind: 'prepared', alert: alertBefore(lines, i) };
+      const { alert, findings } = alertBefore(lines, i);
+      return { kind: 'prepared', alert, alertFindings: findings };
     }
     const skip = /^SKIP:\s*(.*)$/.exec(line);
     if (skip) {
@@ -151,15 +156,34 @@ export function verdictOf(stdout: string): Verdict {
   return { kind: 'none' };
 }
 
-/** The agent's ALERT line, if it printed one on the way to PREPARED; the last one counts. */
-function alertBefore(lines: string[], preparedAt: number): string | null {
+/**
+ * The agent's ALERT line, if it printed one on the way to PREPARED, and the findings its
+ * ALERT-FINDINGS line named as the reason; the last of each counts, in whichever order they were
+ * printed. Findings without an alert say nothing the reviewer asked to hear about, so they go with it.
+ */
+function alertBefore(lines: string[], preparedAt: number): { alert: string | null; findings: string[] } {
+  let alert: string | null = null;
+  let findings: string[] | null = null;
   for (let i = preparedAt - 1; i >= 0; i--) {
-    const alert = /^ALERT:\s*(.*)$/.exec(lines[i]);
-    if (alert) {
-      return alert[1].trim() || 'no reason given';
+    const named = /^ALERT-FINDINGS:\s*(.*)$/.exec(lines[i]);
+    if (named) {
+      findings ??= threadIdsOf(named[1]);
+      continue;
+    }
+    const raised = /^ALERT:\s*(.*)$/.exec(lines[i]);
+    if (raised) {
+      alert ??= raised[1].trim() || 'no reason given';
     }
   }
-  return null;
+  return { alert, findings: alert === null ? [] : findings ?? [] };
+}
+
+/** A thread id as `diffity agent comment` prints it, or the full uuid behind it. */
+const THREAD_ID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?$/;
+
+/** The thread ids on an ALERT-FINDINGS line; anything that is not one is not a finding to look up. */
+function threadIdsOf(text: string): string[] {
+  return [...new Set(text.toLowerCase().split(/[\s,]+/).filter(token => THREAD_ID.test(token)))];
 }
 
 function indent(text: string): string {

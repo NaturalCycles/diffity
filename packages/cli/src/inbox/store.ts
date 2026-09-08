@@ -54,6 +54,8 @@ export interface InboxPr {
   preparedAt: string | null;
   summary: string | null;
   alert: string | null;
+  /** The threads the agent named as the reason for the alert; empty when it named none. */
+  alertFindings: string[];
   bundlePath: string | null;
   worktreePath: string | null;
   logPath: string | null;
@@ -71,6 +73,8 @@ export interface Prepared {
   summary: string | null;
   /** Why the agent judged this one to need the reviewer now, when it did. */
   alert: string | null;
+  /** The threads it named as the reason, by id; an alert on the reviewer's own paths names none. */
+  alertFindings: string[];
 }
 
 /** A review diffity posted to the forge: the head it was posted against, and what it said. */
@@ -233,6 +237,7 @@ export class InboxStore {
         bumped_at TEXT,
         summary TEXT,
         alert TEXT,
+        alert_findings TEXT,
         ci_state TEXT
       )
     `);
@@ -270,7 +275,7 @@ export class InboxStore {
     this.db.exec('CREATE INDEX IF NOT EXISTS inbox_handled_pr_at ON inbox_handled (pr_id, at)');
     this.db.exec('CREATE TABLE IF NOT EXISTS inbox_state (key TEXT PRIMARY KEY, value TEXT)');
     // A table from an earlier build gains the columns it lacks; a fresh one already has them.
-    for (const column of ['attempts INTEGER NOT NULL DEFAULT 0', 'created_at TEXT', 'updated_at TEXT', 'bumped_at TEXT', 'summary TEXT', 'alert TEXT', 'ci_state TEXT']) {
+    for (const column of ['attempts INTEGER NOT NULL DEFAULT 0', 'created_at TEXT', 'updated_at TEXT', 'bumped_at TEXT', 'summary TEXT', 'alert TEXT', 'alert_findings TEXT', 'ci_state TEXT']) {
       try {
         this.db.exec(`ALTER TABLE inbox_prs ADD COLUMN ${column}`);
       } catch (err) {
@@ -357,9 +362,12 @@ export class InboxStore {
     this.db.prepare(`
       UPDATE inbox_prs
       SET status = 'prepared', status_reason = NULL, prepared_head_sha = ?, prepared_at = ?,
-          bundle_path = ?, worktree_path = ?, log_path = ?, summary = ?, alert = ?
+          bundle_path = ?, worktree_path = ?, log_path = ?, summary = ?, alert = ?, alert_findings = ?
       WHERE id = ?
-    `).run(prepared.headSha, prepared.at, prepared.bundlePath, prepared.worktreePath, prepared.logPath, prepared.summary, prepared.alert, id);
+    `).run(
+      prepared.headSha, prepared.at, prepared.bundlePath, prepared.worktreePath, prepared.logPath,
+      prepared.summary, prepared.alert, JSON.stringify(prepared.alertFindings), id,
+    );
   }
 
   /**
@@ -493,6 +501,7 @@ interface Row {
   bumped_at: string | null;
   summary: string | null;
   alert: string | null;
+  alert_findings: string | null;
   ci_state: string | null;
 }
 
@@ -523,6 +532,7 @@ function rowToPr(row: Row): InboxPr {
     preparedAt: row.prepared_at,
     summary: row.summary,
     alert: row.alert,
+    alertFindings: parseAlertFindings(row.alert_findings),
     bundlePath: row.bundle_path,
     worktreePath: row.worktree_path,
     logPath: row.log_path,
@@ -586,6 +596,22 @@ const CI_STATES: readonly string[] = ['passing', 'failing', 'running', 'none'];
 
 function normaliseCiState(value: string | null): CiState | null {
   return value !== null && CI_STATES.includes(value) ? (value as CiState) : null;
+}
+
+/**
+ * The thread ids behind an alert, as the column keeps them. A row from before the column existed
+ * has none, and so does one whose value is not a list of ids.
+ */
+function parseAlertFindings(value: string | null): string[] {
+  if (value === null) {
+    return [];
+  }
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string') : [];
+  } catch {
+    return [];
+  }
 }
 
 /** A mark from a build that posted other kinds of review still reads as something the reviewer said. */
