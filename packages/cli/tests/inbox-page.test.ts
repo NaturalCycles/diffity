@@ -65,6 +65,24 @@ describe('the inbox page', () => {
     expect(inboxPage()).toContain('.ci { flex: none;');
   });
 
+  it('says a queue row is preparing rather than bumped, and shows it working', () => {
+    const script = pageScript();
+    expect(script).toContain("const busy = r.status === 'preparing'");
+    expect(script).toContain("'preparing \\u00b7 bumped'");
+    // The \u2191 the reviewer pressed reads as bumped only while the row is still waiting its turn.
+    expect(script).toContain("r.bumped && r.status === 'queued' ? 'bumped' : r.status");
+    expect(script).toContain("plainRow(r, busy ? 'work busy' : 'work', label, busy)");
+    expect(script).toContain("busy ? 'row busy' : 'row'");
+
+    const html = inboxPage();
+    expect(html).toContain('@keyframes working');
+    expect(html).toContain('@media (prefers-reduced-motion: no-preference)');
+    // Reduced motion gets the same badge in the accent colour, standing still.
+    expect(html).toContain('.badge.busy { color: var(--accent); border-color: var(--accent); }');
+    // The wider edge comes out of the padding, so the card is no wider than its neighbours.
+    expect(html).toContain('.row.busy { border-left: 3px solid var(--accent); padding-left: 12px; }');
+  });
+
   it('has a settings field for the CI hold and the alert paths, and sends both back', () => {
     const html = inboxPage();
     expect(html).toContain('id="waitForCi" type="checkbox"');

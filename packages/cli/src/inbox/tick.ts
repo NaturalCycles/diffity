@@ -21,6 +21,11 @@ export interface TickDeps {
   now(): string;
   /** False once the daemon is shutting down, so the drain stops starting new preparations. */
   shouldContinue?(): boolean;
+  /**
+   * The pull requests a preparation is running for right now, the daemon's own set: a bump prepares
+   * beside the tick, so both have to see the same ones.
+   */
+  inFlight: Set<string>;
   /** How many prepared reviews may wait for the reviewer at once; the rest of the queue waits. */
   maxPrepared: number;
   /** Whether a pull request waits for its CI to pass before an agent is spent on it. */
@@ -52,6 +57,11 @@ export async function runTick(store: InboxStore, deps: TickDeps): Promise<void> 
   const toPrepare: PrSnapshot[] = [];
 
   for (const ref of requested) {
+    // A preparation running for this one — the tick's own, or a bump's — owns the row until it
+    // ends: reconciling it now would re-queue a `preparing` row and hand it a second agent.
+    if (deps.inFlight.has(prId(ref))) {
+      continue;
+    }
     const snapshot = await deps.forge.viewPr(ref);
     if (!snapshot) {
       deps.log(`could not read ${prId(ref)} this tick; leaving it as it was`);
@@ -71,7 +81,7 @@ export async function runTick(store: InboxStore, deps: TickDeps): Promise<void> 
   // Rows the search no longer returns: retired against their latest detail, and their worktrees
   // reclaimed. A closed pull request may not be searchable at all, so it is asked about directly.
   for (const pr of store.all()) {
-    if (requestedIds.has(pr.id) || isRetired(pr.status)) {
+    if (requestedIds.has(pr.id) || isRetired(pr.status) || deps.inFlight.has(pr.id)) {
       continue;
     }
     const snapshot = await deps.forge.viewPr(prToRef(pr));
@@ -122,10 +132,13 @@ export async function runTick(store: InboxStore, deps: TickDeps): Promise<void> 
     if (deps.shouldContinue && !deps.shouldContinue()) {
       break;
     }
-    // Read again, not taken from the listing: the reviewer may have dismissed or bumped it from
-    // the page while this tick was busy with another.
+    // Read again, not taken from the listing: the reviewer may have dismissed it, or bumped it and
+    // had it prepared beside this tick, while the tick was busy with another.
     const row = store.get(prId(snapshot));
-    if (row?.status === 'dismissed') {
+    if (row?.status === 'dismissed' || deps.inFlight.has(prId(snapshot))) {
+      continue;
+    }
+    if (row?.status === 'prepared' && row.preparedHeadSha === snapshot.headSha) {
       continue;
     }
     const bumped = row?.bumpedAt != null;
@@ -150,12 +163,67 @@ function diffSize(snapshot: PrSnapshot): number {
   return snapshot.additions + snapshot.deletions;
 }
 
+/**
+ * The one pull request the reviewer asked for by name, prepared now — beside whatever the tick is
+ * already preparing rather than after it, because a preparation is minutes of agent and the ↑ means
+ * now. There is no poll behind it: the row is read from the forge on its own and put through the
+ * same reconcile, so a draft, or one merged since it was queued, is still not handed an agent.
+ */
+export async function prepareBumped(store: InboxStore, deps: TickDeps, id: string): Promise<void> {
+  const existing = store.get(id);
+  if (!existing) {
+    deps.log(`cannot prepare ${id}: the inbox has no such pull request`);
+    return;
+  }
+  if (deps.inFlight.has(id)) {
+    return;
+  }
+  const snapshot = await deps.forge.viewPr(prToRef(existing));
+  if (!snapshot) {
+    deps.log(`could not read ${id} to prepare it; leaving it as it was`);
+    return;
+  }
+  const viewerLogin = await deps.forge.viewerLogin();
+  store.observe(snapshot, true, deps.now());
+  // Whether the review is still wanted is taken from the state, not assumed: no search ran, and one
+  // merged or closed while it waited is retired rather than reviewed.
+  const transition = reconcile({
+    existing, snapshot, requested: snapshot.state === 'OPEN', viewerLogin,
+    waitForCi: deps.waitForCi, skipTitles: deps.skipTitles,
+  });
+  if (transition) {
+    store.setStatus(id, transition.status, transition.reason);
+  }
+  if (!transition?.prepare) {
+    return;
+  }
+  const pausedUntil = deps.pausedUntil?.() ?? null;
+  if (pausedUntil) {
+    const reason = `waiting: preparing paused until ${localHhMm(pausedUntil)}`;
+    store.setStatus(id, 'queued', reason);
+    deps.log(`${id} left queued: ${reason}`);
+    return;
+  }
+  await prepareOne(store, snapshot, deps, true);
+}
+
 async function prepareOne(store: InboxStore, snapshot: PrSnapshot, deps: TickDeps, bumped: boolean): Promise<void> {
   const id = prId(snapshot);
+  // Claimed in the same breath as it is checked: a bump and a tick can reach the same pull request
+  // at once, and two agents must not end up in one worktree.
+  if (deps.inFlight.has(id)) {
+    return;
+  }
+  deps.inFlight.add(id);
   store.setStatus(id, 'preparing', null);
   deps.log(`preparing ${id} — ${snapshot.title}`);
 
-  const result = await deps.prepare(snapshot, { bumped });
+  let result: PrepareResult;
+  try {
+    result = await deps.prepare(snapshot, { bumped });
+  } finally {
+    deps.inFlight.delete(id);
+  }
   store.clearBump(id);
   recordPrepareRun(store, snapshot, deps, result);
   recordValidateRun(store, snapshot, deps, result);

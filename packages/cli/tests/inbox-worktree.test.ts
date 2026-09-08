@@ -82,6 +82,39 @@ describe('prepareWorktree', () => {
     expect(git(dest, ['rev-parse', 'HEAD'])).toBe(head);
   });
 
+  it('cuts two pull requests at once from one clone, each at its own head and base', async () => {
+    // A second pull request on a base branch of its own, whose name carries a slash.
+    git(upstream, ['checkout', '-q', '-b', 'release/1.x']);
+    writeFileSync(join(upstream, 'base.ts'), 'const base = 1;\n');
+    git(upstream, ['add', '.']);
+    git(upstream, ['commit', '-m', 'the other base']);
+    const otherBase = git(upstream, ['rev-parse', 'HEAD']);
+    // The pull request's own commit on top of that base, off the branch, as a fork's push looks.
+    git(upstream, ['checkout', '-q', '--detach']);
+    writeFileSync(join(upstream, 'five.ts'), 'const five = 5;\n');
+    git(upstream, ['add', '.']);
+    git(upstream, ['commit', '-m', 'the other change']);
+    git(upstream, ['update-ref', 'refs/pull/5/head', 'HEAD']);
+    const otherHead = git(upstream, ['rev-parse', 'HEAD']);
+    git(upstream, ['checkout', '-q', 'main']);
+    const main = git(upstream, ['rev-parse', 'main']);
+    const otherRef = { owner: 'o', repo: 'demo', number: 5 };
+    const otherDest = join(root, 'worktrees', 'o-demo-5');
+
+    const [four, five] = await Promise.all([
+      prepareWorktree(clone, dest, ref, 'main'),
+      prepareWorktree(clone, otherDest, otherRef, 'release/1.x'),
+    ]);
+
+    // Neither fetch was read back off the other's: each cut is at its own head, against its own base.
+    expect(four).toEqual({ head, diffRef: main });
+    expect(five).toEqual({ head: otherHead, diffRef: otherBase });
+    expect(git(dest, ['rev-parse', 'HEAD'])).toBe(head);
+    expect(git(otherDest, ['rev-parse', 'HEAD'])).toBe(otherHead);
+    expect(existsSync(join(dest, 'five.ts'))).toBe(false);
+    expect(existsSync(join(otherDest, 'five.ts'))).toBe(true);
+  });
+
   describe('with a pinned head', () => {
     /** A second push on the pull request, leaving the head captured in `head` behind. */
     function pushOnTop(): string {

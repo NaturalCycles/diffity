@@ -4,9 +4,11 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { runDaemon } from '../src/inbox/daemon.js';
+import { noneInflight } from '../src/inbox/runtime.js';
 import { InboxStore } from '../src/inbox/store.js';
 import type { Forge } from '../src/inbox/tick.js';
 import type { AgentConfig } from '../src/inbox/config.js';
+import type { PrepareResult } from '../src/inbox/prepare.js';
 import type { PrSnapshot } from '@diffity/github';
 
 /** The built-in agent settings, fresh each call so a test cannot leak into the next. */
@@ -23,6 +25,23 @@ const emptyForge: Forge = {
   searchReviewRequested: () => Promise.resolve([]),
   viewPr: () => Promise.resolve(null),
 };
+
+function snapshot(number: number, additions: number): PrSnapshot {
+  return {
+    owner: 'o', repo: 'r', number, title: `T${number}`, url: `https://github.com/o/r/pull/${number}`,
+    author: 'alice', isBot: false, isDraft: false, state: 'OPEN', headSha: 'aaa', baseRef: 'main',
+    additions, deletions: 0, changedFiles: 1, createdAt: 'now', updatedAt: 'now', checks: [], files: [],
+  };
+}
+
+/** A preparation that came to something, so a row it ran for reads as prepared. */
+function preparedResult(snapshot: PrSnapshot): PrepareResult {
+  return {
+    kind: 'prepared', headSha: snapshot.headSha, bundlePath: '/b.json', worktree: '/wt', logPath: '/l.log',
+    at: 'now', summary: '1 P2', alert: null, validation: 'not-needed', validateRun: null,
+    run: { startedAt: 'now', endedAt: 'now', stats: null },
+  };
+}
 
 /** A live process whose pid can be seeded into a registry and checked for liveness. */
 function spawnDummy(): number {
@@ -114,13 +133,9 @@ describe('runDaemon singleton and reclaim ordering', () => {
     }
   });
 
-  it('a bump posted while a tick is in flight gets another tick as soon as that one ends', async () => {
+  it('a \u27f3 pressed while a tick is in flight gets another tick as soon as that one ends', async () => {
     const store = new InboxStore(join(root, 'inbox', 'inbox.sqlite'));
-    const snap: PrSnapshot = {
-      owner: 'o', repo: 'r', number: 1, title: 'T', url: 'https://github.com/o/r/pull/1', author: 'alice', isBot: false,
-      isDraft: false, state: 'OPEN', headSha: 'aaa', baseRef: 'main', additions: 1, deletions: 0, changedFiles: 1,
-      createdAt: 'now', updatedAt: 'now', checks: [], files: [],
-    };
+    const snap = snapshot(1, 1);
     store.observe(snap, true, 'now');
     let searches = 0;
     let release: () => void = () => {};
@@ -136,21 +151,84 @@ describe('runDaemon singleton and reclaim ordering', () => {
     try {
       await settle();
       expect(searches).toBe(1);
-      const res = await fetch(`http://127.0.0.1:6005/prepare/${encodeURIComponent('o/r#1')}`, { method: 'POST' });
-      expect(res.status).toBe(204);
-      expect(store.get('o/r#1')!.bumpedAt).not.toBeNull();
-      // Still the first tick: the bump did not start a second one underneath it.
+      expect((await fetch('http://127.0.0.1:6005/api/tick', { method: 'POST' })).status).toBe(204);
+      // Still the first tick: the ⟳ did not start a second one underneath it.
       expect(searches).toBe(1);
 
       release();
       await settle();
       await settle();
       expect(searches).toBe(2);
-      // The bump was served — the row was prepared (and failed for want of a clone) — and is spent.
-      expect(store.get('o/r#1')!.bumpedAt).toBeNull();
     } finally {
       await handle.stop();
     }
+  });
+
+  it('prepares a bumped pull request at once, beside the one the tick is already on', async () => {
+    const store = new InboxStore(join(root, 'inbox', 'inbox.sqlite'));
+    const first = snapshot(1, 10);
+    const second = snapshot(2, 20);
+    store.observe(first, true, 'now');
+    store.observe(second, true, 'now');
+    const forge: Forge = {
+      viewerLogin: () => Promise.resolve('me'),
+      searchReviewRequested: () => Promise.resolve([{ owner: 'o', repo: 'r', number: 1 }, { owner: 'o', repo: 'r', number: 2 }]),
+      viewPr: ref => Promise.resolve(ref.number === 1 ? first : second),
+    };
+    // The tick's own preparation of #1 is held open; the bumped one must not wait for it.
+    const started: number[] = [];
+    let release: () => void = () => {};
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const prepare = async (snap: PrSnapshot): Promise<PrepareResult> => {
+      started.push(snap.number);
+      if (snap.number === 1) {
+        await held;
+      }
+      return preparedResult(snap);
+    };
+    const handle = await runDaemon(store, config(6007), process.execPath, 'unused-entry', () => {}, { forge, prepare });
+    try {
+      await settle();
+      expect(started).toEqual([1]);
+      expect(store.get('o/r#1')!.status).toBe('preparing');
+
+      const res = await fetch(`http://127.0.0.1:6007/prepare/${encodeURIComponent('o/r#2')}`, { method: 'POST' });
+      expect(res.status).toBe(204);
+      await settle();
+
+      // #2 was prepared while #1 was still going, and the page has it as preparing meanwhile.
+      expect(started).toEqual([1, 2]);
+      expect(store.get('o/r#2')!.status).toBe('prepared');
+      expect(store.get('o/r#1')!.status).toBe('preparing');
+
+      release();
+      await settle();
+      await settle();
+      // The tick finishes #1 and does not hand #2 a second agent.
+      expect(started).toEqual([1, 2]);
+      expect(store.get('o/r#1')!.status).toBe('prepared');
+    } finally {
+      release();
+      await settle();
+      await handle.stop();
+    }
+  });
+
+  it('stops every preparation still running when it shuts down', async () => {
+    const store = new InboxStore(join(root, 'inbox', 'inbox.sqlite'));
+    const inflight = noneInflight();
+    const handle = await runDaemon(store, config(6008), process.execPath, 'unused-entry', () => {}, { forge: emptyForge, inflight });
+    await settle();
+    // What two prepares running at once leave behind them: a server and an agent each.
+    const stopped: string[] = [];
+    for (const name of ['first server', 'first agent', 'second server', 'second agent']) {
+      inflight.stops.add(() => stopped.push(name));
+    }
+
+    await handle.stop();
+
+    expect(stopped).toEqual(['first server', 'first agent', 'second server', 'second agent']);
+    expect(inflight.stops.size).toBe(4);
   });
 
   it('polls but prepares nothing while paused, and takes the queue up once the pause has passed', async () => {

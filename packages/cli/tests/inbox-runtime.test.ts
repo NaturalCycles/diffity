@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 
 const ENTRY = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'index.js');
-import { realAttendantDeps, realPrepareDeps, runAgent, startDiffityServer } from '../src/inbox/runtime.js';
+import { noneInflight, realAttendantDeps, realPrepareDeps, runAgent, startDiffityServer } from '../src/inbox/runtime.js';
 import { generalCommentIdOf, threadsToValidate } from '../src/inbox/validate.js';
 import type { AttendedPr } from '../src/inbox/attendant.js';
 import type { InboxConfig } from '../src/inbox/config.js';
@@ -129,6 +129,26 @@ describe('runAgent', () => {
 
   it('rejects when the command does not exist', async () => {
     await expect(runAgent(opts(['definitely-not-a-real-command-xyz']), root)).rejects.toThrow(/could not run/);
+  });
+
+  it('holds a kill for every agent running at once, and drops each as it ends', async () => {
+    // Two preparations at once — a bumped pull request beside the daemon's own — share one set, and
+    // a shutdown has to reach both of them.
+    const inflight = noneInflight();
+    const argv = ['node', '-e', 'setInterval(()=>{},1000)'];
+    const first = runAgent(opts(argv, { logPath: join(root, 'first.log') }), root, [], inflight);
+    const second = runAgent(opts(argv, { logPath: join(root, 'second.log') }), root, [], inflight);
+    await new Promise(resolve => setTimeout(resolve, 200));
+    expect(inflight.stops.size).toBe(2);
+
+    for (const stop of [...inflight.stops]) {
+      stop();
+    }
+
+    // Both children are gone — each call returns only when its own has closed — and the set with them.
+    expect((await first).timedOut).toBe(false);
+    expect((await second).timedOut).toBe(false);
+    expect(inflight.stops.size).toBe(0);
   });
 });
 

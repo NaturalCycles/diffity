@@ -76,6 +76,21 @@ export function inboxPage(): string {
   .badge.stale { color: var(--stale); border: 1px solid var(--stale); }
   .badge.work { color: var(--work); border: 1px solid var(--line); }
   .badge.bad { color: var(--bad); border: 1px solid var(--bad); }
+  .badge.busy { color: var(--accent); border-color: var(--accent); }
+  /* The wider edge comes out of the padding, so a card being prepared is exactly as wide as the rest. */
+  .row.busy { border-left: 3px solid var(--accent); padding-left: 12px; }
+  @media (prefers-reduced-motion: no-preference) {
+    .badge.busy { animation: working 1.6s infinite ease-in-out; }
+    .row.busy { animation: edge 1.6s infinite ease-in-out; }
+  }
+  @keyframes working {
+    0%, 100% { color: var(--work); border-color: var(--line); }
+    50% { color: var(--accent); border-color: var(--accent); }
+  }
+  @keyframes edge {
+    0%, 100% { border-left-color: var(--line); }
+    50% { border-left-color: var(--accent); }
+  }
   .open-hint { color: var(--accent); font-size: 12px; font-weight: 600; white-space: nowrap; }
   .empty { color: var(--muted); padding: 12px 2px; }
   .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ready); flex: none; }
@@ -236,9 +251,9 @@ export function inboxPage(): string {
     return row;
   }
 
-  function plainRow(r, badgeClass, badgeText) {
+  function plainRow(r, badgeClass, badgeText, busy) {
     const row = document.createElement('div');
-    row.className = 'row';
+    row.className = busy ? 'row busy' : 'row';
     row.innerHTML =
       '<span class="size">' + sizeLabel(r) + '</span>' +
       ciDot(r) +
@@ -247,6 +262,16 @@ export function inboxPage(): string {
       metaLine([esc(r.statusReason || ''), times(r)], r.statusReason || '') + '</span>' +
       '<span class="badge ' + badgeClass + '">' + esc(badgeText) + '</span>';
     return row;
+  }
+
+  // A queue row. One with an agent on it says so and pulses while it runs; the bump that asked for
+  // it is spent the moment it starts, so only a row still waiting its turn reads as bumped.
+  function workingRow(r) {
+    const busy = r.status === 'preparing';
+    const label = busy
+      ? (r.bumped ? 'preparing \\u00b7 bumped' : 'preparing')
+      : (r.bumped && r.status === 'queued' ? 'bumped' : r.status);
+    return plainRow(r, busy ? 'work busy' : 'work', label, busy);
   }
 
   function withActions(row, r) {
@@ -258,7 +283,7 @@ export function inboxPage(): string {
       const up = document.createElement('button');
       up.type = 'button';
       up.className = 'bump';
-      up.title = 'Prepare this one next: ahead of the queue, past the limit, the skips set aside';
+      up.title = 'Prepare this one now: at once and beside whatever is being prepared, past the auto-prepare count, the skips and the CI hold set aside';
       up.textContent = '\\u2191';
       up.onclick = () => bump(r);
       wrap.append(up);
@@ -424,7 +449,7 @@ export function inboxPage(): string {
       const view = await res.json();
       announce(view);
       fill('ready-section', 'ready', view.ready, r => withActions(readyRow(r), r));
-      fill('working-section', 'working', view.working, r => withActions(plainRow(r, 'work', r.bumped ? 'bumped' : r.status), r));
+      fill('working-section', 'working', view.working, r => withActions(workingRow(r), r));
       fill('other-section', 'other', view.other, r => {
         const bad = r.status === 'failed';
         return withActions(plainRow(r, bad ? 'bad' : 'work', r.status), r);

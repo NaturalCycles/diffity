@@ -45,7 +45,7 @@ export interface InboxPr {
   statusReason: string | null;
   /** How many times preparation has failed at the current head, reset when the head moves. */
   attempts: number;
-  /** When the reviewer asked for this one next — ahead of the queue, past the cap, the skips set aside. */
+  /** When the reviewer asked for this one now — at once, past the cap, the skips set aside. */
   bumpedAt: string | null;
   /** The head the prepared review is for; older than headSha means the review is stale. */
   preparedHeadSha: string | null;
