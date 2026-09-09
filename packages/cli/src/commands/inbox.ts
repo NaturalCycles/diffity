@@ -3,7 +3,7 @@ import pc from 'picocolors';
 import { isCliInstalled, isAuthenticated } from '@diffity/github';
 import { loadInboxConfig } from '../inbox/config.js';
 import { inboxConfigPath, inboxStorePath } from '../inbox/paths.js';
-import { InboxStore, type RunTotals } from '../inbox/store.js';
+import { InboxStore, type RunTotals, type TriagePass } from '../inbox/store.js';
 import { runDaemon } from '../inbox/daemon.js';
 import { allowFromEnv, mcpGateDecision } from '../inbox/mcp-gate.js';
 import { buildView, type InboxRow } from '../inbox/view.js';
@@ -152,8 +152,12 @@ export function registerInboxCommand(program: Command): void {
 }
 
 /** What the agent has spent, and whether it is waiting out a limit, for the foot of the listing. */
-function spent(view: { runs: { today: RunTotals; week: RunTotals }; pausedUntil: string | null }): void {
+function spent(view: { runs: { today: RunTotals; week: RunTotals }; pausedUntil: string | null; triage: TriagePass | null }): void {
   const window = (totals: RunTotals) => `${totals.count} · ${Math.round(totals.minutes)} min · ${money(totals.costUsd)}`;
+  if (view.triage) {
+    console.log('');
+    console.log(pc.dim(`${view.triage.watched} watched · ${view.triage.quiet} quiet`));
+  }
   if (view.runs.week.count > 0) {
     console.log('');
     console.log(pc.dim(`agent runs today: ${window(view.runs.today)} · 7 days: ${window(view.runs.week)}`));

@@ -140,6 +140,8 @@ export interface PrepareOpts {
   pinHead?: string;
   /** The head the alert findings have already been posted for, so no head is posted to twice. */
   alreadyPostedHead?: string | null;
+  /** Why the reviewer's own rules flagged this one, when they did: a reason for an alert of itself. */
+  triageReason?: string | null;
 }
 
 export async function preparePr(snapshot: PrSnapshot, config: InboxConfig, deps: PrepareDeps, opts: PrepareOpts = {}): Promise<PrepareResult> {
@@ -171,6 +173,7 @@ export async function preparePr(snapshot: PrSnapshot, config: InboxConfig, deps:
         snapshot, worktreePath: dest, port: server.port, alertWhen: config.alertWhen,
         filter: opts.bumped ? '' : config.filter, mcpAllow: config.agent.mcpAllow, contextPath,
         postPrefix: config.postAlerts ? config.postPrefix : null,
+        triageReason: opts.triageReason ?? null,
       }),
       cwd: dest,
       logPath,

@@ -19,11 +19,18 @@ function agentConfig(): AgentConfig {
 let root: string;
 let origDataDir: string | undefined;
 
+/** What a forge answers when nothing is watched, so no test reaches a repository listing. */
+const noTriage = {
+  listOpenPrs: () => Promise.resolve([]),
+  prDiff: () => Promise.resolve(''),
+};
+
 /** A forge that lists nothing, so a tick does no forge work and no preparation. */
 const emptyForge: Forge = {
   viewerLogin: () => Promise.resolve('me'),
   searchReviewRequested: () => Promise.resolve([]),
   viewPr: () => Promise.resolve(null),
+  ...noTriage,
 };
 
 function snapshot(number: number, additions: number): PrSnapshot {
@@ -65,6 +72,7 @@ function config(port: number) {
     pollMinutes: 5, port, reposDir: join(root, 'repos'), worktreesDir: join(root, 'inbox', 'worktrees'),
     filter: '', skipTitles: [], alertWhen: '', alertPaths: [], postAlerts: false,
     postPrefix: '[not yet checked by human]', postFooter: '', agent: agentConfig(), validate: { model: null, timeoutMinutes: 15, maxBudgetUsd: null },
+    triage: { repos: [], bodyPatterns: [], model: null, maxDiffKb: 150, maxBudgetUsd: 0.25 },
     waitForCi: false, prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10,
   };
 }
@@ -117,6 +125,39 @@ describe('runDaemon singleton and reclaim ordering', () => {
     }
   });
 
+  it('watches the repositories the config names, and prepares what its rules flag', async () => {
+    const store = new InboxStore(join(root, 'inbox', 'inbox.sqlite'));
+    const watched = snapshot(9, 3);
+    const listed: string[] = [];
+    const forge: Forge = {
+      viewerLogin: () => Promise.resolve('me'),
+      searchReviewRequested: () => Promise.resolve([]),
+      viewPr: () => Promise.resolve(watched),
+      listOpenPrs: repo => {
+        listed.push(repo);
+        return Promise.resolve([{
+          owner: 'o', repo: 'r', number: 9, title: 'T9', body: '* platform - risk level: high',
+          author: 'alice', isBot: false, url: watched.url, updatedAt: 'now',
+        }]);
+      },
+      prDiff: () => Promise.resolve(''),
+    };
+    const watching = {
+      ...config(6005),
+      triage: { repos: ['o/r'], bodyPatterns: ['^\\* platform - risk level: high$'], model: null, maxDiffKb: 150, maxBudgetUsd: 0.25 },
+    };
+    const handle = await runDaemon(store, watching, process.execPath, 'unused-entry', () => {}, {
+      once: true, forge, prepare: snap => Promise.resolve(preparedResult(snap)),
+    });
+    await handle.stop();
+
+    expect(listed).toEqual(['o/r']);
+    const reopened = new InboxStore(join(root, 'inbox', 'inbox.sqlite'));
+    expect(reopened.get('o/r#9')).toMatchObject({ status: 'prepared', triageReason: '* platform - risk level: high' });
+    expect(reopened.triagePass()).toMatchObject({ watched: 1, quiet: 0 });
+    reopened.close();
+  });
+
   it('answers /api/inbox once bound', async () => {
     const store = new InboxStore(join(root, 'inbox', 'inbox.sqlite'));
     const handle = await runDaemon(store, config(6004), process.execPath, 'unused-entry', () => {}, { forge: emptyForge });
@@ -147,6 +188,7 @@ describe('runDaemon singleton and reclaim ordering', () => {
       viewerLogin: () => Promise.resolve('me'),
       searchReviewRequested: () => { searches++; return Promise.resolve([{ owner: 'o', repo: 'r', number: 1 }]); },
       viewPr: async () => { await firstView; return snap; },
+      ...noTriage,
     };
     const handle = await runDaemon(store, config(6005), process.execPath, 'unused-entry', () => {}, { forge });
     try {
@@ -175,6 +217,7 @@ describe('runDaemon singleton and reclaim ordering', () => {
       viewerLogin: () => Promise.resolve('me'),
       searchReviewRequested: () => Promise.resolve([{ owner: 'o', repo: 'r', number: 1 }, { owner: 'o', repo: 'r', number: 2 }]),
       viewPr: ref => Promise.resolve(ref.number === 1 ? first : second),
+      ...noTriage,
     };
     // The tick's own preparation of #1 is held open; the bumped one must not wait for it.
     const started: number[] = [];
@@ -245,6 +288,7 @@ describe('runDaemon singleton and reclaim ordering', () => {
       viewerLogin: () => Promise.resolve('me'),
       searchReviewRequested: () => Promise.resolve([{ owner: 'o', repo: 'r', number: 1 }]),
       viewPr: () => Promise.resolve(snap),
+      ...noTriage,
     };
     const handle = await runDaemon(store, config(6006), process.execPath, 'unused-entry', () => {}, { forge });
     try {

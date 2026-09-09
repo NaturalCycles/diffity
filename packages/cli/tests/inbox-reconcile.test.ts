@@ -16,7 +16,7 @@ function existing(over: Partial<InboxPr> = {}): InboxPr {
   return {
     id: 'o/r#1', owner: 'o', repo: 'r', number: 1, title: 'A change', url: 'https://github.com/o/r/pull/1',
     author: 'alice', isDraft: false, headSha: 'aaa', baseRef: 'main', additions: 10, deletions: 2, changedFiles: 3,
-    ciState: null, createdAt: null, updatedAt: null, bumpedAt: null, summary: null, alert: null, alertFindings: [], autoPosted: null, requested: true, status: 'prepared', statusReason: null, attempts: 0, preparedHeadSha: 'aaa', preparedAt: '2026-09-02T09:00:00Z',
+    ciState: null, createdAt: null, updatedAt: null, bumpedAt: null, summary: null, alert: null, alertFindings: [], autoPosted: null, triageReason: null, requested: true, status: 'prepared', statusReason: null, attempts: 0, preparedHeadSha: 'aaa', preparedAt: '2026-09-02T09:00:00Z',
     bundlePath: '/b.json', worktreePath: '/wt', logPath: '/l.log', firstSeenAt: 'x', lastSeenAt: 'y', ...over,
   };
 }

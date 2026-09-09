@@ -162,6 +162,12 @@ export function inboxPage(): string {
     <label>Alert me if a changed file matches (one glob per line):
       <textarea id="alertPaths" rows="3" placeholder="e.g. packages/shared/src/model/** or **/dbref/**"></textarea>
     </label>
+    <label>Watch every open pull request of these repositories (one owner/repo per line):
+      <textarea id="triageRepos" rows="2" placeholder="e.g. NaturalCycles/NCBackend3 (empty: only what asks for you)"></textarea>
+    </label>
+    <label>Flag a watched pull request if its description matches (one regular expression per line, multiline):
+      <textarea id="triageBodyPatterns" rows="3" placeholder="e.g. ^\\* (platform|algo-data) - risk level: high$"></textarea>
+    </label>
     <label>MCP tools the review agent may use, one per line:
       <textarea id="agentMcpAllow" rows="3" placeholder="e.g. mcp__claude_ai_Atlassian__getJiraIssue (empty: no MCP servers at all)"></textarea>
     </label>
@@ -183,6 +189,7 @@ export function inboxPage(): string {
       <label>Checking model<input id="validateModel" type="text" placeholder="off"></label>
       <label>Checking timeout (minutes)<input id="validateTimeoutMinutes" type="number" min="1" step="1"></label>
       <label>Checking budget per run ($)<input id="validateMaxBudgetUsd" type="number" min="0.5" step="0.5" placeholder="uncapped"></label>
+      <label>Triage model<input id="triageModel" type="text" placeholder="rules only"></label>
       <label class="check"><input id="live" type="checkbox"> Park a live agent on opened reviews</label>
       <label class="check"><input id="waitForCi" type="checkbox"> Hold a pull request until its CI has passed</label>
     </div>
@@ -276,6 +283,7 @@ export function inboxPage(): string {
       '<span class="title"><div><span class="repo">' + esc(r.repo) + '#' + r.number + '</span> ' +
       '<span class="name">' + esc(r.title) + '</span></div>' +
       metaLine(['by ' + esc(r.author), r.changedFiles + ' file(s)', esc(r.summary || ''), esc(r.alert || ''),
+        r.triageReason ? 'flagged: ' + esc(r.triageReason) : '',
         findingsLabel(r), postedLabel(r), spendLabel(r), times(r)], r.spend ? r.spend.detail : '') + '</span>' +
       (r.alert ? '<span class="badge alert" title="' + esc(r.alert) + '">alert</span>' : '') +
       (r.stale ? '<span class="badge stale">stale</span>' : '') +
@@ -325,13 +333,15 @@ export function inboxPage(): string {
   }
 
   // A queue row. One with an agent on it says so and pulses while it runs; the bump that asked for
-  // it is spent the moment it starts, so only a row still waiting its turn reads as bumped.
+  // it is spent the moment it starts, so only a row still waiting its turn reads as bumped. A
+  // flagged one says so instead of plain 'queued': that is why it is ahead of the rest.
   function workingRow(r) {
     const busy = r.status === 'preparing';
+    const flagged = !busy && r.status === 'queued' && !r.bumped && r.triageReason;
     const label = busy
       ? (r.bumped ? 'preparing \\u00b7 bumped' : 'preparing')
-      : (r.bumped && r.status === 'queued' ? 'bumped' : r.status);
-    return plainRow(r, busy ? 'work busy' : 'work', label, busy);
+      : (r.bumped && r.status === 'queued' ? 'bumped' : flagged ? 'flagged' : r.status);
+    return plainRow(r, busy ? 'work busy' : flagged ? 'alert' : 'work', label, busy);
   }
 
   const BUMP_TITLE = 'Prepare this one now: at once and beside whatever is being prepared, past the auto-prepare count, the skips and the CI hold set aside';
@@ -453,6 +463,10 @@ export function inboxPage(): string {
       el('skipTitles').value = (settings.skipTitles || []).join('\\n');
       el('alertWhen').value = settings.alertWhen;
       el('alertPaths').value = (settings.alertPaths || []).join('\\n');
+      const triage = settings.triage || {};
+      el('triageRepos').value = (triage.repos || []).join('\\n');
+      el('triageBodyPatterns').value = (triage.bodyPatterns || []).join('\\n');
+      el('triageModel').value = triage.model || '';
       el('postAlerts').checked = settings.postAlerts;
       el('postPrefix').value = settings.postPrefix || '';
       el('postFooter').value = settings.postFooter || '';
@@ -503,6 +517,14 @@ export function inboxPage(): string {
         timeoutMinutes: Number(el('validateTimeoutMinutes').value),
         maxBudgetUsd: checkBudget === '' ? null : Number(checkBudget),
       },
+      triage: {
+        repos: el('triageRepos').value.split('\\n').map(line => line.trim()).filter(Boolean),
+        bodyPatterns: el('triageBodyPatterns').value.split('\\n').map(line => line.trim()).filter(Boolean),
+        model: el('triageModel').value.trim() || null,
+        // Not editable here; sent back as they came so a save does not drop them.
+        maxDiffKb: settings.triage ? settings.triage.maxDiffKb : 150,
+        maxBudgetUsd: settings.triage ? settings.triage.maxBudgetUsd : null,
+      },
     };
     const res = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next) });
     if (!res.ok) {
@@ -539,6 +561,7 @@ export function inboxPage(): string {
       el('foot').textContent = [
         'Updated ' + new Date().toLocaleTimeString() + (view.lastPollAt ? ' \\u00b7 last poll ' + ago(view.lastPollAt) : ''),
         runsLabel(view.runs),
+        view.triage ? view.triage.watched + ' watched \\u00b7 ' + view.triage.quiet + ' quiet' : '',
         view.pausedUntil ? 'preparing paused until ' + hhmm(view.pausedUntil) + ' \\u2014 Claude session limit' : '',
       ].filter(Boolean).join(' \\u00b7 ');
     } catch (err) {

@@ -15,6 +15,8 @@ export interface PromptContext {
   contextPath: string | null;
   /** What an earlier automated pre-review's comments open with; null while nothing is posted. */
   postPrefix: string | null;
+  /** Why the reviewer's own rules flagged this pull request; null when nothing flagged it. */
+  triageReason: string | null;
 }
 
 /**
@@ -23,7 +25,7 @@ export interface PromptContext {
  * a finished review from a deliberate skip.
  */
 export function composePrompt(ctx: PromptContext): string {
-  const { snapshot, worktreePath, port, filter, alertWhen, mcpAllow, contextPath, postPrefix } = ctx;
+  const { snapshot, worktreePath, port, filter, alertWhen, mcpAllow, contextPath, postPrefix, triageReason } = ctx;
   // The title, author and base come from the pull request, so they are the author's text, not the
   // reviewer's instructions; presented as data and collapsed to one line so nothing in them reads
   // as a new directive.
@@ -106,14 +108,24 @@ export function composePrompt(ctx: PromptContext): string {
     '',
   );
 
-  if (alertWhen.trim()) {
-    lines.push(
-      'Once the review is prepared, decide whether this pull request needs the reviewer\'s attention',
-      'now rather than in turn, using their own words:',
-      '',
-      indent(alertWhen.trim()),
-      '',
-    );
+  if (alertWhen.trim() || triageReason) {
+    if (alertWhen.trim()) {
+      lines.push(
+        'Once the review is prepared, decide whether this pull request needs the reviewer\'s attention',
+        'now rather than in turn, using their own words:',
+        '',
+        indent(alertWhen.trim()),
+        '',
+      );
+    }
+    if (triageReason) {
+      lines.push(
+        `The reviewer's own rules flagged this pull request: \`${oneLine(triageReason)}\`.`,
+        'That is already a reason for ALERT; print it as the reason, and name the findings that bear',
+        'it out when you have them.',
+        '',
+      );
+    }
     if (postPrefix) {
       lines.push(
         `A comment whose body begins with \`${oneLine(postPrefix)}\` is an earlier automated pre-review.`,
@@ -123,13 +135,15 @@ export function composePrompt(ctx: PromptContext): string {
       );
     }
     lines.push(
-      'If it does, print this line, before the final line below:',
+      triageReason
+        ? 'Print the alert as this line, before the final line below:'
+        : 'If it does, print this line, before the final line below:',
       '  ALERT: <short reason>',
       'and, when particular findings are the reason, a second line naming them:',
       '  ALERT-FINDINGS: <thread id> <thread id> \u2026',
       'The ids are the ones `diffity agent comment` printed ("Created thread cf15e689"), separated',
       'by spaces; name the findings the author should see now.',
-      'If it does not, print nothing about it.',
+      ...(triageReason ? [] : ['If it does not, print nothing about it.']),
       '',
     );
   }

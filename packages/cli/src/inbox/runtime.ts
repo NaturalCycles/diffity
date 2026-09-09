@@ -4,12 +4,16 @@ import type { LiveRequest } from '@diffity/api';
 import { createReview, fetchPrContext, type PrSnapshot } from '@diffity/github';
 import { createWriteStream, mkdirSync, readFileSync, rmSync, writeFileSync, type WriteStream } from 'node:fs';
 import { dirname, join } from 'node:path';
-import type { ExportOpts, MarkPostedOpts, PrepareDeps, RunAgentOpts, ServerHandle } from './prepare.js';
+import { logsDir, type ExportOpts, type MarkPostedOpts, type PrepareDeps, type RunAgentOpts, type ServerHandle } from './prepare.js';
 import type { InboxConfig } from './config.js';
 import { buildAgentArgv, skillBody } from './agent-argv.js';
-import { parseAgentOutput } from './agent-output.js';
+import { parseAgentOutput, rateLimitOf } from './agent-output.js';
 import { parseAwaitOutcome, type AttendantDeps } from './attendant.js';
 import { prId, runRecordOf, type RunRecord } from './store.js';
+import { triageVerdictOf } from './triage.js';
+import { buildTriageArgv, composeTriagePrompt, TRIAGE_TIMEOUT_MINUTES } from './triage-agent.js';
+import type { TriageAgentInput, TriageAgentResult } from './tick.js';
+import { inboxDir } from './paths.js';
 import { parseThreadList, type ReviewThread } from './validate.js';
 import { diffityDir } from '../registry.js';
 
@@ -83,6 +87,63 @@ async function writePrContext(snapshot: PrSnapshot, dataDir: string, log: (messa
     log(`could not read the discussion on ${prId(snapshot)}: ${err instanceof Error ? err.message : err}`);
     return null;
   }
+}
+
+/**
+ * The cheap look at a watched pull request, run as an agent of its own: no tools, none of the
+ * reviewer's settings, the forge's credentials stripped like every other agent the daemon runs, and
+ * a few minutes at most. Nothing it comes to is a failure of the pull request's — a run that timed
+ * out, hit its budget or answered with nothing usable leaves it quiet and says so in the log.
+ */
+export function realTriageAgent(
+  config: InboxConfig,
+  log: (message: string) => void,
+  inflight: Inflight = noneInflight(),
+): (input: TriageAgentInput) => Promise<TriageAgentResult> {
+  return async input => {
+    const { snapshot } = input;
+    // Its own directory, shared by every triage: the agent has no tools and leaves nothing behind,
+    // but it is still spawned there and given an empty gh config inside it.
+    const dataDir = join(inboxDir(), 'data', 'triage');
+    mkdirSync(dataDir, { recursive: true });
+    const logPath = join(logsDir(), `${snapshot.owner}-${snapshot.repo}-${snapshot.number}.triage.log`);
+    const startedAt = new Date().toISOString();
+    try {
+      const { stdout, timedOut } = await runAgent({
+        argv: buildTriageArgv(config.triage),
+        prompt: composeTriagePrompt({
+          snapshot, diff: input.diff, alertWhen: input.alertWhen, maxDiffKb: config.triage.maxDiffKb,
+        }),
+        cwd: dataDir,
+        logPath,
+        timeoutMs: TRIAGE_TIMEOUT_MINUTES * 60_000,
+      }, dataDir, [], inflight);
+      const endedAt = new Date().toISOString();
+      if (timedOut) {
+        return { reason: null, run: { startedAt, endedAt, stats: null, outcome: 'timeout', note: `the triage agent did not finish within ${TRIAGE_TIMEOUT_MINUTES} minutes` } };
+      }
+      const parsed = parseAgentOutput(stdout);
+      const ran = { startedAt, endedAt, stats: parsed.stats };
+      if (parsed.stats?.subtype === 'error_max_budget_usd') {
+        const budget = config.triage.maxBudgetUsd;
+        return { reason: null, run: { ...ran, outcome: 'failed', note: budget === null ? 'the triage agent hit its budget' : `the triage agent hit its budget of $${budget}` } };
+      }
+      // Not a pause: a triage is not a review anybody is waiting for, so the limit costs this one
+      // pull request its look rather than holding the whole queue.
+      if (rateLimitOf(parsed.text, new Date(endedAt))) {
+        return { reason: null, run: { ...ran, outcome: 'failed', note: 'the triage agent hit the Claude session limit' } };
+      }
+      const verdict = triageVerdictOf(parsed.text);
+      if (verdict.kind === 'missing') {
+        return { reason: null, run: { ...ran, outcome: 'failed', note: 'the triage agent ended without a TRIAGE line' } };
+      }
+      return { reason: verdict.kind === 'flag' ? verdict.reason : null, run: { ...ran, outcome: 'triaged', note: null } };
+    } catch (err) {
+      const note = `the triage agent could not be run: ${err instanceof Error ? err.message : err}`;
+      log(`${prId(snapshot)}: ${note}`);
+      return { reason: null, run: { startedAt, endedAt: new Date().toISOString(), stats: null, outcome: 'failed', note } };
+    }
+  };
 }
 
 interface RegistryRow { pid: number; port: number }

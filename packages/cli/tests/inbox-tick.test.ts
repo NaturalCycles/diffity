@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { InboxStore, prId } from '../src/inbox/store.js';
-import { prepareBumped, runTick, type Forge, type TickDeps } from '../src/inbox/tick.js';
+import { prepareBumped, runTick, type Forge, type TickDeps, type TriageAgentResult } from '../src/inbox/tick.js';
 import { buildView } from '../src/inbox/view.js';
 import { localHhMm } from '../src/inbox/runs.js';
-import type { PrRef, PrSnapshot } from '@diffity/github';
+import type { PrRef, PrSnapshot, TriageCandidate } from '@diffity/github';
 import type { PrepareResult, RunLog } from '../src/inbox/prepare.js';
+import type { TriageConfig } from '../src/inbox/config.js';
 
 function snapshot(over: Partial<PrSnapshot> = {}): PrSnapshot {
   return {
@@ -34,11 +35,26 @@ class FakeForge implements Forge {
   requested: PrRef[] = [];
   snapshots = new Map<string, PrSnapshot | null>();
   views: string[] = [];
+  /** What each watched repository lists, and which listings were asked for. */
+  open = new Map<string, TriageCandidate[]>();
+  listed: string[] = [];
+  /** Repositories the forge refuses to list, so a pass can be tested against a failure. */
+  failList = new Set<string>();
+  diffs = new Map<string, string>();
+  diffed: string[] = [];
 
   set(snap: PrSnapshot, listed = true): void {
     this.snapshots.set(prId(snap), snap);
     if (listed) {
       this.requested.push({ owner: snap.owner, repo: snap.repo, number: snap.number });
+    }
+  }
+
+  /** A pull request a watched repository lists, with the snapshot a triage would read for it. */
+  watch(repo: string, candidate: TriageCandidate, snap: PrSnapshot | null = null): void {
+    this.open.set(repo, [...(this.open.get(repo) ?? []), candidate]);
+    if (snap) {
+      this.snapshots.set(prId(snap), snap);
     }
   }
 
@@ -48,6 +64,29 @@ class FakeForge implements Forge {
     this.views.push(prId(ref));
     return Promise.resolve(this.snapshots.get(prId(ref)) ?? null);
   }
+  listOpenPrs(repo: string) {
+    this.listed.push(repo);
+    return this.failList.has(repo)
+      ? Promise.reject(new Error(`gh search prs failed: no access to ${repo}`))
+      : Promise.resolve(this.open.get(repo) ?? []);
+  }
+  prDiff(ref: PrRef) {
+    this.diffed.push(prId(ref));
+    return Promise.resolve(this.diffs.get(prId(ref)) ?? '');
+  }
+}
+
+/** One open pull request of a watched repository, as the repository-wide search reports it. */
+function candidate(over: Partial<TriageCandidate> = {}): TriageCandidate {
+  return {
+    owner: 'o', repo: 'r', number: 9, title: 'A watched change', body: '', author: 'alice',
+    isBot: false, url: 'https://github.com/o/r/pull/9', updatedAt: '2026-09-02T10:00:00Z', ...over,
+  };
+}
+
+/** The triage off, as it ships; a test that wants it names its own repositories. */
+function triageConfig(over: Partial<TriageConfig> = {}): TriageConfig {
+  return { repos: [], bodyPatterns: [], model: null, maxDiffKb: 150, maxBudgetUsd: 0.25, ...over };
 }
 
 let store: InboxStore;
@@ -57,6 +96,8 @@ let bumpedFlags: boolean[];
 let removed: string[];
 let pauses: string[];
 let prepareResult: (snap: PrSnapshot) => PrepareResult;
+let triageResult: (snap: PrSnapshot) => TriageAgentResult;
+let triaged: string[];
 
 function deps(over: Partial<TickDeps> = {}): TickDeps {
   return {
@@ -70,6 +111,9 @@ function deps(over: Partial<TickDeps> = {}): TickDeps {
     waitForCi: false,
     skipTitles: [],
     alertPaths: [],
+    alertWhen: '',
+    triage: triageConfig(),
+    triageAgent: input => { triaged.push(prId(input.snapshot)); return Promise.resolve(triageResult(input.snapshot)); },
     agentModel: 'the-configured-model',
     validateModel: 'the-checking-model',
     pauseUntil: until => { pauses.push(until); },
@@ -84,6 +128,8 @@ beforeEach(() => {
   bumpedFlags = [];
   removed = [];
   pauses = [];
+  triaged = [];
+  triageResult = () => ({ reason: null, run: { startedAt: '2026-09-02T11:59:00.000Z', endedAt: '2026-09-02T12:00:00.000Z', stats: null, outcome: 'triaged', note: null } });
   prepareResult = (snap) => ({
     kind: 'prepared', headSha: snap.headSha, bundlePath: `/b/${snap.number}.json`,
     worktree: `/wt/${snap.number}`, logPath: `/l/${snap.number}.log`, at: '2026-09-02T12:00:00.000Z',
@@ -1003,5 +1049,423 @@ describe('a pull request the daemon posted the alert findings to', () => {
     expect(prepared).toEqual([]);
     expect(store.get('o/r#1')!.statusReason).toBe('waiting: CI running (1 checks)');
     expect(removed).toEqual([]);
+  });
+});
+
+describe('the triage pass over a watched repository', () => {
+  /** The generated block NCBackend3 puts in every description, at the level the pattern flags. */
+  const RISK_HIGH = 'Impacted code areas:\n* platform - risk level: high\n* translations - risk level: low';
+  const HIGH = '^\\* (platform|algo-data) - risk level: high$';
+
+  /** The triage on for this repository, with whatever rules the test is about. */
+  function watching(over: Partial<TriageConfig> = {}): Partial<TickDeps> {
+    return { triage: triageConfig({ repos: ['o/r'], ...over }) };
+  }
+
+  it('runs nothing at all, and says nothing, while no repository is watched', async () => {
+    forge.watch('o/r', candidate({ body: RISK_HIGH }), snapshot({ number: 9 }));
+    await runTick(store, deps());
+
+    expect(forge.listed).toEqual([]);
+    expect(store.get('o/r#9')).toBeNull();
+    expect(buildView(store, 'http://localhost:5390', '2026-09-02T12:00:00.000Z').triage).toBeNull();
+  });
+
+  it('flags a body-pattern hit, takes it into the inbox and prepares it, past the auto-prepare count', async () => {
+    forge.set(snapshot({ number: 1 }));
+    await runTick(store, deps({ maxPrepared: 1, ...watching({ bodyPatterns: [HIGH] }) }));
+    expect(store.get('o/r#1')!.status).toBe('prepared');
+
+    forge.watch('o/r', candidate({ number: 9, body: RISK_HIGH }), snapshot({ number: 9, headSha: 'ccc' }));
+    prepared = [];
+    await runTick(store, deps({ maxPrepared: 1, ...watching({ bodyPatterns: [HIGH] }) }));
+
+    expect(prepared).toEqual(['o/r#9']);
+    const pr = store.get('o/r#9')!;
+    expect(pr.triageReason).toBe('* platform - risk level: high');
+    expect(pr.status).toBe('prepared');
+    expect(pr.requested).toBe(false);
+    expect(store.triageOf('o/r#9')).toMatchObject({ outcome: 'alert', reason: '* platform - risk level: high', headSha: 'ccc' });
+  });
+
+  it('hands the preparing agent the reason, and reads as flagged while it waits its turn', async () => {
+    forge.watch('o/r', candidate({ number: 9, body: RISK_HIGH }), snapshot({ number: 9 }));
+    const reasons: (string | null)[] = [];
+    await runTick(store, deps({
+      ...watching({ bodyPatterns: [HIGH] }),
+      prepare: (snap, opts) => {
+        reasons.push(opts.triageReason);
+        // Read while the preparation runs, which is what the page shows.
+        expect(store.get(prId(snap))!.status).toBe('preparing');
+        return Promise.resolve(prepareResult(snap));
+      },
+    }));
+
+    expect(reasons).toEqual(['* platform - risk level: high']);
+  });
+
+  it('prepares a flagged one before the ordinary queue, and a bumped one before that', async () => {
+    forge.set(snapshot({ number: 2, additions: 1, deletions: 0 }));
+    forge.set(snapshot({ number: 3, additions: 2, deletions: 0 }));
+    forge.watch('o/r', candidate({ number: 9, body: RISK_HIGH }), snapshot({ number: 9, additions: 900, deletions: 0 }));
+    store.observe(snapshot({ number: 3 }), true, '2026-09-02T11:00:00.000Z');
+    store.bump('o/r#3', '2026-09-02T11:30:00.000Z');
+
+    await runTick(store, deps(watching({ bodyPatterns: [HIGH] })));
+
+    expect(prepared).toEqual(['o/r#3', 'o/r#9', 'o/r#2']);
+  });
+
+  it('costs nothing on a pull request the rules say nothing about, and does not look again', async () => {
+    forge.watch('o/r', candidate({ number: 9, body: 'Impacted code areas:\n* platform - risk level: medium' }), snapshot({ number: 9 }));
+    await runTick(store, deps(watching({ bodyPatterns: [HIGH] })));
+
+    // No detail view, no agent, no row: the description in the listing was enough to decide.
+    expect(forge.views).toEqual([]);
+    expect(prepared).toEqual([]);
+    expect(store.get('o/r#9')).toBeNull();
+    expect(store.triageOf('o/r#9')).toMatchObject({ outcome: 'none', reason: null, headSha: null });
+    const first = buildView(store, 'http://localhost:5390', '2026-09-02T12:00:00.000Z').triage;
+    expect(first).toMatchObject({ watched: 1, quiet: 1 });
+
+    await runTick(store, deps(watching({ bodyPatterns: [HIGH] })));
+    expect(forge.views).toEqual([]);
+    expect(buildView(store, 'http://localhost:5390', '2026-09-02T12:00:00.000Z').triage).toMatchObject({ watched: 1, quiet: 1 });
+  });
+
+  it('spends nothing on a bot, the reviewer\'s own, or a title they said to skip', async () => {
+    forge.watch('o/r', candidate({ number: 9, author: 'me', body: RISK_HIGH }));
+    forge.watch('o/r', candidate({ number: 10, isBot: true, author: 'ncrobot[bot]', body: RISK_HIGH }));
+    forge.watch('o/r', candidate({ number: 11, title: 'Release 1.2.3', body: RISK_HIGH }));
+
+    await runTick(store, deps({ skipTitles: ['Release'], ...watching({ bodyPatterns: [HIGH] }) }));
+
+    expect(prepared).toEqual([]);
+    expect(forge.views).toEqual([]);
+    expect(store.triageOf('o/r#9')).toMatchObject({ outcome: 'skipped', reason: 'your own pull request' });
+    expect(store.triageOf('o/r#10')).toMatchObject({ outcome: 'skipped', reason: 'bot author (ncrobot[bot])' });
+    expect(store.triageOf('o/r#11')).toMatchObject({ outcome: 'skipped', reason: 'title matches /Release/' });
+    expect(buildView(store, 'http://localhost:5390', '2026-09-02T12:00:00.000Z').triage).toMatchObject({ watched: 3, quiet: 0 });
+  });
+
+  it('reads the changed paths once when the reviewer has paths, and flags on one of them', async () => {
+    forge.watch('o/r', candidate({ number: 9 }), snapshot({
+      number: 9, files: [{ path: 'src/a.ts', additions: 1, deletions: 0 }, { path: 'packages/shared/src/model/user.ts', additions: 2, deletions: 0 }],
+    }));
+
+    await runTick(store, deps({ alertPaths: ['packages/shared/src/model/**'], ...watching() }));
+
+    expect(forge.views).toEqual(['o/r#9']);
+    expect(store.get('o/r#9')!.triageReason).toBe('touches packages/shared/src/model/user.ts');
+    expect(prepared).toEqual(['o/r#9']);
+  });
+
+  it('queues a flagged one with the rule as its reason, for the page to say why', async () => {
+    forge.watch('o/r', candidate({ number: 9, body: RISK_HIGH }), snapshot({ number: 9 }));
+    // Shutting down, so the row is left as the pass queued it rather than prepared away.
+    await runTick(store, deps({ shouldContinue: () => false, ...watching({ bodyPatterns: [HIGH] }) }));
+
+    const pr = store.get('o/r#9')!;
+    expect(pr.status).toBe('queued');
+    expect(pr.statusReason).toBe('triage: * platform - risk level: high');
+    expect(prepared).toEqual([]);
+    const view = buildView(store, 'http://localhost:5390', '2026-09-02T12:00:00.000Z');
+    expect(view.working.map(row => [row.id, row.triageReason])).toEqual([['o/r#9', '* platform - risk level: high']]);
+  });
+
+  it('leaves a pull request the inbox proper already owns entirely alone', async () => {
+    forge.set(snapshot({ number: 9, body: RISK_HIGH }));
+    forge.watch('o/r', candidate({ number: 9, body: RISK_HIGH }), snapshot({ number: 9, body: RISK_HIGH }));
+    await runTick(store, deps(watching({ bodyPatterns: [HIGH] })));
+    // Decided by the requested loop, not by the pass: the pass records nothing about it.
+    expect(store.triageOf('o/r#9')).toBeNull();
+
+    // Nor once the search has stopped listing it, while the row is still one the inbox is on.
+    forge.requested = [];
+    store.setStatus('o/r#9', 'skipped', 'payments PR');
+    await runTick(store, deps(watching({ bodyPatterns: [HIGH] })));
+    expect(store.triageOf('o/r#9')).toBeNull();
+  });
+
+  it('triages a retired row afresh, as though it had never been seen', async () => {
+    store.observe(snapshot({ number: 9 }), false, '2026-09-02T11:00:00.000Z');
+    store.setStatus('o/r#9', 'hidden', 'review no longer requested');
+    forge.watch('o/r', candidate({ number: 9, body: RISK_HIGH }), snapshot({ number: 9 }));
+
+    await runTick(store, deps(watching({ bodyPatterns: [HIGH] })));
+
+    expect(store.get('o/r#9')!.status).toBe('prepared');
+    expect(store.get('o/r#9')!.triageReason).toBe('* platform - risk level: high');
+  });
+
+  it('leaves a pull request it could not read for the next poll, with nothing recorded', async () => {
+    forge.watch('o/r', candidate({ number: 9 }));
+    const logs: string[] = [];
+
+    await runTick(store, deps({ alertPaths: ['src/**'], log: m => logs.push(m), ...watching() }));
+
+    expect(store.triageOf('o/r#9')).toBeNull();
+    expect(store.get('o/r#9')).toBeNull();
+    expect(logs.some(line => line.includes('could not read o/r#9 to triage it'))).toBe(true);
+  });
+
+  it('says which listing it could not read, and carries on with the rest', async () => {
+    forge.failList.add('o/bad');
+    forge.watch('o/r', candidate({ number: 9, body: RISK_HIGH }), snapshot({ number: 9 }));
+    const logs: string[] = [];
+
+    await runTick(store, deps({ log: m => logs.push(m), triage: triageConfig({ repos: ['o/bad', 'o/r'], bodyPatterns: [HIGH] }) }));
+
+    expect(logs.some(line => line.includes('could not list the open pull requests of o/bad'))).toBe(true);
+    expect(prepared).toEqual(['o/r#9']);
+  });
+});
+
+describe('the triage model, for what the rules miss', () => {
+  const HIGH = '^\\* platform - risk level: high$';
+
+  function withModel(over: Partial<TriageConfig> = {}): Partial<TickDeps> {
+    return { triage: triageConfig({ repos: ['o/r'], model: 'haiku', ...over }) };
+  }
+
+  it('is asked only once the rules have missed, and flags what it answers', async () => {
+    forge.watch('o/r', candidate({ number: 9 }), snapshot({ number: 9, headSha: 'ccc' }));
+    forge.diffs.set('o/r#9', 'diff --git a/src/a.ts b/src/a.ts');
+    triageResult = () => ({
+      reason: 'rewrites the temperature pipeline',
+      run: { startedAt: '2026-09-02T11:59:00.000Z', endedAt: '2026-09-02T12:00:00.000Z', stats: null, outcome: 'triaged', note: null },
+    });
+
+    await runTick(store, deps({ alertWhen: 'the change touches the algorithm', ...withModel({ bodyPatterns: [HIGH] }) }));
+
+    expect(triaged).toEqual(['o/r#9']);
+    expect(forge.diffed).toEqual(['o/r#9']);
+    expect(store.get('o/r#9')!.triageReason).toBe('rewrites the temperature pipeline');
+    expect(prepared).toEqual(['o/r#9']);
+    expect(store.runs({ prId: 'o/r#9' }).filter(one => one.phase === 'triage'))
+      .toMatchObject([{ outcome: 'triaged', model: 'haiku', headSha: 'ccc' }]);
+  });
+
+  it('is not asked at all when a rule has already flagged the pull request', async () => {
+    forge.watch('o/r', candidate({ number: 9, body: '* platform - risk level: high' }), snapshot({ number: 9 }));
+    await runTick(store, deps(withModel({ bodyPatterns: [HIGH] })));
+
+    expect(triaged).toEqual([]);
+    expect(store.runs().filter(one => one.phase === 'triage')).toEqual([]);
+    expect(store.get('o/r#9')!.triageReason).toBe('* platform - risk level: high');
+  });
+
+  it('leaves the pull request quiet when it saw no reason, and logs the run either way', async () => {
+    forge.watch('o/r', candidate({ number: 9 }), snapshot({ number: 9, headSha: 'ccc' }));
+    await runTick(store, deps(withModel()));
+
+    expect(triaged).toEqual(['o/r#9']);
+    expect(store.get('o/r#9')).toBeNull();
+    expect(store.triageOf('o/r#9')).toMatchObject({ outcome: 'none', headSha: 'ccc' });
+    expect(store.runs()).toMatchObject([{ phase: 'triage', outcome: 'triaged' }]);
+  });
+
+  it('is not asked again when only the discussion has moved', async () => {
+    forge.watch('o/r', candidate({ number: 9 }), snapshot({ number: 9, headSha: 'ccc' }));
+    await runTick(store, deps(withModel()));
+    expect(triaged).toEqual(['o/r#9']);
+
+    // A comment bumps the pull request's own stamp; the head, which is what the model reads, has not moved.
+    forge.open.set('o/r', [candidate({ number: 9, updatedAt: '2026-09-02T11:30:00Z' })]);
+    await runTick(store, deps(withModel()));
+
+    expect(triaged).toEqual(['o/r#9']);
+    expect(store.triageOf('o/r#9')).toMatchObject({ updatedAt: '2026-09-02T11:30:00Z', outcome: 'none' });
+    expect(store.runs()).toHaveLength(1);
+
+    // A push is a new change, so it is worth asking about again.
+    forge.open.set('o/r', [candidate({ number: 9, updatedAt: '2026-09-02T12:00:00Z' })]);
+    forge.snapshots.set('o/r#9', snapshot({ number: 9, headSha: 'ddd' }));
+    await runTick(store, deps(withModel()));
+    expect(triaged).toEqual(['o/r#9', 'o/r#9']);
+  });
+
+  it('leaves the pull request quiet, and says why, when the run came to nothing usable', async () => {
+    forge.watch('o/r', candidate({ number: 9 }), snapshot({ number: 9 }));
+    triageResult = () => ({
+      reason: null,
+      run: {
+        startedAt: '2026-09-02T11:57:00.000Z', endedAt: '2026-09-02T12:00:00.000Z', stats: null,
+        outcome: 'timeout', note: 'the triage agent did not finish within 3 minutes',
+      },
+    });
+    const logs: string[] = [];
+
+    await runTick(store, deps({ log: m => logs.push(m), ...withModel() }));
+
+    expect(store.get('o/r#9')).toBeNull();
+    expect(store.runs()).toMatchObject([{ phase: 'triage', outcome: 'timeout', note: 'the triage agent did not finish within 3 minutes' }]);
+    expect(logs.some(line => line.includes('o/r#9: triage — the triage agent did not finish'))).toBe(true);
+  });
+
+  it('leaves the pull request quiet when the model itself could not be run', async () => {
+    forge.watch('o/r', candidate({ number: 9 }), snapshot({ number: 9 }));
+    const logs: string[] = [];
+
+    await runTick(store, deps({
+      log: m => logs.push(m),
+      triageAgent: () => Promise.reject(new Error('claude: not found')),
+      ...withModel(),
+    }));
+
+    expect(store.get('o/r#9')).toBeNull();
+    expect(store.runs()).toEqual([]);
+    expect(logs.some(line => line.includes('the triage model could not be run'))).toBe(true);
+  });
+
+  it('asks anyway when the diff could not be read, and says so', async () => {
+    forge.watch('o/r', candidate({ number: 9 }), snapshot({ number: 9 }));
+    const logs: string[] = [];
+    const diffs: string[] = [];
+
+    await runTick(store, deps({
+      log: m => logs.push(m),
+      forge: Object.assign(Object.create(Object.getPrototypeOf(forge)), forge, {
+        prDiff: () => Promise.reject(new Error('gh pr diff failed: no access')),
+      }),
+      triageAgent: input => { diffs.push(input.diff); return Promise.resolve(triageResult(input.snapshot)); },
+      ...withModel(),
+    }));
+
+    expect(diffs).toEqual(['']);
+    expect(logs.some(line => line.includes('the diff could not be read for triage'))).toBe(true);
+  });
+});
+
+describe('a pull request the triage took in', () => {
+  const HIGH = '^\\* platform - risk level: high$';
+
+  /** One flagged, prepared and left waiting for the reviewer, as a first pass leaves it. */
+  async function flagged(): Promise<void> {
+    forge.watch('o/r', candidate({ number: 9, body: '* platform - risk level: high' }), snapshot({ number: 9 }));
+    await runTick(store, deps({ triage: triageConfig({ repos: ['o/r'], bodyPatterns: [HIGH] }) }));
+    expect(store.get('o/r#9')!.status).toBe('prepared');
+  }
+
+  it('stays the reviewer\'s to review, though no search ever listed it', async () => {
+    await flagged();
+    prepared = [];
+    // No triage this time: the row is the inbox's now, so it is the retire loop that has to keep it.
+    await runTick(store, deps());
+
+    const pr = store.get('o/r#9')!;
+    expect(pr.status).toBe('prepared');
+    expect(pr.worktreePath).toBe('/wt/9');
+    expect(removed).toEqual([]);
+    expect(prepared).toEqual([]);
+    const view = buildView(store, 'http://localhost:5390', '2026-09-02T12:00:00.000Z');
+    expect(view.ready.map(row => row.id)).toEqual(['o/r#9']);
+    expect(view.ready[0].triageReason).toBe('* platform - risk level: high');
+  });
+
+  it('re-prepares when the author pushes', async () => {
+    await flagged();
+    forge.snapshots.set('o/r#9', snapshot({ number: 9, headSha: 'ddd' }));
+    prepared = [];
+    await runTick(store, deps());
+
+    expect(prepared).toEqual(['o/r#9']);
+    expect(store.get('o/r#9')!.preparedHeadSha).toBe('ddd');
+  });
+
+  it('holds at its head once the reviewer has dismissed it', async () => {
+    await flagged();
+    store.setStatus('o/r#9', 'dismissed', 'dismissed by the reviewer');
+    prepared = [];
+    await runTick(store, deps());
+
+    expect(store.get('o/r#9')!.status).toBe('dismissed');
+    expect(prepared).toEqual([]);
+  });
+
+  it('becomes handled, and gives up its worktree, once the reviewer reviews it', async () => {
+    await flagged();
+    store.recordHandled({ prId: 'o/r#9', headSha: 'aaa', event: 'APPROVE', reviewUrl: null, at: '2026-09-02T12:30:00.000Z' });
+    await runTick(store, deps());
+
+    const pr = store.get('o/r#9')!;
+    expect(pr.status).toBe('handled');
+    expect(pr.statusReason).toBe('you approved');
+    expect(removed).toEqual(['/wt/9']);
+  });
+
+  it('is retired like any other once it is merged', async () => {
+    await flagged();
+    forge.snapshots.set('o/r#9', snapshot({ number: 9, state: 'MERGED' }));
+    await runTick(store, deps());
+
+    expect(store.get('o/r#9')!.status).toBe('done');
+    expect(removed).toEqual(['/wt/9']);
+  });
+});
+
+describe('the free rules on a pull request the reviewer was asked for', () => {
+  const HIGH = '^\\* platform - risk level: high$';
+
+  it('flags it, says so on the row, and puts it ahead of the ordinary queue', async () => {
+    forge.set(snapshot({ number: 1, additions: 1, deletions: 0 }));
+    forge.set(snapshot({ number: 2, additions: 900, deletions: 0, body: '* platform - risk level: high' }));
+
+    await runTick(store, deps({ triage: triageConfig({ bodyPatterns: [HIGH] }) }));
+
+    expect(prepared).toEqual(['o/r#2', 'o/r#1']);
+    const pr = store.get('o/r#2')!;
+    expect(pr.triageReason).toBe('* platform - risk level: high');
+    expect(store.get('o/r#1')!.triageReason).toBeNull();
+    // No listing was asked for: the rules cost nothing wherever the pull request came from.
+    expect(forge.listed).toEqual([]);
+  });
+
+  it('reads as flagged while it waits, and its reason says which rule it was', async () => {
+    forge.set(snapshot({ number: 2, body: '* platform - risk level: high' }));
+    prepareResult = () => ({ kind: 'failed', failure: 'agent', reason: 'boom', worktree: null, logPath: null, run: run() });
+    await runTick(store, deps({ triage: triageConfig({ bodyPatterns: [HIGH] }) }));
+
+    // The row kept the reason through a failed preparation, so the next one is told it too.
+    expect(store.get('o/r#2')!.triageReason).toBe('* platform - risk level: high');
+  });
+
+  it('takes the reviewer\'s own paths as a reason too, and leaves an unflagged row plainly queued', async () => {
+    forge.set(snapshot({ number: 1, files: [{ path: 'packages/shared/src/model/user.ts', additions: 1, deletions: 0 }] }));
+    forge.set(snapshot({ number: 2 }));
+    prepareResult = () => ({ kind: 'failed', failure: 'agent', reason: 'boom', worktree: null, logPath: null, run: run() });
+
+    await runTick(store, deps({ alertPaths: ['packages/shared/src/model/**'] }));
+
+    expect(store.get('o/r#1')!.triageReason).toBe('touches packages/shared/src/model/user.ts');
+    expect(store.get('o/r#2')!.triageReason).toBeNull();
+    expect(store.get('o/r#2')!.statusReason).toBe('boom');
+  });
+
+  it('jumps the queue but still waits its turn for the prepared pile to clear', async () => {
+    forge.set(snapshot({ number: 1, additions: 1, deletions: 0 }));
+    await runTick(store, deps({ maxPrepared: 1 }));
+    expect(store.get('o/r#1')!.status).toBe('prepared');
+
+    forge.set(snapshot({ number: 2, body: '* platform - risk level: high' }));
+    prepared = [];
+    await runTick(store, deps({ maxPrepared: 1, triage: triageConfig({ bodyPatterns: [HIGH] }) }));
+
+    const pr = store.get('o/r#2')!;
+    expect(prepared).toEqual([]);
+    expect(pr.triageReason).toBe('* platform - risk level: high');
+    expect(pr.statusReason).toBe('waiting: 1 reviews already prepared');
+  });
+
+  it('says nothing about a review already prepared for this head', async () => {
+    forge.set(snapshot({ number: 1, body: '* platform - risk level: high' }));
+    const watching = deps({ triage: triageConfig({ bodyPatterns: [HIGH] }) });
+    await runTick(store, watching);
+    expect(store.get('o/r#1')!.triageReason).toBe('* platform - risk level: high');
+
+    // A second row, flagged after its review was prepared, would be told nothing new.
+    store.setTriageReason('o/r#1', null);
+    await runTick(store, watching);
+    expect(store.get('o/r#1')!.triageReason).toBeNull();
   });
 });

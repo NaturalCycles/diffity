@@ -298,3 +298,107 @@ describe('the preparing pause', () => {
     store.close();
   });
 });
+
+describe('the triage log', () => {
+  it('keeps one decision per pull request, overwritten as the pull request moves', () => {
+    const store = new InboxStore(path);
+    expect(store.triageOf('o/r#1')).toBeNull();
+
+    store.recordTriage({
+      prId: 'o/r#1', updatedAt: '2026-09-02T10:00:00Z', headSha: null, outcome: 'none',
+      reason: null, at: '2026-09-02T12:00:00.000Z',
+    });
+    expect(store.triageOf('o/r#1')).toEqual({
+      prId: 'o/r#1', updatedAt: '2026-09-02T10:00:00Z', headSha: null, outcome: 'none',
+      reason: null, at: '2026-09-02T12:00:00.000Z',
+    });
+
+    store.recordTriage({
+      prId: 'o/r#1', updatedAt: '2026-09-02T11:00:00Z', headSha: 'bbb', outcome: 'alert',
+      reason: 'risk level: high', at: '2026-09-02T13:00:00.000Z',
+    });
+    expect(store.triageOf('o/r#1')).toMatchObject({
+      updatedAt: '2026-09-02T11:00:00Z', headSha: 'bbb', outcome: 'alert', reason: 'risk level: high',
+    });
+    store.close();
+  });
+
+  it('reads an outcome a later build stopped writing as one nothing was made of', () => {
+    const store = new InboxStore(path);
+    store.recordTriage({ prId: 'o/r#1', updatedAt: 'u', headSha: null, outcome: 'wat' as 'none', reason: null, at: 'now' });
+    expect(store.triageOf('o/r#1')!.outcome).toBe('none');
+    store.close();
+  });
+
+  it('keeps why a row was flagged, and hands it back with the row', () => {
+    const store = new InboxStore(path);
+    const pr = store.observe(snapshot(), false, 'now');
+    expect(pr.triageReason).toBeNull();
+
+    store.setTriageReason(pr.id, 'risk level: high');
+    expect(store.get(pr.id)!.triageReason).toBe('risk level: high');
+    // The forge's own word on the pull request leaves the reason alone.
+    expect(store.observe({ ...snapshot(), headSha: 'bbb' }, false, 'later').triageReason).toBe('risk level: high');
+
+    store.setTriageReason(pr.id, null);
+    expect(store.get(pr.id)!.triageReason).toBeNull();
+    store.close();
+  });
+
+  it('adds the reason column to a table created before it existed', () => {
+    const seed = new DatabaseSync(path);
+    seed.exec(`CREATE TABLE inbox_prs (
+      id TEXT PRIMARY KEY, owner TEXT NOT NULL, repo TEXT NOT NULL, number INTEGER NOT NULL,
+      title TEXT NOT NULL, url TEXT NOT NULL, author TEXT NOT NULL, is_draft INTEGER NOT NULL,
+      head_sha TEXT NOT NULL, base_ref TEXT NOT NULL, additions INTEGER NOT NULL, deletions INTEGER NOT NULL,
+      changed_files INTEGER NOT NULL, requested INTEGER NOT NULL, status TEXT NOT NULL, status_reason TEXT,
+      attempts INTEGER NOT NULL DEFAULT 0, prepared_head_sha TEXT, prepared_at TEXT, bundle_path TEXT,
+      worktree_path TEXT, log_path TEXT, first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL)`);
+    seed.exec(`INSERT INTO inbox_prs (id, owner, repo, number, title, url, author, is_draft, head_sha, base_ref,
+      additions, deletions, changed_files, requested, status, first_seen_at, last_seen_at)
+      VALUES ('o/r#1', 'o', 'r', 1, 'T', 'u', 'alice', 0, 'aaa', 'main', 1, 0, 1, 1, 'queued', 'x', 'y')`);
+    seed.close();
+
+    const store = new InboxStore(path);
+    expect(store.get('o/r#1')!.triageReason).toBeNull();
+    store.setTriageReason('o/r#1', 'risk level: high');
+    expect(store.get('o/r#1')!.triageReason).toBe('risk level: high');
+    store.close();
+  });
+
+  it('remembers how the last pass went, and nothing before one has run', () => {
+    const store = new InboxStore(path);
+    expect(store.triagePass()).toBeNull();
+
+    store.recordTriagePass({ watched: 12, quiet: 11, at: '2026-09-02T12:00:00.000Z' });
+    expect(store.triagePass()).toEqual({ watched: 12, quiet: 11, at: '2026-09-02T12:00:00.000Z' });
+
+    store.recordTriagePass({ watched: 13, quiet: 13, at: '2026-09-02T12:05:00.000Z' });
+    expect(store.triagePass()).toEqual({ watched: 13, quiet: 13, at: '2026-09-02T12:05:00.000Z' });
+    store.close();
+  });
+
+  it('reads a pass a previous build wrote in another shape as no pass at all', () => {
+    const store = new InboxStore(path);
+    store.recordTriagePass({ watched: 1, quiet: 1, at: 'now' });
+    store.close();
+
+    const seed = new DatabaseSync(path);
+    seed.prepare("UPDATE inbox_state SET value = 'not json' WHERE key = 'triagePass'").run();
+    seed.close();
+    const reopened = new InboxStore(path);
+    expect(reopened.triagePass()).toBeNull();
+    reopened.close();
+  });
+
+  it('logs a triage run under its own phase', () => {
+    const store = new InboxStore(path);
+    store.recordRun(runRecordOf({
+      prId: 'o/r#9', headSha: 'aaa', phase: 'triage', outcome: 'triaged',
+      startedAt: '2026-09-07T09:00:00.000Z', endedAt: '2026-09-07T09:00:20.000Z',
+      stats: null, configModel: 'haiku',
+    }));
+    expect(store.runs()).toMatchObject([{ phase: 'triage', outcome: 'triaged', model: 'haiku', durationMs: 20_000 }]);
+    store.close();
+  });
+});

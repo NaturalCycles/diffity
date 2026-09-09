@@ -9,7 +9,7 @@ import { worktreePath } from '../src/inbox/worktree.js';
 import { startInboxServer } from '../src/inbox/daemon.js';
 import { InboxStore } from '../src/inbox/store.js';
 import { buildView } from '../src/inbox/view.js';
-import type { AgentConfig, InboxConfig, ValidateConfig } from '../src/inbox/config.js';
+import type { AgentConfig, InboxConfig, TriageConfig, ValidateConfig } from '../src/inbox/config.js';
 import type { PrSnapshot, ReviewResult } from '@diffity/github';
 
 /** The built-in agent settings, fresh each call so a test cannot leak into the next. */
@@ -20,6 +20,11 @@ function agentConfig(): AgentConfig {
 /** The second pass off, as it ships; a test that wants it names its own model. */
 function validateConfig(): ValidateConfig {
   return { model: null, timeoutMinutes: 15, maxBudgetUsd: null };
+}
+
+/** No repository watched, as it ships; a test that wants the triage names its own. */
+function triageConfig(): TriageConfig {
+  return { repos: [], bodyPatterns: [], model: null, maxDiffKb: 150, maxBudgetUsd: 0.25 };
 }
 
 let root: string;
@@ -43,7 +48,8 @@ function config(): InboxConfig {
   return {
     pollMinutes: 5, port: 0, reposDir, worktreesDir, filter: '', skipTitles: [], alertWhen: '', alertPaths: [],
     postAlerts: false, postPrefix: '[not yet checked by human]', postFooter: '',
-    agent: agentConfig(), validate: validateConfig(), waitForCi: false, prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10,
+    agent: agentConfig(), validate: validateConfig(), triage: triageConfig(),
+    waitForCi: false, prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10,
   };
 }
 
@@ -811,6 +817,17 @@ describe('the inbox JSON server', () => {
     prompts = [];
     await preparePr(snapshot(), withFilter, deps(), { bumped: true });
     expect(prompts[0]).not.toContain('Skip payments-focused PRs');
+  });
+
+  it('tells the agent what the reviewer\'s own rules flagged, when they flagged it', async () => {
+    prompts = [];
+    await preparePr(snapshot(), config(), deps(), { triageReason: '* platform - risk level: high' });
+    expect(prompts[0]).toContain('flagged this pull request: `* platform - risk level: high`.');
+    expect(prompts[0]).toContain('That is already a reason for ALERT');
+
+    prompts = [];
+    await preparePr(snapshot(), config(), deps());
+    expect(prompts[0]).not.toContain('flagged this pull request');
   });
 
   it('reads the findings summary from the bundle it wrote and keeps the agent\'s alert', async () => {
