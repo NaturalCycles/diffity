@@ -1,7 +1,7 @@
 import type { PrRef, PrSnapshot, TriageCandidate } from '@diffity/github';
 import { alertForPaths } from './paths-alert.js';
 import { reconcile } from './reconcile.js';
-import { isRetired, prId, prIdToRef, runRecordOf, type Handled, type InboxPr, type InboxStore, type RunOutcome } from './store.js';
+import { isRetired, prId, prIdToRef, runRecordOf, type Handled, type InboxPr, type InboxStore, type RunOutcome, type TriageRecord } from './store.js';
 import { localHhMm } from './runs.js';
 import type { PrepareResult, RunLog } from './prepare.js';
 import type { TriageConfig } from './config.js';
@@ -149,7 +149,7 @@ export async function runTick(store: InboxStore, deps: TickDeps): Promise<void> 
       continue;
     }
     const handled = store.latestHandled(pr.id);
-    const requested = stillTheReviewers(pr, handled, store.triageOf(pr.id)?.at ?? null) && snapshot.state === 'OPEN';
+    const requested = stillTheReviewers(pr, handled, takenInAt(store, pr.id)) && snapshot.state === 'OPEN';
     store.observe(snapshot, requested, deps.now());
     // The CI hold and the title patterns matter only where a preparation could follow, which is
     // the row still asking for the reviewer.
@@ -256,6 +256,9 @@ export async function runTick(store: InboxStore, deps: TickDeps): Promise<void> 
   }
 }
 
+/** How long a look that reached no verdict stands before the next pass tries it again. */
+const TRIAGE_RETRY_MS = 60 * 60_000;
+
 /**
  * The quick look over every watched repository: each open pull request the inbox does not already
  * own is judged, cheaply first, and only a flagged one is taken into the inbox and prepared. A
@@ -273,6 +276,10 @@ async function runTriagePass(
   }
   let watched = 0;
   let quiet = 0;
+  let deferred = 0;
+  // A session limit is what holds every agent run back, the triage model's among them; the rules
+  // still cost nothing, so they run and only the model step waits.
+  const pausedUntil = deps.pausedUntil?.() ?? null;
   for (const repo of deps.triage.repos) {
     let candidates: TriageCandidate[];
     try {
@@ -298,50 +305,88 @@ async function runTriagePass(
         }
         continue;
       }
-      if (last && last.updatedAt === candidate.updatedAt) {
+      if (last && last.updatedAt === candidate.updatedAt && !worthAnotherLook(last, deps.now())) {
         // Decided already, and nothing about the pull request has moved since.
         if (last.outcome === 'none') {
           quiet++;
         }
         continue;
       }
-      const decided = await triageOne(store, deps, candidate, last);
-      if (decided === null) {
+      const decision = await triageOne(store, deps, candidate, last, pausedUntil !== null);
+      if (decision.kind === 'unread') {
         // The detail view failed: nothing is recorded, so the next poll looks again.
         deps.log(`could not read ${id} to triage it; leaving it for the next poll`);
         continue;
       }
+      if (decision.kind === 'deferred') {
+        // Nothing recorded, so the pass after the pause is the one that decides this pull request.
+        deferred++;
+        continue;
+      }
+      if (decision.kind === 'failed') {
+        // A look that reached no verdict is not the same as one that saw nothing: it is kept as
+        // such, so the next pass tries it again rather than reading the pull request as quiet.
+        store.recordTriage({ prId: id, updatedAt: candidate.updatedAt, headSha: null, outcome: 'failed', reason: decision.note, at: deps.now() });
+        continue;
+      }
       store.recordTriage({
-        prId: id, updatedAt: candidate.updatedAt, headSha: decided.snapshot?.headSha ?? null,
-        outcome: decided.reason === null ? 'none' : 'alert', reason: decided.reason, at: deps.now(),
+        prId: id, updatedAt: candidate.updatedAt, headSha: decision.snapshot?.headSha ?? null,
+        outcome: decision.reason === null ? 'none' : 'alert', reason: decision.reason, at: deps.now(),
       });
-      if (decided.reason === null || decided.snapshot === null) {
+      if (decision.reason === null || decision.snapshot === null) {
         quiet++;
         continue;
       }
-      store.observe(decided.snapshot, false, deps.now());
-      store.setStatus(id, 'queued', triageStatusReason(decided.reason));
-      store.setTriageReason(id, decided.reason);
-      ctx.toPrepare.push(decided.snapshot);
+      store.observe(decision.snapshot, false, deps.now());
+      store.setStatus(id, 'queued', triageStatusReason(decision.reason));
+      store.setTriageReason(id, decision.reason);
+      ctx.toPrepare.push(decision.snapshot);
       flagged.add(id);
-      deps.log(`${id} flagged by triage: ${decided.reason}`);
+      deps.log(`${id} flagged by triage: ${decision.reason}`);
     }
+  }
+  if (pausedUntil !== null && deferred > 0) {
+    deps.log(`${deferred} watched pull request(s) left for the next pass: preparing paused until ${localHhMm(pausedUntil)}`);
   }
   store.recordTriagePass({ watched, quiet, at: deps.now() });
   return flagged;
 }
 
 /**
+ * Whether a decision already made about this version of the pull request should be made again: one
+ * that reached no verdict is worth another look after a while, and every other decision stands.
+ */
+function worthAnotherLook(last: TriageRecord, now: string): boolean {
+  if (last.outcome !== 'failed') {
+    return false;
+  }
+  const since = Date.parse(now) - Date.parse(last.at);
+  return Number.isFinite(since) && since >= TRIAGE_RETRY_MS;
+}
+
+/**
+ * What one pass made of one watched pull request: a decision to record, a look that reached no
+ * verdict, a pull request the forge would not describe, or one left for a later pass because the
+ * model it needed cannot run yet.
+ */
+type TriageDecision =
+  | { kind: 'decided'; reason: string | null; snapshot: PrSnapshot | null }
+  | { kind: 'failed'; note: string }
+  | { kind: 'unread' }
+  | { kind: 'deferred' };
+
+/**
  * What this poll makes of one watched pull request: the body patterns cost nothing, the reviewer's
- * paths cost one detail view, and the model — when one is named — costs a run, but only on a head
- * it has not seen. Null when the detail view a rule or the model needed could not be read.
+ * paths cost one detail view, and the model — when one is named and can run — costs a run, but only
+ * on a head it has not seen.
  */
 async function triageOne(
   store: InboxStore,
   deps: TickDeps,
   candidate: TriageCandidate,
   last: { headSha: string | null } | null,
-): Promise<{ reason: string | null; snapshot: PrSnapshot | null } | null> {
+  paused: boolean,
+): Promise<TriageDecision> {
   const ref: PrRef = { owner: candidate.owner, repo: candidate.repo, number: candidate.number };
   let reason = bodyRuleReason(candidate.body, deps.triage.bodyPatterns);
   let snapshot: PrSnapshot | null = null;
@@ -349,38 +394,46 @@ async function triageOne(
   if (reason === null && deps.alertPaths.length > 0) {
     snapshot = await deps.forge.viewPr(ref);
     if (!snapshot) {
-      return null;
+      return { kind: 'unread' };
     }
     reason = alertForPaths(snapshot.files, deps.alertPaths);
   }
   if (reason === null && deps.triage.model !== null) {
+    if (paused) {
+      return { kind: 'deferred' };
+    }
     snapshot ??= await deps.forge.viewPr(ref);
     if (!snapshot) {
-      return null;
+      return { kind: 'unread' };
     }
     // Only the discussion has moved since the last look, and the model reads the change, not the
     // discussion: there is nothing new for it to judge.
     if (last?.headSha === snapshot.headSha) {
-      return { reason: null, snapshot };
+      return { kind: 'decided', reason: null, snapshot };
     }
-    reason = await askTheTriageModel(store, deps, snapshot);
+    const verdict = await askTheTriageModel(store, deps, snapshot);
+    if (verdict.note !== null) {
+      return { kind: 'failed', note: verdict.note };
+    }
+    reason = verdict.reason;
   }
   if (reason !== null) {
     // Read before anything is recorded, so a detail view that fails leaves the flag for next time.
     snapshot ??= await deps.forge.viewPr(ref);
     if (!snapshot) {
-      return null;
+      return { kind: 'unread' };
     }
   }
-  return { reason, snapshot };
+  return { kind: 'decided', reason, snapshot };
 }
 
 /**
  * The cheap model's verdict on one pull request, logged as a run of its own whatever it came to. A
- * run that timed out, hit its budget or answered with nothing usable leaves the pull request quiet:
- * the triage is a cheap first pass, and a failed one must not queue a review nobody asked for.
+ * run that timed out, hit its budget or answered with nothing usable reached no verdict, and says
+ * so in `note`: the triage is a cheap first pass, so it neither queues a review nobody asked for
+ * nor lets the pull request pass for one that has been judged.
  */
-async function askTheTriageModel(store: InboxStore, deps: TickDeps, snapshot: PrSnapshot): Promise<string | null> {
+async function askTheTriageModel(store: InboxStore, deps: TickDeps, snapshot: PrSnapshot): Promise<{ reason: string | null; note: string | null }> {
   const id = prId(snapshot);
   let diff = '';
   try {
@@ -392,8 +445,9 @@ async function askTheTriageModel(store: InboxStore, deps: TickDeps, snapshot: Pr
   try {
     result = await deps.triageAgent({ snapshot, diff, alertWhen: deps.alertWhen });
   } catch (err) {
-    deps.log(`${id}: the triage model could not be run — ${err instanceof Error ? err.message : err}`);
-    return null;
+    const note = `the triage model could not be run: ${err instanceof Error ? err.message : err}`;
+    deps.log(`${id}: ${note}`);
+    return { reason: null, note };
   }
   store.recordRun(runRecordOf({
     prId: id,
@@ -409,20 +463,34 @@ async function askTheTriageModel(store: InboxStore, deps: TickDeps, snapshot: Pr
   if (result.run.note) {
     deps.log(`${id}: triage — ${result.run.note}`);
   }
-  return result.reason;
+  // Only a run that answered decided anything; anything else is a look to make again.
+  return result.run.outcome === 'triaged'
+    ? { reason: result.reason, note: null }
+    : { reason: null, note: result.run.note ?? `the triage model ended as ${result.run.outcome}` };
 }
 
 /**
  * Whether a pull request the search no longer lists is still the reviewer's to review. Two are:
  * one the daemon posted the alert findings to itself, because that post is what withdrew the
- * review request, and one the triage picked up, which was never requested at all. Either way the
+ * review request, and one the triage took in, which was never requested at all. Either way the
  * reviewer's own review is what hands it over, so a review posted since settles it.
  */
-function stillTheReviewers(pr: InboxPr, handled: Handled | null, triagedAt: string | null): boolean {
+function stillTheReviewers(pr: InboxPr, handled: Handled | null, takenIn: string | null): boolean {
   if (pr.autoPosted !== null && (handled === null || handled.at < pr.autoPosted.at)) {
     return true;
   }
-  return pr.triageReason !== null && (handled === null || handled.at < (triagedAt ?? pr.firstSeenAt));
+  return takenIn !== null && (handled === null || handled.at < takenIn);
+}
+
+/**
+ * When the triage took this pull request into the inbox, or null when it was not the triage that
+ * put it there. What answers that is the triage's own record, not the row's reason: the free rules
+ * write a reason onto a pull request the reviewer was asked for too, and that one retires when the
+ * request goes, like any other.
+ */
+function takenInAt(store: InboxStore, id: string): string | null {
+  const record = store.triageOf(id);
+  return record?.outcome === 'alert' ? record.at : null;
 }
 
 /**

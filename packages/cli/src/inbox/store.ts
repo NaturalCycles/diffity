@@ -113,8 +113,11 @@ export type RunPhase = (typeof RUN_PHASES)[number];
 export const RUN_OUTCOMES = ['triaged', 'prepared', 'skipped', 'validated', 'answered', 'failed', 'timeout', 'rate-limited'] as const;
 export type RunOutcome = (typeof RUN_OUTCOMES)[number];
 
-/** What the triage made of a watched pull request: nothing, a flag, or not worth looking at. */
-export const TRIAGE_OUTCOMES = ['none', 'alert', 'skipped'] as const;
+/**
+ * What the triage made of a watched pull request: nothing, a flag, not worth looking at, or a look
+ * that never reached a verdict — which is a reason to look again rather than a decision.
+ */
+export const TRIAGE_OUTCOMES = ['none', 'alert', 'skipped', 'failed'] as const;
 export type TriageOutcome = (typeof TRIAGE_OUTCOMES)[number];
 
 /**

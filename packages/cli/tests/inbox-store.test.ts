@@ -320,6 +320,15 @@ describe('the triage log', () => {
     expect(store.triageOf('o/r#1')).toMatchObject({
       updatedAt: '2026-09-02T11:00:00Z', headSha: 'bbb', outcome: 'alert', reason: 'risk level: high',
     });
+
+    // A look that reached no verdict is kept as such, with what went wrong as its reason.
+    store.recordTriage({
+      prId: 'o/r#1', updatedAt: '2026-09-02T11:00:00Z', headSha: null, outcome: 'failed',
+      reason: 'the triage agent hit the Claude session limit', at: '2026-09-02T14:00:00.000Z',
+    });
+    expect(store.triageOf('o/r#1')).toMatchObject({
+      outcome: 'failed', reason: 'the triage agent hit the Claude session limit', headSha: null,
+    });
     store.close();
   });
 

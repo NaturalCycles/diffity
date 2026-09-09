@@ -1285,7 +1285,7 @@ describe('the triage model, for what the rules miss', () => {
     expect(triaged).toEqual(['o/r#9', 'o/r#9']);
   });
 
-  it('leaves the pull request quiet, and says why, when the run came to nothing usable', async () => {
+  it('queues no review, and says why, when the run came to nothing usable', async () => {
     forge.watch('o/r', candidate({ number: 9 }), snapshot({ number: 9 }));
     triageResult = () => ({
       reason: null,
@@ -1303,6 +1303,81 @@ describe('the triage model, for what the rules miss', () => {
     expect(logs.some(line => line.includes('o/r#9: triage — the triage agent did not finish'))).toBe(true);
   });
 
+  it('keeps a look that reached no verdict as one to make again, not as a quiet pull request', async () => {
+    forge.watch('o/r', candidate({ number: 9 }), snapshot({ number: 9 }));
+    triageResult = () => ({
+      reason: null,
+      run: {
+        startedAt: '2026-09-02T11:57:00.000Z', endedAt: '2026-09-02T12:00:00.000Z', stats: null,
+        outcome: 'timeout', note: 'the triage agent did not finish within 3 minutes',
+      },
+    });
+
+    await runTick(store, deps(withModel()));
+
+    expect(store.triageOf('o/r#9')).toMatchObject({
+      outcome: 'failed', reason: 'the triage agent did not finish within 3 minutes', headSha: null,
+    });
+    // Not quiet: nothing has decided anything about this pull request yet.
+    expect(buildView(store, 'http://localhost:5390', '2026-09-02T12:00:00.000Z').triage)
+      .toMatchObject({ watched: 1, quiet: 0 });
+  });
+
+  it('tries a look that reached no verdict again after an hour, and not before', async () => {
+    forge.watch('o/r', candidate({ number: 9 }), snapshot({ number: 9 }));
+    triageResult = () => ({
+      reason: null,
+      run: { startedAt: '2026-09-02T11:59:00.000Z', endedAt: '2026-09-02T12:00:00.000Z', stats: null, outcome: 'failed', note: 'the triage agent hit the Claude session limit' },
+    });
+    const at = (now: string) => deps({ now: () => now, ...withModel() });
+
+    await runTick(store, at('2026-09-02T12:00:00.000Z'));
+    expect(triaged).toEqual(['o/r#9']);
+
+    // Nothing about the pull request has moved, and the hour has not passed.
+    await runTick(store, at('2026-09-02T12:40:00.000Z'));
+    expect(triaged).toEqual(['o/r#9']);
+
+    await runTick(store, at('2026-09-02T13:05:00.000Z'));
+    expect(triaged).toEqual(['o/r#9', 'o/r#9']);
+    expect(store.triageOf('o/r#9')).toMatchObject({ outcome: 'failed', at: '2026-09-02T13:05:00.000Z' });
+
+    // And once it answers, that answer stands.
+    triageResult = () => ({ reason: null, run: { startedAt: 'a', endedAt: 'b', stats: null, outcome: 'triaged', note: null } });
+    await runTick(store, at('2026-09-02T14:10:00.000Z'));
+    expect(triaged).toHaveLength(3);
+    await runTick(store, at('2026-09-02T15:20:00.000Z'));
+    expect(triaged).toHaveLength(3);
+    expect(store.triageOf('o/r#9')).toMatchObject({ outcome: 'none' });
+  });
+
+  it('spends no model while the session limit is on, and records nothing for what the rules missed', async () => {
+    forge.watch('o/r', candidate({ number: 9 }), snapshot({ number: 9 }));
+    forge.watch('o/r', candidate({ number: 10, body: '* platform - risk level: high' }), snapshot({ number: 10 }));
+    const logs: string[] = [];
+
+    await runTick(store, deps({
+      log: m => logs.push(m),
+      pausedUntil: () => '2026-09-02T14:00:00.000Z',
+      ...withModel({ bodyPatterns: [HIGH] }),
+    }));
+
+    // The one only a model could judge is left for the pass after the pause.
+    expect(triaged).toEqual([]);
+    expect(store.triageOf('o/r#9')).toBeNull();
+    expect(store.get('o/r#9')).toBeNull();
+    expect(logs.some(line => line.includes('1 watched pull request(s) left for the next pass'))).toBe(true);
+    // The rules cost nothing, so the one they flag is still taken in — and held by the pause.
+    expect(store.get('o/r#10')!.triageReason).toBe('* platform - risk level: high');
+    expect(prepared).toEqual([]);
+    expect(buildView(store, 'http://localhost:5390', '2026-09-02T12:00:00.000Z').triage)
+      .toMatchObject({ watched: 2, quiet: 0 });
+
+    // Once the limit lifts, the pass that follows is the one that decides it.
+    await runTick(store, deps(withModel({ bodyPatterns: [HIGH] })));
+    expect(triaged).toEqual(['o/r#9']);
+  });
+
   it('leaves the pull request quiet when the model itself could not be run', async () => {
     forge.watch('o/r', candidate({ number: 9 }), snapshot({ number: 9 }));
     const logs: string[] = [];
@@ -1315,6 +1390,7 @@ describe('the triage model, for what the rules miss', () => {
 
     expect(store.get('o/r#9')).toBeNull();
     expect(store.runs()).toEqual([]);
+    expect(store.triageOf('o/r#9')).toMatchObject({ outcome: 'failed', reason: expect.stringContaining('could not be run') });
     expect(logs.some(line => line.includes('the triage model could not be run'))).toBe(true);
   });
 
@@ -1455,6 +1531,30 @@ describe('the free rules on a pull request the reviewer was asked for', () => {
     expect(prepared).toEqual([]);
     expect(pr.triageReason).toBe('* platform - risk level: high');
     expect(pr.statusReason).toBe('waiting: 1 reviews already prepared');
+  });
+
+  it('retires like any other row once the reviewer is no longer asked for it', async () => {
+    forge.set(snapshot({ number: 1, files: [{ path: 'packages/shared/src/model/user.ts', additions: 1, deletions: 0 }] }));
+    await runTick(store, deps({ alertPaths: ['packages/shared/src/model/**'] }));
+    expect(store.get('o/r#1')!.triageReason).toBe('touches packages/shared/src/model/user.ts');
+
+    // The author drops the reviewer, or they reviewed it on the forge itself: nothing diffity
+    // posted holds it, so the row goes, reason or no reason.
+    forge.requested = [];
+    prepared = [];
+    await runTick(store, deps({ alertPaths: ['packages/shared/src/model/**'] }));
+
+    const pr = store.get('o/r#1')!;
+    expect(pr.status).toBe('hidden');
+    expect(pr.statusReason).toBe('review no longer requested');
+    expect(pr.worktreePath).toBeNull();
+    expect(removed).toEqual(['/wt/1']);
+
+    // And a push after that does not bring it back, nor spend an agent on it.
+    forge.snapshots.set('o/r#1', snapshot({ number: 1, headSha: 'bbb', files: [{ path: 'packages/shared/src/model/user.ts', additions: 2, deletions: 0 }] }));
+    await runTick(store, deps({ alertPaths: ['packages/shared/src/model/**'] }));
+    expect(prepared).toEqual([]);
+    expect(store.get('o/r#1')!.status).toBe('hidden');
   });
 
   it('says nothing about a review already prepared for this head', async () => {
