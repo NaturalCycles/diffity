@@ -12,7 +12,7 @@ let path: string;
 
 function snapshot(): PrSnapshot {
   return {
-    owner: 'o', repo: 'r', number: 1, title: 'T', url: 'https://github.com/o/r/pull/1',
+    owner: 'o', repo: 'r', number: 1, title: 'T', body: '', url: 'https://github.com/o/r/pull/1',
     author: 'alice', isBot: false, isDraft: false, state: 'OPEN', headSha: 'aaa', baseRef: 'main',
     additions: 1, deletions: 0, changedFiles: 1, createdAt: 'now', updatedAt: 'now', checks: [], files: [],
   };

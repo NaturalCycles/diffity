@@ -9,3 +9,5 @@ export type { CreatedComment, SentComment } from './comment-ids.js';
 export { isGitHubPrUrl, parseGitHubPrUrl, checkoutPr, getPrBase, parsePrBase } from './pr-url.js';
 export { searchReviewRequested, viewPr, parseReviewRequested, parsePrSnapshot, parseChecks, parseFiles, ciState, MAX_SNAPSHOT_FILES } from './inbox.js';
 export type { PrRef, PrSnapshot, PrState, PrCheck, PrFile, CiState } from './inbox.js';
+export { fetchPrContext, parseDiscussion, parseReviewComments, cutText, MAX_CONTEXT_BODY } from './inbox.js';
+export type { PrContext, PrContextComment, PrContextReview, PrContextReviewComment, GhRun } from './inbox.js';

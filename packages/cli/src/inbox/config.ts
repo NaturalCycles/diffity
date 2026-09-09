@@ -75,6 +75,12 @@ export interface InboxConfig {
   postAlerts: boolean;
   /** Opens every posted comment, so nobody reads one as a verdict a human has stood behind. */
   postPrefix: string;
+  /**
+   * Ends the posted review's own body, under a blank line: a team to mention, a line saying what
+   * posted this. Empty adds nothing. The inline comments never carry it — a mention there would
+   * fire once per finding.
+   */
+  postFooter: string;
   agent: AgentConfig;
   validate: ValidateConfig;
   /** Whether a pull request waits for its CI to pass before an agent is spent on it. */
@@ -105,6 +111,7 @@ export const DEFAULT_INBOX_CONFIG: InboxConfig = {
   alertPaths: [],
   postAlerts: false,
   postPrefix: '[Automated AI pre-review, not yet checked by human]',
+  postFooter: '',
   agent: { model: null, effort: null, mcpAllow: [], extraArgs: [], maxBudgetUsd: null },
   validate: { model: null, timeoutMinutes: 15, maxBudgetUsd: null },
   waitForCi: false,
@@ -188,6 +195,12 @@ export function parseInboxConfig(raw: unknown, source = 'inbox config'): InboxCo
       throw new Error(`${source}: postPrefix must be a string`);
     }
     config.postPrefix = obj.postPrefix;
+  }
+  if (obj.postFooter !== undefined) {
+    if (typeof obj.postFooter !== 'string') {
+      throw new Error(`${source}: postFooter must be a string`);
+    }
+    config.postFooter = obj.postFooter;
   }
   // Nothing goes to a pull request unprefixed: the prefix is what tells the author no human has
   // stood behind the finding yet.
@@ -307,7 +320,7 @@ function parseValidateConfig(raw: unknown, source: string): ValidateConfig {
 }
 
 /** The settings the inbox page edits, kept in the config file beside the keys only the file holds. */
-export type InboxSettings = Pick<InboxConfig, 'filter' | 'skipTitles' | 'alertWhen' | 'alertPaths' | 'postAlerts' | 'postPrefix' | 'maxPrepared' | 'pollMinutes' | 'live' | 'liveTimeoutMinutes' | 'prepareTimeoutMinutes' | 'waitForCi' | 'agent' | 'validate'>;
+export type InboxSettings = Pick<InboxConfig, 'filter' | 'skipTitles' | 'alertWhen' | 'alertPaths' | 'postAlerts' | 'postPrefix' | 'postFooter' | 'maxPrepared' | 'pollMinutes' | 'live' | 'liveTimeoutMinutes' | 'prepareTimeoutMinutes' | 'waitForCi' | 'agent' | 'validate'>;
 
 /**
  * Writes the page-editable settings into the config file, leaving every other key as the reviewer

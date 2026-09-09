@@ -15,7 +15,7 @@ function thread(over: Partial<ReviewThread> = {}): ReviewThread {
 
 function snapshot(): PrSnapshot {
   return {
-    owner: 'o', repo: 'r', number: 7, title: 'Add a widget', url: 'https://github.com/o/r/pull/7',
+    owner: 'o', repo: 'r', number: 7, title: 'Add a widget', body: '', url: 'https://github.com/o/r/pull/7',
     author: 'alice', isBot: false, isDraft: false, state: 'OPEN', headSha: 'abc', baseRef: 'main',
     additions: 12, deletions: 3, changedFiles: 2, createdAt: 'now', updatedAt: 'now', checks: [], files: [],
   };

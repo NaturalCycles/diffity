@@ -32,6 +32,8 @@ export const MAX_SNAPSHOT_FILES = 300;
 export interface PrSnapshot extends PrRef {
   title: string;
   url: string;
+  /** The description as the author wrote it; empty when there is none. */
+  body: string;
   author: string;
   isBot: boolean;
   isDraft: boolean;
@@ -86,7 +88,7 @@ export async function viewPr(ref: PrRef): Promise<PrSnapshot | null> {
     const json = await ghAsync([
       'pr', 'view', String(ref.number),
       '--repo', `${ref.owner}/${ref.repo}`,
-      '--json', 'number,title,url,author,isDraft,state,headRefOid,baseRefName,additions,deletions,changedFiles,createdAt,updatedAt,statusCheckRollup,files',
+      '--json', 'number,title,url,body,author,isDraft,state,headRefOid,baseRefName,additions,deletions,changedFiles,createdAt,updatedAt,statusCheckRollup,files',
     ]);
     return parsePrSnapshot(ref, json);
   } catch {
@@ -105,6 +107,7 @@ export function parsePrSnapshot(ref: PrRef, json: string): PrSnapshot | null {
     number: ref.number,
     title: String(data.title ?? ''),
     url: data.url,
+    body: String(data.body ?? ''),
     author: String(data.author?.login ?? ''),
     isBot: data.author?.is_bot === true,
     isDraft: data.isDraft === true,
@@ -229,4 +232,134 @@ export function ciState(checks: PrCheck[]): CiState {
 
 function isPrState(value: unknown): value is PrState {
   return typeof value === 'string' && (PR_STATES as readonly string[]).includes(value);
+}
+
+/** Beyond this a body says nothing more a review needs, and the context file stays readable. */
+export const MAX_CONTEXT_BODY = 20_000;
+
+/** Text held to a length, with a marker so a reader knows something was left out. */
+export function cutText(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, max)}\n… [cut]`;
+}
+
+/** One comment on the pull request itself, rather than on a line of it. */
+export interface PrContextComment {
+  author: string;
+  createdAt: string;
+  body: string;
+}
+
+/** One submitted review: what it decided, and whatever was said alongside the decision. */
+export interface PrContextReview {
+  author: string;
+  state: string;
+  submittedAt: string;
+  body: string;
+}
+
+/** One inline review comment, on the line of the file it was left on. */
+export interface PrContextReviewComment {
+  author: string;
+  path: string;
+  line: number | null;
+  side: string;
+  createdAt: string;
+  body: string;
+  /** The comment this one answers, where it answers one. */
+  inReplyTo: number | null;
+}
+
+/** Everything a pull request carries in words: the description, and the discussion around it. */
+export interface PrContext extends PrRef {
+  title: string;
+  author: string;
+  url: string;
+  headSha: string;
+  baseRef: string;
+  body: string;
+  /** Oldest first, as the forge returns them. */
+  comments: PrContextComment[];
+  reviews: PrContextReview[];
+  reviewComments: PrContextReviewComment[];
+}
+
+/** How a gh call is made, so a caller can hand in its own and nothing reaches the forge. */
+export type GhRun = (args: string[]) => Promise<string>;
+
+/** One page of inline review comments; the forge's own maximum. */
+const COMMENTS_PER_PAGE = 100;
+
+/** Enough pages for any discussion a review has to read, and a stop for one that never ends. */
+const MAX_COMMENT_PAGES = 10;
+
+/**
+ * What the pull request carries in words, read with this process's own credentials. The description
+ * comes off the snapshot; the discussion — comments on the pull request, submitted reviews, and the
+ * inline comments those reviews left — comes from the forge. A forge that cannot be read throws, so
+ * the caller decides what a missing discussion means for the review.
+ */
+export async function fetchPrContext(snapshot: PrSnapshot, run: GhRun = ghAsync): Promise<PrContext> {
+  const repo = `${snapshot.owner}/${snapshot.repo}`;
+  const discussion = await run([
+    'pr', 'view', String(snapshot.number), '--repo', repo, '--json', 'comments,reviews',
+  ]);
+  const reviewComments: PrContextReviewComment[] = [];
+  for (let page = 1; page <= MAX_COMMENT_PAGES; page++) {
+    const pageComments = parseReviewComments(await run([
+      'api', `repos/${repo}/pulls/${snapshot.number}/comments?per_page=${COMMENTS_PER_PAGE}&page=${page}`,
+    ]));
+    reviewComments.push(...pageComments);
+    if (pageComments.length < COMMENTS_PER_PAGE) {
+      break;
+    }
+  }
+  return {
+    owner: snapshot.owner,
+    repo: snapshot.repo,
+    number: snapshot.number,
+    title: snapshot.title,
+    author: snapshot.author,
+    url: snapshot.url,
+    headSha: snapshot.headSha,
+    baseRef: snapshot.baseRef,
+    body: cutText(snapshot.body, MAX_CONTEXT_BODY),
+    ...parseDiscussion(discussion),
+    reviewComments,
+  };
+}
+
+/** The comments and reviews of one `gh pr view --json comments,reviews`. */
+export function parseDiscussion(json: string): { comments: PrContextComment[]; reviews: PrContextReview[] } {
+  const data = JSON.parse(json);
+  return {
+    comments: objects(data?.comments).map(raw => ({
+      author: String(raw.author?.login ?? 'unknown'),
+      createdAt: String(raw.createdAt ?? ''),
+      body: cutText(String(raw.body ?? ''), MAX_CONTEXT_BODY),
+    })),
+    reviews: objects(data?.reviews).map(raw => ({
+      author: String(raw.author?.login ?? 'unknown'),
+      state: String(raw.state ?? 'COMMENTED'),
+      submittedAt: String(raw.submittedAt ?? ''),
+      body: cutText(String(raw.body ?? ''), MAX_CONTEXT_BODY),
+    })),
+  };
+}
+
+/** One page of `gh api .../pulls/<n>/comments`, the forge's own field names and all. */
+export function parseReviewComments(json: string): PrContextReviewComment[] {
+  return objects(JSON.parse(json)).map(raw => ({
+    author: String(raw.user?.login ?? 'unknown'),
+    path: String(raw.path ?? ''),
+    line: typeof raw.line === 'number' ? raw.line : null,
+    side: String(raw.side ?? 'RIGHT'),
+    createdAt: String(raw.created_at ?? ''),
+    body: cutText(String(raw.body ?? ''), MAX_CONTEXT_BODY),
+    inReplyTo: typeof raw.in_reply_to_id === 'number' ? raw.in_reply_to_id : null,
+  }));
+}
+
+/** The objects of whatever the forge answered with, so a null or a string in the list is skipped. */
+function objects(raw: unknown) {
+  return Array.isArray(raw) ? raw.filter(item => typeof item === 'object' && item !== null) : [];
 }

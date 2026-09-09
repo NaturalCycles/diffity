@@ -62,6 +62,11 @@ export interface PrepareDeps {
   runAgent(opts: RunAgentOpts): Promise<{ stdout: string; timedOut: boolean }>;
   /** The threads the drafting agent left in the session over this worktree. */
   listThreads(worktree: string): Promise<ReviewThread[]>;
+  /**
+   * The pull request's description and discussion, written where the agent can read it, with the
+   * daemon's own credentials; the path to it, or null when the forge could not be read.
+   */
+  prContext(snapshot: PrSnapshot, worktree: string): Promise<string | null>;
   /** The daemon's own call to the forge, with its credentials — this is never the agent's. */
   postReview(opts: PostReviewOpts): Promise<ReviewResult>;
   markPosted(opts: MarkPostedOpts): void | Promise<void>;
@@ -156,12 +161,16 @@ export async function preparePr(snapshot: PrSnapshot, config: InboxConfig, deps:
   let server: ServerHandle | null = null;
   try {
     server = await deps.startServer(dest, diffRef);
+    // Starting the server empties the pull request's data directory, which is where the discussion
+    // is written, so it is read after that and before the agent.
+    const contextPath = await prContextPath(snapshot, deps, dest);
     const startedAt = deps.now();
     const { stdout, timedOut } = await deps.runAgent({
       argv: deps.agentArgv(),
       prompt: composePrompt({
         snapshot, worktreePath: dest, port: server.port, alertWhen: config.alertWhen,
-        filter: opts.bumped ? '' : config.filter, mcpAllow: config.agent.mcpAllow,
+        filter: opts.bumped ? '' : config.filter, mcpAllow: config.agent.mcpAllow, contextPath,
+        postPrefix: config.postAlerts ? config.postPrefix : null,
       }),
       cwd: dest,
       logPath,
@@ -245,6 +254,20 @@ export async function preparePr(snapshot: PrSnapshot, config: InboxConfig, deps:
 }
 
 /**
+ * Where the pull request's discussion was written for the agent, or nothing: a review that has to
+ * do without the description and the comments is still a review, so a forge that cannot be read
+ * costs a log line rather than the preparation.
+ */
+async function prContextPath(snapshot: PrSnapshot, deps: PrepareDeps, worktree: string): Promise<string | null> {
+  try {
+    return await deps.prContext(snapshot, worktree);
+  } catch (err) {
+    deps.log(`${prId(snapshot)}: the discussion could not be read \u2014 ${err instanceof Error ? err.message : err}`);
+    return null;
+  }
+}
+
+/**
  * Puts the findings the agent named behind its alert on the pull request, as one `COMMENT` review
  * in the reviewer's name, every comment opening with the configured prefix so nobody reads it as a
  * verdict a human has stood behind. An alert that named no findings is posted as its reason alone,
@@ -276,7 +299,7 @@ async function postAlertFindings(
       prNumber: snapshot.number,
       headSha: ctx.head,
       // Never a verdict: the reviewer has not read this yet, and only they approve or request changes.
-      submission: { event: 'COMMENT', body: `${config.postPrefix} ${ctx.alert}`, comments },
+      submission: { event: 'COMMENT', body: reviewBody(config, ctx.alert), comments },
     });
     if (result.reviewUrl === null) {
       deps.log(`could not post alert findings to ${id}: ${result.errors.join('; ') || 'the forge created no review'}`);
@@ -292,6 +315,17 @@ async function postAlertFindings(
     deps.log(`could not post alert findings to ${id}: ${err instanceof Error ? err.message : err}`);
     return null;
   }
+}
+
+/**
+ * The posted review's own body: the reason behind the prefix, and the reviewer's footer under it
+ * when they have one. Only this body carries the footer, so a team mention in it fires once for
+ * the review rather than once per finding.
+ */
+function reviewBody(config: InboxConfig, alert: string): string {
+  const opening = `${config.postPrefix} ${alert}`;
+  const footer = config.postFooter.trim();
+  return footer === '' ? opening : `${opening}\n\n${footer}`;
 }
 
 /**

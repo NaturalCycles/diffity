@@ -154,6 +154,18 @@ describe('the inbox page', () => {
     expect(script).toContain("el('postAlerts').checked = settings.postAlerts");
   });
 
+  it('has the footer under the posting row, and sends it back with the rest', () => {
+    const html = inboxPage();
+    expect(html).toContain('id="postFooter"');
+    expect(html).toContain('End each posted review with:');
+    // Under the prefix it goes with, and still beside the alert words rather than among the numbers.
+    expect(html.indexOf('id="postPrefix"')).toBeLessThan(html.indexOf('id="postFooter"'));
+    expect(html.indexOf('id="postFooter"')).toBeLessThan(html.indexOf('id="alertPaths"'));
+    const script = pageScript();
+    expect(script).toContain("postFooter: el('postFooter').value");
+    expect(script).toContain("el('postFooter').value = settings.postFooter || ''");
+  });
+
   it('says on a posted card that the findings are already on the pull request, and where', () => {
     const script = pageScript();
     expect(script).toContain("'posted to the pull request \\u00b7 ' + hhmm(r.autoPosted.at)");

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
@@ -10,6 +10,7 @@ import { noneInflight, realAttendantDeps, realPrepareDeps, runAgent, startDiffit
 import { generalCommentIdOf, threadsToValidate } from '../src/inbox/validate.js';
 import type { AttendedPr } from '../src/inbox/attendant.js';
 import type { InboxConfig } from '../src/inbox/config.js';
+import type { PrSnapshot } from '@diffity/github';
 import type { RunRecord } from '../src/inbox/store.js';
 
 let root: string;
@@ -31,11 +32,22 @@ function attendedPr(): AttendedPr {
 function liveConfig(): InboxConfig {
   return {
     pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', skipTitles: [], alertWhen: '', alertPaths: [],
-    postAlerts: false, postPrefix: '[not yet checked by human]',
+    postAlerts: false, postPrefix: '[not yet checked by human]', postFooter: '',
     agent: { model: 'the-configured-model', effort: null, mcpAllow: [], extraArgs: [], maxBudgetUsd: null },
     validate: { model: null, timeoutMinutes: 15, maxBudgetUsd: null },
     waitForCi: false, prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10,
   };
+}
+
+/** A stand-in binary first on PATH for the length of the call. */
+async function withPathBin(bin: string, run: () => Promise<void>): Promise<void> {
+  const path = process.env.PATH;
+  process.env.PATH = `${bin}:${path ?? ''}`;
+  try {
+    await run();
+  } finally {
+    process.env.PATH = path;
+  }
 }
 
 /** A `claude` on PATH for the length of the call, with the reviewer's data directory redirected. */
@@ -309,6 +321,77 @@ describe('the real listThreads', () => {
       await gone(dataDir);
     }
   }, 40_000);
+});
+
+describe('the real prContext', () => {
+  const DISCUSSION = JSON.stringify({
+    comments: [{ author: { login: 'bob' }, createdAt: '2026-09-02T11:00:00Z', body: 'Needs a migration?' }],
+    reviews: [{ author: { login: 'carol' }, state: 'CHANGES_REQUESTED', submittedAt: '2026-09-02T12:00:00Z', body: 'See below.' }],
+  });
+  const INLINE = JSON.stringify([{
+    user: { login: 'carol' }, path: 'src/a.ts', line: 12, side: 'RIGHT',
+    created_at: '2026-09-02T12:00:00Z', body: 'This leaks the token', in_reply_to_id: null,
+  }]);
+
+  function snapshot(): PrSnapshot {
+    return {
+      owner: 'o', repo: 'r', number: 4, title: 'A change', body: 'Risk Evaluation: high',
+      url: 'https://github.com/o/r/pull/4', author: 'alice', isBot: false, isDraft: false, state: 'OPEN',
+      headSha: 'aaa', baseRef: 'main', additions: 1, deletions: 0, changedFiles: 1,
+      createdAt: 'now', updatedAt: 'now', checks: [], files: [],
+    };
+  }
+
+  /** A `gh` on PATH that answers from fixtures, so nothing here reaches the forge. */
+  function standInGh(name: string, script: string): string {
+    const bin = join(root, name);
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, 'gh'), script, { mode: 0o755 });
+    return bin;
+  }
+
+  it('writes the description and the discussion into the data directory, not the worktree', async () => {
+    const dataDir = join(root, 'context-data');
+    const worktree = join(root, 'context-worktree');
+    mkdirSync(worktree, { recursive: true });
+    const bin = standInGh('answering-bin', `#!/bin/sh\nif [ "$1" = pr ]; then\n  cat <<'JSON'\n${DISCUSSION}\nJSON\nelse\n  cat <<'JSON'\n${INLINE}\nJSON\nfi\n`);
+    const logged: string[] = [];
+    const deps = realPrepareDeps(process.execPath, ENTRY, () => dataDir, liveConfig(), message => logged.push(message));
+
+    let path: string | null = null;
+    await withPathBin(bin, async () => { path = await deps.prContext(snapshot(), worktree); });
+
+    expect(path).toBe(join(dataDir, 'pr-context.json'));
+    expect(existsSync(join(worktree, 'pr-context.json'))).toBe(false);
+    expect(JSON.parse(readFileSync(path!, 'utf-8'))).toEqual({
+      owner: 'o', repo: 'r', number: 4, title: 'A change', author: 'alice',
+      url: 'https://github.com/o/r/pull/4', headSha: 'aaa', baseRef: 'main',
+      body: 'Risk Evaluation: high',
+      comments: [{ author: 'bob', createdAt: '2026-09-02T11:00:00Z', body: 'Needs a migration?' }],
+      reviews: [{ author: 'carol', state: 'CHANGES_REQUESTED', submittedAt: '2026-09-02T12:00:00Z', body: 'See below.' }],
+      reviewComments: [{
+        author: 'carol', path: 'src/a.ts', line: 12, side: 'RIGHT',
+        createdAt: '2026-09-02T12:00:00Z', body: 'This leaks the token', inReplyTo: null,
+      }],
+    });
+    expect(logged).toEqual([]);
+  });
+
+  it('answers with nothing and logs the reason when the forge cannot be read', async () => {
+    const dataDir = join(root, 'refused-data');
+    const bin = standInGh('refusing-bin', '#!/bin/sh\necho "gh: Not Found (HTTP 404)" >&2\nexit 1\n');
+    const logged: string[] = [];
+    const deps = realPrepareDeps(process.execPath, ENTRY, () => dataDir, liveConfig(), message => logged.push(message));
+
+    let path: string | null = 'unset';
+    await withPathBin(bin, async () => { path = await deps.prContext(snapshot(), join(root, 'refused-worktree')); });
+
+    expect(path).toBeNull();
+    expect(existsSync(join(dataDir, 'pr-context.json'))).toBe(false);
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toContain('could not read the discussion on o/r#4');
+    expect(logged[0]).toContain('Not Found');
+  });
 });
 
 describe('the real markPosted', () => {

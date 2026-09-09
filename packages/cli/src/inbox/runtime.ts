@@ -1,15 +1,15 @@
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { LiveRequest } from '@diffity/api';
-import { createReview } from '@diffity/github';
-import { createWriteStream, mkdirSync, readFileSync, rmSync, type WriteStream } from 'node:fs';
+import { createReview, fetchPrContext, type PrSnapshot } from '@diffity/github';
+import { createWriteStream, mkdirSync, readFileSync, rmSync, writeFileSync, type WriteStream } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { ExportOpts, MarkPostedOpts, PrepareDeps, RunAgentOpts, ServerHandle } from './prepare.js';
 import type { InboxConfig } from './config.js';
 import { buildAgentArgv, skillBody } from './agent-argv.js';
 import { parseAgentOutput } from './agent-output.js';
 import { parseAwaitOutcome, type AttendantDeps } from './attendant.js';
-import { runRecordOf, type RunRecord } from './store.js';
+import { prId, runRecordOf, type RunRecord } from './store.js';
 import { parseThreadList, type ReviewThread } from './validate.js';
 import { diffityDir } from '../registry.js';
 
@@ -52,6 +52,7 @@ export function realPrepareDeps(nodePath: string, entry: string, dataDirFor: (wo
     }),
     runAgent: opts => runAgent(opts, dataDirFor(opts.cwd), config.agent.mcpAllow, inflight),
     listThreads: worktree => listThreads(nodePath, entry, worktree, dataDirFor(worktree)),
+    prContext: (snapshot, worktree) => writePrContext(snapshot, dataDirFor(worktree), log),
     // In this process, with the reviewer's own credentials: posting the alert findings is the
     // daemon's own act, after the agent has finished, and never something the agent can reach.
     postReview: opts => createReview(opts.owner, opts.repo, opts.prNumber, opts.headSha, opts.submission),
@@ -60,6 +61,28 @@ export function realPrepareDeps(nodePath: string, entry: string, dataDirFor: (wo
     log,
     now: () => new Date().toISOString(),
   };
+}
+
+/** What the reviewer's discussion file is called, in the pull request's own data directory. */
+const PR_CONTEXT_FILE = 'pr-context.json';
+
+/**
+ * The pull request's description and discussion as JSON beside the prepared session, read with the
+ * daemon's own credentials because the agent runs without any. Never written into the worktree,
+ * where an untracked file would turn up in the review's own diff. Null when the forge could not be
+ * read: the review goes ahead without the discussion, and the reason is logged.
+ */
+async function writePrContext(snapshot: PrSnapshot, dataDir: string, log: (message: string) => void): Promise<string | null> {
+  const path = join(dataDir, PR_CONTEXT_FILE);
+  try {
+    const context = await fetchPrContext(snapshot);
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(path, JSON.stringify(context, null, 2) + '\n');
+    return path;
+  } catch (err) {
+    log(`could not read the discussion on ${prId(snapshot)}: ${err instanceof Error ? err.message : err}`);
+    return null;
+  }
 }
 
 interface RegistryRow { pid: number; port: number }

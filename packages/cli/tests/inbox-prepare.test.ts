@@ -33,7 +33,7 @@ function git(cwd: string, args: string[]): string {
 
 function snapshot(): PrSnapshot {
   return {
-    owner: 'o', repo: 'demo', number: 4, title: 'A change', url: 'https://github.com/o/demo/pull/4',
+    owner: 'o', repo: 'demo', number: 4, title: 'A change', body: '', url: 'https://github.com/o/demo/pull/4',
     author: 'alice', isBot: false, isDraft: false, state: 'OPEN', headSha: head, baseRef: 'main',
     additions: 1, deletions: 0, changedFiles: 1, createdAt: 'now', updatedAt: 'now', checks: [], files: [],
   };
@@ -42,7 +42,7 @@ function snapshot(): PrSnapshot {
 function config(): InboxConfig {
   return {
     pollMinutes: 5, port: 0, reposDir, worktreesDir, filter: '', skipTitles: [], alertWhen: '', alertPaths: [],
-    postAlerts: false, postPrefix: '[not yet checked by human]',
+    postAlerts: false, postPrefix: '[not yet checked by human]', postFooter: '',
     agent: agentConfig(), validate: validateConfig(), waitForCi: false, prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10,
   };
 }
@@ -82,6 +82,7 @@ beforeEach(() => {
   timeouts = [];
   daemonLog = [];
   submissions = [];
+  contextCalls = [];
   marked = [];
   reviewResult = opts => ({
     submitted: opts.submission.comments.length,
@@ -98,6 +99,7 @@ let logs: string[] = [];
 let timeouts: number[] = [];
 let daemonLog: string[] = [];
 let submissions: PostReviewOpts[] = [];
+let contextCalls: { snapshot: PrSnapshot; worktree: string }[] = [];
 let marked: MarkPostedOpts[] = [];
 let reviewResult: (opts: PostReviewOpts) => ReviewResult;
 
@@ -121,6 +123,10 @@ function deps(over: Partial<PrepareDeps> = {}): PrepareDeps {
     agentArgv: () => ['claude', '-p', '--output-format', 'json'],
     validateArgv: () => ['claude', '-p', '--model', 'the-checking-model'],
     listThreads: () => Promise.resolve([]),
+    prContext: (snapshot, worktree) => {
+      contextCalls.push({ snapshot, worktree });
+      return Promise.resolve('/data/o-demo-4/pr-context.json');
+    },
     runAgent: ({ cwd, prompt, argv, logPath, timeoutMs }) => {
       prompts.push(prompt);
       argvs.push(argv);
@@ -153,6 +159,31 @@ describe('preparePr', () => {
     expect(readFileSync(result.bundlePath, 'utf-8')).toContain('bundle');
     expect(result.headSha).toBe(snapshot().headSha);
     expect(argvs[0]).toEqual(['claude', '-p', '--output-format', 'json']);
+  });
+
+  it('reads the discussion before the agent runs and points the prompt at it', async () => {
+    const result = await preparePr(snapshot(), config(), deps());
+
+    expect(contextCalls).toEqual([{ snapshot: snapshot(), worktree: worktreePath(worktreesDir, snapshot()) }]);
+    expect(prompts[0]).toContain('/data/o-demo-4/pr-context.json');
+    expect(result.kind).toBe('prepared');
+  });
+
+  it('reviews without the discussion when the forge could not be read', async () => {
+    const result = await preparePr(snapshot(), config(), deps({ prContext: () => Promise.resolve(null) }));
+
+    expect(prompts[0]).not.toContain('pr-context.json');
+    expect(result.kind).toBe('prepared');
+  });
+
+  it('reviews without the discussion when reading it threw, and logs why', async () => {
+    const result = await preparePr(snapshot(), config(), deps({
+      prContext: () => Promise.reject(new Error('gh pr view failed: no access')),
+    }));
+
+    expect(daemonLog).toContain('o/demo#4: the discussion could not be read \u2014 gh pr view failed: no access');
+    expect(prompts[0]).not.toContain('pr-context.json');
+    expect(result.kind).toBe('prepared');
   });
 
   it('reads the verdict out of a JSON result and carries the run\'s stats', async () => {
@@ -450,6 +481,27 @@ describe('posting the findings behind an alert', () => {
       url: 'https://github.com/o/demo/pull/4#pullrequestreview-9', commentIds: 1,
     });
     expect(daemonLog).toContain('posted 1 alert finding(s) to o/demo#4 — https://github.com/o/demo/pull/4#pullrequestreview-9');
+  });
+
+  it('ends the review body with the reviewer\'s footer, and leaves the comments unchanged', async () => {
+    const withFooter = { ...posting(), postFooter: 'cc @NaturalCycles/platform\nAutomated triage, not a review.' };
+    await preparePr(snapshot(), withFooter, deps({
+      ...alerting('cf15e689'),
+      listThreads: () => Promise.resolve([named()]),
+    }));
+
+    expect(submissions[0].submission.body)
+      .toBe('[not yet checked by human] touches auth\n\ncc @NaturalCycles/platform\nAutomated triage, not a review.');
+    expect(submissions[0].submission.comments[0].body).toBe('[not yet checked by human]\n\nP1: this leaks the token');
+  });
+
+  it('adds nothing when the footer is empty or only spaces', async () => {
+    await preparePr(snapshot(), { ...posting(), postFooter: '  \n ' }, deps({
+      ...alerting('cf15e689'),
+      listThreads: () => Promise.resolve([named()]),
+    }));
+
+    expect(submissions[0].submission.body).toBe('[not yet checked by human] touches auth');
   });
 
   it('marks what went out as sent, with the forge comment id it went out as', async () => {

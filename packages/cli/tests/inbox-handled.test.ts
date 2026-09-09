@@ -16,7 +16,7 @@ let path: string;
 
 function snapshot(over: Partial<PrSnapshot> = {}): PrSnapshot {
   return {
-    owner: 'o', repo: 'r', number: 1, title: 'A change', url: 'https://github.com/o/r/pull/1',
+    owner: 'o', repo: 'r', number: 1, title: 'A change', body: '', url: 'https://github.com/o/r/pull/1',
     author: 'alice', isBot: false, isDraft: false, state: 'OPEN', headSha: 'aaa', baseRef: 'main',
     additions: 10, deletions: 2, changedFiles: 3, createdAt: '2026-09-02T10:00:00Z', updatedAt: '2026-09-02T10:00:00Z',
     checks: [], files: [], ...over,
