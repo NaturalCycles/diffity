@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 
 const ENTRY = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'index.js');
-import { noneInflight, realAttendantDeps, realPrepareDeps, runAgent, startDiffityServer } from '../src/inbox/runtime.js';
+import { noneInflight, realAttendantDeps, realPrepareDeps, realTriageAgent, runAgent, startDiffityServer } from '../src/inbox/runtime.js';
 import { generalCommentIdOf, threadsToValidate } from '../src/inbox/validate.js';
 import type { AttendedPr } from '../src/inbox/attendant.js';
 import type { InboxConfig } from '../src/inbox/config.js';
@@ -35,6 +35,7 @@ function liveConfig(): InboxConfig {
     postAlerts: false, postPrefix: '[not yet checked by human]', postFooter: '',
     agent: { model: 'the-configured-model', effort: null, mcpAllow: [], extraArgs: [], maxBudgetUsd: null },
     validate: { model: null, timeoutMinutes: 15, maxBudgetUsd: null },
+    triage: { repos: [], bodyPatterns: [], model: null, maxDiffKb: 150, maxBudgetUsd: 0.25 },
     waitForCi: false, prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10,
   };
 }
@@ -489,3 +490,150 @@ function writeFileSyncEntry(path: string, port: number): void {
 function writeFileSyncSilent(path: string): void {
   writeFileSync(path, 'setInterval(() => {}, 1000);\n');
 }
+
+describe('the real triage agent', () => {
+  /** A `claude` on PATH that records how it was called and answers with one result object. */
+  function standInClaude(name: string, result: string): { bin: string; argv: () => string[]; prompt: () => string } {
+    const bin = join(root, name);
+    mkdirSync(bin, { recursive: true });
+    const argvPath = join(bin, 'argv.json');
+    const promptPath = join(bin, 'prompt.txt');
+    const script = join(bin, 'stand-in.js');
+    writeFileSync(script, [
+      "const fs = require('fs');",
+      "let input = '';",
+      "process.stdin.on('data', chunk => { input += chunk; });",
+      'process.stdin.on(\'end\', () => {',
+      `  fs.writeFileSync(${JSON.stringify(argvPath)}, JSON.stringify(process.argv.slice(2)));`,
+      `  fs.writeFileSync(${JSON.stringify(promptPath)}, input);`,
+      `  process.stdout.write(${JSON.stringify(result)});`,
+      '});',
+    ].join('\n') + '\n');
+    writeFileSync(join(bin, 'claude'), `#!/bin/sh\nexec '${process.execPath}' '${script}' "$@"\n`, { mode: 0o755 });
+    return {
+      bin,
+      argv: () => JSON.parse(readFileSync(argvPath, 'utf-8')) as string[],
+      prompt: () => readFileSync(promptPath, 'utf-8'),
+    };
+  }
+
+  /** One `--output-format json` result, as the agent prints it. */
+  function resultJson(over: Record<string, unknown> = {}): string {
+    return JSON.stringify({
+      type: 'result', subtype: 'success', is_error: false, result: 'TRIAGE: rewrites the pipeline',
+      total_cost_usd: 0.02, duration_ms: 4200, num_turns: 1,
+      usage: { input_tokens: 900, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      modelUsage: { 'claude-haiku': {} }, ...over,
+    });
+  }
+
+  function triageConfig(over: Partial<InboxConfig['triage']> = {}): InboxConfig {
+    return { ...liveConfig(), triage: { repos: ['o/r'], bodyPatterns: [], model: 'haiku', maxDiffKb: 150, maxBudgetUsd: 0.25, ...over } };
+  }
+
+  function snapshot(): PrSnapshot {
+    return {
+      owner: 'o', repo: 'r', number: 9, title: 'A watched change', body: 'Risk Evaluation: high',
+      url: 'https://github.com/o/r/pull/9', author: 'alice', isBot: false, isDraft: false, state: 'OPEN',
+      headSha: 'aaa', baseRef: 'main', additions: 1, deletions: 0, changedFiles: 1,
+      createdAt: 'now', updatedAt: 'now', checks: [], files: [{ path: 'src/a.ts', additions: 1, deletions: 0 }],
+    };
+  }
+
+  it('runs the named model with no tools, the prompt on stdin, and takes its TRIAGE line', async () => {
+    const stand = standInClaude('triage-bin', resultJson());
+    const logged: string[] = [];
+    const triage = realTriageAgent(triageConfig(), message => logged.push(message));
+
+    let answer: Awaited<ReturnType<typeof triage>> | null = null;
+    await withStandInAgent(stand.bin, async () => {
+      answer = await triage({ snapshot: snapshot(), diff: 'diff --git a/src/a.ts b/src/a.ts', alertWhen: 'the algorithm changes' });
+    });
+
+    expect(answer!.reason).toBe('rewrites the pipeline');
+    expect(answer!.run.outcome).toBe('triaged');
+    expect(answer!.run.note).toBeNull();
+    expect(answer!.run.stats).toMatchObject({ costUsd: 0.02, models: ['claude-haiku'] });
+    const argv = stand.argv();
+    expect(argv.slice(0, 4)).toEqual(['-p', '--output-format', 'json', '--setting-sources']);
+    expect(argv[argv.indexOf('--model') + 1]).toBe('haiku');
+    expect(argv.slice(-2)).toEqual(['--tools', '']);
+    expect(stand.prompt()).toContain('  the algorithm changes');
+    expect(stand.prompt()).toContain('diff --git a/src/a.ts');
+    expect(logged).toEqual([]);
+  });
+
+  it('leaves the pull request quiet when the model says there is nothing', async () => {
+    const stand = standInClaude('quiet-bin', resultJson({ result: 'TRIAGE: none' }));
+    const triage = realTriageAgent(triageConfig(), () => {});
+
+    let answer: Awaited<ReturnType<typeof triage>> | null = null;
+    await withStandInAgent(stand.bin, async () => {
+      answer = await triage({ snapshot: snapshot(), diff: '', alertWhen: '' });
+    });
+
+    expect(answer!.reason).toBeNull();
+    expect(answer!.run.outcome).toBe('triaged');
+  });
+
+  it('counts a run with no verdict, a spent budget and a session limit as quiet, and says why', async () => {
+    const cases: [string, Record<string, unknown>, string][] = [
+      ['no-verdict-bin', { result: 'I had a look and it seems fine' }, 'ended without a TRIAGE line'],
+      ['budget-bin', { subtype: 'error_max_budget_usd', result: '' }, 'hit its budget of $0.25'],
+      ['limit-bin', { result: 'You have hit your session limit, resets 2pm' }, 'hit the Claude session limit'],
+    ];
+    for (const [name, over, note] of cases) {
+      const stand = standInClaude(name, resultJson(over));
+      const triage = realTriageAgent(triageConfig(), () => {});
+      let answer: Awaited<ReturnType<typeof triage>> | null = null;
+      await withStandInAgent(stand.bin, async () => {
+        answer = await triage({ snapshot: snapshot(), diff: '', alertWhen: '' });
+      });
+      expect(answer!.reason).toBeNull();
+      expect(answer!.run.outcome).toBe('failed');
+      expect(answer!.run.note).toContain(note);
+    }
+  });
+
+  it('says the budget was hit without naming one when the cap is off', async () => {
+    const stand = standInClaude('uncapped-bin', resultJson({ subtype: 'error_max_budget_usd', result: '' }));
+    const triage = realTriageAgent(triageConfig({ maxBudgetUsd: null }), () => {});
+
+    let answer: Awaited<ReturnType<typeof triage>> | null = null;
+    await withStandInAgent(stand.bin, async () => {
+      answer = await triage({ snapshot: snapshot(), diff: '', alertWhen: '' });
+    });
+
+    expect(answer!.run.note).toBe('the triage agent hit its budget');
+    expect(stand.argv()).not.toContain('--max-budget-usd');
+  });
+
+  it('answers with a failed run, and logs it, when the command is not there at all', async () => {
+    const bin = join(root, 'empty-bin');
+    mkdirSync(bin, { recursive: true });
+    const logged: string[] = [];
+    const triage = realTriageAgent(triageConfig(), message => logged.push(message));
+
+    const path = process.env.PATH;
+    const dataDir = process.env.DIFFITY_DATA_DIR;
+    process.env.PATH = bin;
+    process.env.DIFFITY_DATA_DIR = join(root, 'triage-data');
+    let answer: Awaited<ReturnType<typeof triage>> | null = null;
+    try {
+      answer = await triage({ snapshot: snapshot(), diff: '', alertWhen: '' });
+    } finally {
+      process.env.PATH = path;
+      if (dataDir === undefined) {
+        delete process.env.DIFFITY_DATA_DIR;
+      } else {
+        process.env.DIFFITY_DATA_DIR = dataDir;
+      }
+    }
+
+    expect(answer!.reason).toBeNull();
+    expect(answer!.run.outcome).toBe('failed');
+    expect(answer!.run.note).toContain('could not be run');
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toContain('o/r#9');
+  });
+});

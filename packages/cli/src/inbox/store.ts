@@ -58,6 +58,8 @@ export interface InboxPr {
   alertFindings: string[];
   /** The review the daemon posted the alert findings in, or null when it has posted none. */
   autoPosted: AutoPosted | null;
+  /** Why the triage flagged this one, when it did; null for one the reviewer was asked for alone. */
+  triageReason: string | null;
   bundlePath: string | null;
   worktreePath: string | null;
   logPath: string | null;
@@ -101,12 +103,44 @@ export interface HandledMark extends Handled {
   prId: string;
 }
 
-/** Which agent pass a run was: the drafting one, the one that checks its findings, or an answer. */
-export const RUN_PHASES = ['prepare', 'validate', 'answer'] as const;
+/**
+ * Which agent pass a run was: the cheap look at a watched pull request, the drafting one, the one
+ * that checks its findings, or an answer.
+ */
+export const RUN_PHASES = ['triage', 'prepare', 'validate', 'answer'] as const;
 export type RunPhase = (typeof RUN_PHASES)[number];
 
-export const RUN_OUTCOMES = ['prepared', 'skipped', 'validated', 'answered', 'failed', 'timeout', 'rate-limited'] as const;
+export const RUN_OUTCOMES = ['triaged', 'prepared', 'skipped', 'validated', 'answered', 'failed', 'timeout', 'rate-limited'] as const;
 export type RunOutcome = (typeof RUN_OUTCOMES)[number];
+
+/**
+ * What the triage made of a watched pull request: nothing, a flag, not worth looking at, or a look
+ * that never reached a verdict — which is a reason to look again rather than a decision.
+ */
+export const TRIAGE_OUTCOMES = ['none', 'alert', 'skipped', 'failed'] as const;
+export type TriageOutcome = (typeof TRIAGE_OUTCOMES)[number];
+
+/**
+ * What one triage pass decided about one watched pull request, kept so the next pass spends
+ * nothing on a pull request nothing has changed about.
+ */
+export interface TriageRecord {
+  prId: string;
+  /** The forge's own last-updated stamp, which is what "nothing has changed" is judged against. */
+  updatedAt: string;
+  /** The head the decision was made against, when a snapshot was read; null when the rules sufficed. */
+  headSha: string | null;
+  outcome: TriageOutcome;
+  reason: string | null;
+  at: string;
+}
+
+/** How the last triage pass went, for the footer: what it watched, and what it left quiet. */
+export interface TriagePass {
+  watched: number;
+  quiet: number;
+  at: string;
+}
 
 /** One agent run as the log keeps it: what it was for, what it spent, and how it ended. */
 export interface RunRecord {
@@ -253,7 +287,8 @@ export class InboxStore {
         auto_posted_at TEXT,
         auto_posted_head_sha TEXT,
         auto_posted_url TEXT,
-        ci_state TEXT
+        ci_state TEXT,
+        triage_reason TEXT
       )
     `);
     this.db.exec(`
@@ -288,9 +323,21 @@ export class InboxStore {
       )
     `);
     this.db.exec('CREATE INDEX IF NOT EXISTS inbox_handled_pr_at ON inbox_handled (pr_id, at)');
+    // One row per watched pull request, overwritten at each decision: what it answers is "has
+    // anything changed since the last look, and what did that look come to".
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS inbox_triage (
+        pr_id TEXT PRIMARY KEY,
+        updated_at TEXT NOT NULL,
+        head_sha TEXT,
+        outcome TEXT NOT NULL,
+        reason TEXT,
+        at TEXT NOT NULL
+      )
+    `);
     this.db.exec('CREATE TABLE IF NOT EXISTS inbox_state (key TEXT PRIMARY KEY, value TEXT)');
     // A table from an earlier build gains the columns it lacks; a fresh one already has them.
-    for (const column of ['attempts INTEGER NOT NULL DEFAULT 0', 'created_at TEXT', 'updated_at TEXT', 'bumped_at TEXT', 'summary TEXT', 'alert TEXT', 'alert_findings TEXT', 'auto_posted_at TEXT', 'auto_posted_head_sha TEXT', 'auto_posted_url TEXT', 'ci_state TEXT']) {
+    for (const column of ['attempts INTEGER NOT NULL DEFAULT 0', 'created_at TEXT', 'updated_at TEXT', 'bumped_at TEXT', 'summary TEXT', 'alert TEXT', 'alert_findings TEXT', 'auto_posted_at TEXT', 'auto_posted_head_sha TEXT', 'auto_posted_url TEXT', 'ci_state TEXT', 'triage_reason TEXT']) {
       try {
         this.db.exec(`ALTER TABLE inbox_prs ADD COLUMN ${column}`);
       } catch (err) {
@@ -392,6 +439,66 @@ export class InboxStore {
   markAutoPosted(id: string, posted: AutoPosted): void {
     this.db.prepare('UPDATE inbox_prs SET auto_posted_at = ?, auto_posted_head_sha = ?, auto_posted_url = ? WHERE id = ?')
       .run(posted.at, posted.headSha, posted.url, id);
+  }
+
+  /** Why the triage flagged this one — what the preparing agent is told, and the row's own origin. */
+  setTriageReason(id: string, reason: string | null): void {
+    this.db.prepare('UPDATE inbox_prs SET triage_reason = ? WHERE id = ?').run(reason, id);
+  }
+
+  /**
+   * What a triage pass decided about a watched pull request. One row per pull request, overwritten
+   * at each decision: the question it answers is about the pull request as it stands now.
+   */
+  recordTriage(record: TriageRecord): void {
+    this.db.prepare(`
+      INSERT INTO inbox_triage (pr_id, updated_at, head_sha, outcome, reason, at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(pr_id) DO UPDATE SET
+        updated_at = excluded.updated_at,
+        head_sha = excluded.head_sha,
+        outcome = excluded.outcome,
+        reason = excluded.reason,
+        at = excluded.at
+    `).run(record.prId, record.updatedAt, record.headSha, record.outcome, record.reason, record.at);
+  }
+
+  /** What the last pass made of this pull request, or null when none has looked at it. */
+  triageOf(prId: string): TriageRecord | null {
+    const row = this.db.prepare('SELECT * FROM inbox_triage WHERE pr_id = ?').get(prId) as unknown as TriageDbRow | undefined;
+    return row
+      ? {
+        prId: row.pr_id,
+        updatedAt: row.updated_at,
+        headSha: row.head_sha,
+        outcome: normaliseTriageOutcome(row.outcome),
+        reason: row.reason,
+        at: row.at,
+      }
+      : null;
+  }
+
+  /** How the last pass went, so the footer can say what is being watched without counting again. */
+  recordTriagePass(pass: TriagePass): void {
+    this.db.prepare("INSERT INTO inbox_state (key, value) VALUES ('triagePass', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .run(JSON.stringify(pass));
+  }
+
+  /** The last pass's counts, or null before one has run. */
+  triagePass(): TriagePass | null {
+    const row = this.db.prepare("SELECT value FROM inbox_state WHERE key = 'triagePass'").get() as unknown as { value: string } | undefined;
+    if (!row) {
+      return null;
+    }
+    try {
+      const parsed: unknown = JSON.parse(row.value);
+      const pass = parsed as Partial<TriagePass>;
+      return typeof pass?.watched === 'number' && typeof pass?.quiet === 'number' && typeof pass?.at === 'string'
+        ? { watched: pass.watched, quiet: pass.quiet, at: pass.at }
+        : null;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -530,6 +637,7 @@ interface Row {
   auto_posted_head_sha: string | null;
   auto_posted_url: string | null;
   ci_state: string | null;
+  triage_reason: string | null;
 }
 
 function rowToPr(row: Row): InboxPr {
@@ -563,12 +671,22 @@ function rowToPr(row: Row): InboxPr {
     autoPosted: row.auto_posted_at != null && row.auto_posted_head_sha != null
       ? { at: row.auto_posted_at, headSha: row.auto_posted_head_sha, url: row.auto_posted_url ?? null }
       : null,
+    triageReason: row.triage_reason,
     bundlePath: row.bundle_path,
     worktreePath: row.worktree_path,
     logPath: row.log_path,
     firstSeenAt: row.first_seen_at,
     lastSeenAt: row.last_seen_at,
   };
+}
+
+interface TriageDbRow {
+  pr_id: string;
+  updated_at: string;
+  head_sha: string | null;
+  outcome: string;
+  reason: string | null;
+  at: string;
 }
 
 interface HandledDbRow {
@@ -642,6 +760,11 @@ function parseAlertFindings(value: string | null): string[] {
   } catch {
     return [];
   }
+}
+
+/** A row from a build that knew other outcomes reads as one nothing was made of. */
+function normaliseTriageOutcome(value: string): TriageOutcome {
+  return (TRIAGE_OUTCOMES as readonly string[]).includes(value) ? (value as TriageOutcome) : 'none';
 }
 
 /** A mark from a build that posted other kinds of review still reads as something the reviewer said. */

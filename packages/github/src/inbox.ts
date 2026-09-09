@@ -363,3 +363,70 @@ export function parseReviewComments(json: string): PrContextReviewComment[] {
 function objects(raw: unknown) {
   return Array.isArray(raw) ? raw.filter(item => typeof item === 'object' && item !== null) : [];
 }
+
+/**
+ * One open pull request of a watched repository, as the repository-wide search reports it. The
+ * description travels with the listing, so a rule about the description costs no further call.
+ */
+export interface TriageCandidate extends PrRef {
+  title: string;
+  body: string;
+  author: string;
+  isBot: boolean;
+  url: string;
+  updatedAt: string;
+}
+
+/** Every open, non-draft pull request of one repository, one search page of them. */
+export async function listOpenPrs(repo: string, run: GhRun = ghAsync): Promise<TriageCandidate[]> {
+  const json = await run([
+    'search', 'prs',
+    '--repo', repo,
+    '--state=open',
+    '--draft=false',
+    '--limit', '100',
+    '--json', 'number,title,body,author,updatedAt,url,repository',
+  ]);
+  return parseOpenPrs(json);
+}
+
+/**
+ * One page of `gh search prs`. The search reports an app's pull request with `is_bot` false and
+ * `type` "Bot", where `gh pr view` sets `is_bot`, so both are read: a bot's pull request must not
+ * cost a triage.
+ */
+export function parseOpenPrs(json: string): TriageCandidate[] {
+  const data: unknown = JSON.parse(json);
+  if (!Array.isArray(data)) {
+    return [];
+  }
+  const candidates: TriageCandidate[] = [];
+  for (const item of data) {
+    const nameWithOwner = item?.repository?.nameWithOwner;
+    const number = item?.number;
+    if (typeof nameWithOwner !== 'string' || typeof number !== 'number') {
+      continue;
+    }
+    const [owner, repo] = nameWithOwner.split('/');
+    if (!owner || !repo) {
+      continue;
+    }
+    candidates.push({
+      owner,
+      repo,
+      number,
+      title: String(item.title ?? ''),
+      body: String(item.body ?? ''),
+      author: String(item.author?.login ?? ''),
+      isBot: item.author?.is_bot === true || item.author?.type === 'Bot',
+      url: String(item.url ?? ''),
+      updatedAt: String(item.updatedAt ?? ''),
+    });
+  }
+  return candidates;
+}
+
+/** The pull request's diff as the forge renders it; the caller cuts it to what it can read. */
+export function prDiff(ref: PrRef, run: GhRun = ghAsync): Promise<string> {
+  return run(['pr', 'diff', String(ref.number), '--repo', `${ref.owner}/${ref.repo}`]);
+}

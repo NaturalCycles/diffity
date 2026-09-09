@@ -2,18 +2,18 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { MAX_SETTINGS_TEXT, parseSettingsPatch } from './settings.js';
 import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import { getViewerLogin, searchReviewRequested, viewPr, type PrSnapshot } from '@diffity/github';
+import { getViewerLogin, listOpenPrs, prDiff, searchReviewRequested, viewPr, type PrSnapshot } from '@diffity/github';
 import { saveInboxSettings, type InboxConfig, type InboxSettings } from './config.js';
 import { inboxDir } from './paths.js';
 import { logsDir, preparePr, type PrepareDeps, type PrepareResult } from './prepare.js';
-import { noneInflight, realAttendantDeps, realPrepareDeps, type Inflight } from './runtime.js';
+import { noneInflight, realAttendantDeps, realPrepareDeps, realTriageAgent, type Inflight } from './runtime.js';
 import { Attendants, type AttendedPr } from './attendant.js';
 import { removeWorktree, cloneDir } from './worktree.js';
 import { localHhMm } from './runs.js';
 import { findInstanceForRepo, killInstance } from '../registry.js';
 import { repoHash } from './open-session.js';
 import { InboxStore } from './store.js';
-import { prepareBumped, runTick, type Forge } from './tick.js';
+import { prepareBumped, runTick, type Forge, type PrepareRequest } from './tick.js';
 import { buildView } from './view.js';
 import { resolveBump, resolveDismiss, resolveOpen } from './open.js';
 import { openPreparedSession, realOpenSessionDeps, type OpenSessionDeps } from './open-session.js';
@@ -23,6 +23,8 @@ const realForge: Forge = {
   viewerLogin: getViewerLogin,
   searchReviewRequested,
   viewPr,
+  listOpenPrs,
+  prDiff,
 };
 
 /** Each pull request's diffity data lives apart, so a prepared session never mixes with another. */
@@ -45,7 +47,7 @@ export interface DaemonOptions {
   /** Who parks on an opened review; defaults to the real attendants. Tests override it. */
   attendants?: AttendantHost;
   /** How one pull request is prepared; defaults to the real preparation. Tests override it. */
-  prepare?: (snapshot: PrSnapshot, opts: { bumped: boolean; alreadyPostedHead: string | null }) => Promise<PrepareResult>;
+  prepare?: (snapshot: PrSnapshot, opts: PrepareRequest) => Promise<PrepareResult>;
   /** Where the prepares register what they have running, for the shutdown to stop; its own by default. */
   inflight?: Inflight;
   /** Where the page's settings are written; without it they change the running daemon only. */
@@ -83,7 +85,7 @@ export function settingsHost(config: InboxConfig, configPath: string | undefined
       postAlerts: config.postAlerts, postPrefix: config.postPrefix, postFooter: config.postFooter,
       maxPrepared: config.maxPrepared, pollMinutes: config.pollMinutes,
       live: config.live, liveTimeoutMinutes: config.liveTimeoutMinutes, prepareTimeoutMinutes: config.prepareTimeoutMinutes,
-      waitForCi: config.waitForCi, agent: config.agent, validate: config.validate,
+      waitForCi: config.waitForCi, agent: config.agent, validate: config.validate, triage: config.triage,
     }),
     update: settings => {
       // The config object is the one the tick, the prepares and the opens read from, so the change
@@ -130,7 +132,7 @@ export async function runDaemon(
   const pausedUntil = () => store.pausedUntil(new Date().toISOString());
   const deps = {
     forge: options.forge ?? realForge,
-    prepare: options.prepare ?? ((snapshot: PrSnapshot, opts: { bumped: boolean; alreadyPostedHead: string | null }) => preparePr(snapshot, config, prepareDeps, opts)),
+    prepare: options.prepare ?? ((snapshot: PrSnapshot, opts: PrepareRequest) => preparePr(snapshot, config, prepareDeps, opts)),
     removeWorktree: (worktree: string, repo: string) => reclaimWorktree(config, worktree, repo),
     log,
     now: () => new Date().toISOString(),
@@ -142,6 +144,9 @@ export async function runDaemon(
     get waitForCi() { return config.waitForCi; },
     get skipTitles() { return config.skipTitles; },
     get alertPaths() { return config.alertPaths; },
+    get alertWhen() { return config.alertWhen; },
+    get triage() { return config.triage; },
+    triageAgent: realTriageAgent(config, log, inflight),
     get agentModel() { return config.agent.model; },
     get validateModel() { return config.validate.model; },
     pauseUntil: (until: string) => {

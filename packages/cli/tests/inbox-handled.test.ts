@@ -306,4 +306,17 @@ describe('diffity inbox status', () => {
     // The one nothing was raised about is still listed, below.
     expect(printed).toContain('A tidy-up');
   });
+
+  it('says how the last triage pass went, and nothing while no repository is watched', async () => {
+    process.env.DIFFITY_DATA_DIR = join(dir, 'data');
+    const store = new InboxStore(inboxStorePath());
+    store.observe(snapshot(), true, 'now');
+    store.close();
+    expect(await statusOutput()).not.toContain('watched');
+
+    const watching = new InboxStore(inboxStorePath());
+    watching.recordTriagePass({ watched: 12, quiet: 11, at: 'now' });
+    watching.close();
+    expect(await statusOutput()).toContain('12 watched · 11 quiet');
+  });
 });

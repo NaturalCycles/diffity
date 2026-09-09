@@ -11,3 +11,5 @@ export { searchReviewRequested, viewPr, parseReviewRequested, parsePrSnapshot, p
 export type { PrRef, PrSnapshot, PrState, PrCheck, PrFile, CiState } from './inbox.js';
 export { fetchPrContext, parseDiscussion, parseReviewComments, cutText, MAX_CONTEXT_BODY } from './inbox.js';
 export type { PrContext, PrContextComment, PrContextReview, PrContextReviewComment, GhRun } from './inbox.js';
+export { listOpenPrs, parseOpenPrs, prDiff } from './inbox.js';
+export type { TriageCandidate } from './inbox.js';

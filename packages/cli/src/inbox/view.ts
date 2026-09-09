@@ -1,5 +1,5 @@
 import type { CiState } from '@diffity/github';
-import { isRetired, type AutoPosted, type Handled, type InboxPr, type InboxStore, type RunTotals } from './store.js';
+import { isRetired, type AutoPosted, type Handled, type InboxPr, type InboxStore, type RunTotals, type TriagePass } from './store.js';
 import { costOf, minutesOf, runDetail } from './runs.js';
 import { BUMPABLE } from './open.js';
 
@@ -40,6 +40,8 @@ export interface InboxRow {
   alertFindings: string[];
   /** The review the daemon posted those findings in, when it did; null when it posted none. */
   autoPosted: AutoPosted | null;
+  /** Why the triage flagged this one, when it did; null for one the reviewer was asked for alone. */
+  triageReason: string | null;
   openUrl: string | null;
   /** Where a POST dismisses it; null while it is being prepared, and once it is retired. */
   dismissUrl: string | null;
@@ -70,6 +72,8 @@ export interface InboxView {
   runs: { today: RunTotals; week: RunTotals };
   /** Until when preparation is held back — the reviewer's Claude limit — or null when it is not. */
   pausedUntil: string | null;
+  /** How the last pass over the watched repositories went; null when none is watched. */
+  triage: TriagePass | null;
 }
 
 export function buildView(store: InboxStore, openBase: string, now: string): InboxView {
@@ -85,7 +89,10 @@ export function buildView(store: InboxStore, openBase: string, now: string): Inb
   const dismissed = rows.filter(row => row.status === 'dismissed');
   const other = rows.filter(row => !openable.includes(row) && !working.includes(row) && !dismissed.includes(row)
     && !handledIds.has(row.id) && !isRetired(row.status));
-  return { alerted, ready, working, handled, other, dismissed, generatedAt: now, runs: runWindows(store, now), pausedUntil: store.pausedUntil(now) };
+  return {
+    alerted, ready, working, handled, other, dismissed, generatedAt: now,
+    runs: runWindows(store, now), pausedUntil: store.pausedUntil(now), triage: store.triagePass(),
+  };
 }
 
 type HandledRow = InboxRow & { handled: NonNullable<InboxRow['handled']> };
@@ -153,6 +160,7 @@ function toRow(pr: InboxPr, openBase: string, store: InboxStore): InboxRow {
     alert: pr.alert,
     alertFindings: pr.alertFindings,
     autoPosted: pr.autoPosted,
+    triageReason: pr.triageReason,
     openUrl: openable ? `${openBase}/open/${encodeURIComponent(pr.id)}` : null,
     dismissUrl: pr.status === 'preparing' || pr.status === 'dismissed' || isRetired(pr.status) ? null : `${openBase}/dismiss/${encodeURIComponent(pr.id)}`,
     prepareUrl: bumpable && pr.bumpedAt === null ? `${openBase}/prepare/${encodeURIComponent(pr.id)}` : null,

@@ -11,7 +11,7 @@ import { openPreparedSession, baseRefOf, ensureServer, repoHash, serverArgs, typ
 import { startInboxServer, settingsHost, type AttendantHost, type ServerHooks } from '../src/inbox/daemon.js';
 import { InboxStore } from '../src/inbox/store.js';
 import { readRegistry, registerInstance } from '../src/registry.js';
-import type { AgentConfig, ValidateConfig } from '../src/inbox/config.js';
+import type { AgentConfig, TriageConfig, ValidateConfig } from '../src/inbox/config.js';
 import type { PrSnapshot } from '@diffity/github';
 
 const ENTRY = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'index.js');
@@ -25,6 +25,11 @@ const PREFIX = '[not yet checked by human]';
 
 function validateConfig(): ValidateConfig {
   return { model: null, timeoutMinutes: 15, maxBudgetUsd: null };
+}
+
+/** No repository watched, as it ships; a test that wants the triage names its own. */
+function triageConfig(): TriageConfig {
+  return { repos: [], bodyPatterns: [], model: null, maxDiffKb: 150, maxBudgetUsd: 0.25 };
 }
 
 let root: string;
@@ -228,7 +233,7 @@ describe('the inbox server routes', () => {
   };
 
   async function serve(store: InboxStore, logs: string[] = [], attendants: AttendantHost | null = null, onBump: (() => void) | null = null, configPath?: string, extra: Partial<ServerHooks> = {}) {
-    const config = { pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', skipTitles: [], alertWhen: '', alertPaths: [], postAlerts: false, postPrefix: PREFIX, postFooter: '', agent: agentConfig(), validate: validateConfig(), waitForCi: false, prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10 };
+    const config = { pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', skipTitles: [], alertWhen: '', alertPaths: [], postAlerts: false, postPrefix: PREFIX, postFooter: '', agent: agentConfig(), validate: validateConfig(), triage: triageConfig(), waitForCi: false, prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10 };
     const server = startInboxServer(store, config, m => logs.push(m), stubOpen, { attendants, onBump, settings: settingsHost(config, configPath), ...extra });
     await new Promise(resolve => server.on('listening', resolve));
     const { port } = server.address() as { port: number };
@@ -364,12 +369,14 @@ describe('the inbox server routes', () => {
         filter: '', skipTitles: [], alertWhen: '', alertPaths: [], postAlerts: false, postPrefix: PREFIX, postFooter: '',
         maxPrepared: 5, pollMinutes: 5, live: true,
         liveTimeoutMinutes: 10, prepareTimeoutMinutes: 30, waitForCi: false, agent: agentConfig(), validate: validateConfig(),
+        triage: triageConfig(),
       });
 
       const next = {
         filter: 'skip payments', skipTitles: ['\\(payments\\)'], alertWhen: 'a P1', alertPaths: ['packages/shared/src/model/**'],
         postAlerts: true, postPrefix: '[a machine wrote this]', postFooter: 'cc @NaturalCycles/platform',
         maxPrepared: 2, pollMinutes: 3, live: false, liveTimeoutMinutes: 4, prepareTimeoutMinutes: 20, waitForCi: true, validate: validateConfig(),
+        triage: { ...triageConfig(), repos: ['NaturalCycles/NCBackend3'], bodyPatterns: ['^\\* platform - risk level: high$'] },
         agent: { ...agentConfig(), model: 'opus', mcpAllow: ['mcp__atlassian__getJiraIssue'] },
       };
       const saved = await fetch(`http://127.0.0.1:${port}/api/settings`, {
@@ -465,7 +472,7 @@ describe('the inbox server routes', () => {
       ensureServer: () => Promise.resolve(7788),
       importBundle: () => { throw new Error('head moved'); },
     };
-    const config = { pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', skipTitles: [], alertWhen: '', alertPaths: [], postAlerts: false, postPrefix: PREFIX, postFooter: '', agent: agentConfig(), validate: validateConfig(), waitForCi: false, prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10 };
+    const config = { pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', skipTitles: [], alertWhen: '', alertPaths: [], postAlerts: false, postPrefix: PREFIX, postFooter: '', agent: agentConfig(), validate: validateConfig(), triage: triageConfig(), waitForCi: false, prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10 };
     const server = startInboxServer(store, config, m => logs.push(m), failingOpen);
     await new Promise(resolve => server.on('listening', resolve));
     const { port } = server.address() as { port: number };

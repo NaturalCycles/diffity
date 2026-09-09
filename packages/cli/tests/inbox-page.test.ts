@@ -44,6 +44,29 @@ describe('the inbox page', () => {
     expect(script).toContain("maxBudgetUsd: checkBudget === '' ? null : Number(checkBudget)");
   });
 
+  it('has a settings field for each triage setting, and sends the block back whole', () => {
+    const html = inboxPage();
+    for (const id of ['triageRepos', 'triageBodyPatterns', 'triageModel']) {
+      expect(html).toContain(`id="${id}"`);
+    }
+    // Rules only until a model is named, which is what the field's placeholder says.
+    expect(html).toContain('id="triageModel" type="text" placeholder="rules only"');
+    const script = pageScript();
+    expect(script).toContain("repos: el('triageRepos').value.split('\\n')");
+    expect(script).toContain("bodyPatterns: el('triageBodyPatterns').value.split('\\n')");
+    expect(script).toContain("model: el('triageModel').value.trim() || null");
+    // The two the panel does not edit go back as they came, so a save does not drop them.
+    expect(script).toContain('maxDiffKb: settings.triage ? settings.triage.maxDiffKb : 150');
+    expect(script).toContain('maxBudgetUsd: settings.triage ? settings.triage.maxBudgetUsd : null');
+  });
+
+  it('says what the last triage pass watched, and marks a flagged row and card', () => {
+    const script = pageScript();
+    expect(script).toContain("view.triage.watched + ' watched \\u00b7 ' + view.triage.quiet + ' quiet'");
+    expect(script).toContain("r.triageReason ? 'flagged: ' + esc(r.triageReason) : ''");
+    expect(script).toContain("flagged ? 'flagged' : r.status");
+  });
+
   it('shows what a prepared review spent, the totals, and the pause', () => {
     const script = pageScript();
     expect(script).toContain("Math.round(r.spend.minutes) + ' min");
@@ -70,8 +93,8 @@ describe('the inbox page', () => {
     expect(script).toContain("const busy = r.status === 'preparing'");
     expect(script).toContain("'preparing \\u00b7 bumped'");
     // The \u2191 the reviewer pressed reads as bumped only while the row is still waiting its turn.
-    expect(script).toContain("r.bumped && r.status === 'queued' ? 'bumped' : r.status");
-    expect(script).toContain("plainRow(r, busy ? 'work busy' : 'work', label, busy)");
+    expect(script).toContain("r.bumped && r.status === 'queued' ? 'bumped' : flagged ? 'flagged' : r.status");
+    expect(script).toContain("plainRow(r, busy ? 'work busy' : flagged ? 'alert' : 'work', label, busy)");
     expect(script).toContain("busy ? 'row busy' : 'row'");
 
     const html = inboxPage();
@@ -183,7 +206,7 @@ describe('the inbox page', () => {
     const script = pageScript();
     // The same card as a ready row, with the alert and the count on its meta line.
     expect(script).toContain("fill('alerted-section', 'alerted', view.alerted, r => withActions(readyRow(r), r))");
-    expect(script).toContain("esc(r.alert || ''),\n        findingsLabel(r)");
+    expect(script).toContain("esc(r.alert || ''),\n        r.triageReason ? 'flagged: ' + esc(r.triageReason) : '',\n        findingsLabel(r)");
     expect(script).toContain("named + ' finding' + (named === 1 ? '' : 's')");
     // An alert notifies from whichever of the two lists it is in, and counts towards the header.
     expect(script).toContain('[...view.alerted, ...view.ready]');

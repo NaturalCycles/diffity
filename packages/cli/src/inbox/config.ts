@@ -37,6 +37,28 @@ export interface ValidateConfig {
   maxBudgetUsd: number | null;
 }
 
+/**
+ * Watching whole repositories rather than only what asks for the reviewer: every open pull request
+ * of a watched repository is looked at once per poll, cheaply, and only a flagged one costs a
+ * review. The rules cost nothing at all; a model is spent only on what they miss, and only when
+ * one is named.
+ */
+export interface TriageConfig {
+  /** The repositories watched, as `owner/repo`; empty runs no triage at all. */
+  repos: string[];
+  /**
+   * Regular-expression sources matched against the description, multiline: a match flags the pull
+   * request for the reviewer and the matched line becomes the reason.
+   */
+  bodyPatterns: string[];
+  /** A cheap model for what the rules miss; null leaves the rules on their own. */
+  model: string | null;
+  /** How much of the diff that model is given, in kilobytes. */
+  maxDiffKb: number;
+  /** `--max-budget-usd` for one triage run; null leaves it uncapped. */
+  maxBudgetUsd: number | null;
+}
+
 export interface InboxConfig {
   /** How often GitHub is asked; well inside its limits at a handful of calls per tick. */
   pollMinutes: number;
@@ -83,6 +105,7 @@ export interface InboxConfig {
   postFooter: string;
   agent: AgentConfig;
   validate: ValidateConfig;
+  triage: TriageConfig;
   /** Whether a pull request waits for its CI to pass before an agent is spent on it. */
   waitForCi: boolean;
   prepareTimeoutMinutes: number;
@@ -114,6 +137,7 @@ export const DEFAULT_INBOX_CONFIG: InboxConfig = {
   postFooter: '',
   agent: { model: null, effort: null, mcpAllow: [], extraArgs: [], maxBudgetUsd: null },
   validate: { model: null, timeoutMinutes: 15, maxBudgetUsd: null },
+  triage: { repos: [], bodyPatterns: [], model: null, maxDiffKb: 150, maxBudgetUsd: 0.25 },
   waitForCi: false,
   prepareTimeoutMinutes: 30,
   maxPrepared: 5,
@@ -146,7 +170,7 @@ export function parseInboxConfig(raw: unknown, source = 'inbox config'): InboxCo
     throw new Error(`${source} must be a JSON object`);
   }
   const obj = raw as Record<string, unknown>;
-  const config: InboxConfig = { ...DEFAULT_INBOX_CONFIG, alertPaths: [], skipTitles: [], agent: defaultAgent(), validate: defaultValidate() };
+  const config: InboxConfig = { ...DEFAULT_INBOX_CONFIG, alertPaths: [], skipTitles: [], agent: defaultAgent(), validate: defaultValidate(), triage: defaultTriage() };
 
   if (obj.prepare !== undefined) {
     throw new Error(`${source}: "prepare" was replaced by the "agent" block — delete it (the built-in command applies) and put extra flags in agent.extraArgs`);
@@ -212,6 +236,9 @@ export function parseInboxConfig(raw: unknown, source = 'inbox config'): InboxCo
   }
   if (obj.validate !== undefined) {
     config.validate = parseValidateConfig(obj.validate, source);
+  }
+  if (obj.triage !== undefined) {
+    config.triage = parseTriageConfig(obj.triage, source);
   }
   if (obj.waitForCi !== undefined) {
     if (typeof obj.waitForCi !== 'boolean') {
@@ -319,8 +346,59 @@ function parseValidateConfig(raw: unknown, source: string): ValidateConfig {
   return validate;
 }
 
+/** A repository the triage may watch, as the forge names one. */
+const OWNER_REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+
+function defaultTriage(): TriageConfig {
+  return { ...DEFAULT_INBOX_CONFIG.triage, repos: [], bodyPatterns: [] };
+}
+
+function parseTriageConfig(raw: unknown, source: string): TriageConfig {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new Error(`${source}: triage must be a JSON object`);
+  }
+  const obj = raw as Record<string, unknown>;
+  const triage = defaultTriage();
+
+  if (obj.repos !== undefined) {
+    if (!Array.isArray(obj.repos) || !obj.repos.every(repo => typeof repo === 'string' && OWNER_REPO.test(repo.trim()))) {
+      throw new Error(`${source}: triage.repos must be an array of owner/repo names`);
+    }
+    triage.repos = (obj.repos as string[]).map(repo => repo.trim());
+  }
+  if (obj.bodyPatterns !== undefined) {
+    triage.bodyPatterns = parseBodyPatterns(obj.bodyPatterns, source);
+  }
+  if (obj.model !== undefined && obj.model !== null) {
+    triage.model = text(obj.model, 'triage.model', source);
+  }
+  if (obj.maxDiffKb !== undefined) {
+    triage.maxDiffKb = positive(obj.maxDiffKb, 'triage.maxDiffKb', source);
+  }
+  // Unlike the other blocks this one caps by default, so an explicit null has to mean uncapped.
+  if (obj.maxBudgetUsd !== undefined) {
+    triage.maxBudgetUsd = obj.maxBudgetUsd === null ? null : positive(obj.maxBudgetUsd, 'triage.maxBudgetUsd', source);
+  }
+  return triage;
+}
+
+/** Compiled with the flag the triage matches them under, so a typo is a refused config. */
+function parseBodyPatterns(raw: unknown, source: string): string[] {
+  if (!Array.isArray(raw) || !raw.every(pattern => typeof pattern === 'string' && pattern.trim() !== '')) {
+    throw new Error(`${source}: triage.bodyPatterns must be an array of non-empty regular expressions`);
+  }
+  return (raw as string[]).map((pattern, index) => {
+    try {
+      new RegExp(pattern, 'm');
+    } catch (err) {
+      throw new Error(`${source}: triage.bodyPatterns[${index}] is not a valid regular expression: ${err instanceof Error ? err.message : err}`);
+    }
+    return pattern;
+  });
+}
+
 /** The settings the inbox page edits, kept in the config file beside the keys only the file holds. */
-export type InboxSettings = Pick<InboxConfig, 'filter' | 'skipTitles' | 'alertWhen' | 'alertPaths' | 'postAlerts' | 'postPrefix' | 'postFooter' | 'maxPrepared' | 'pollMinutes' | 'live' | 'liveTimeoutMinutes' | 'prepareTimeoutMinutes' | 'waitForCi' | 'agent' | 'validate'>;
+export type InboxSettings = Pick<InboxConfig, 'filter' | 'skipTitles' | 'alertWhen' | 'alertPaths' | 'postAlerts' | 'postPrefix' | 'postFooter' | 'maxPrepared' | 'pollMinutes' | 'live' | 'liveTimeoutMinutes' | 'prepareTimeoutMinutes' | 'waitForCi' | 'agent' | 'validate' | 'triage'>;
 
 /**
  * Writes the page-editable settings into the config file, leaving every other key as the reviewer
