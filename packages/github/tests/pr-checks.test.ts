@@ -129,4 +129,10 @@ describe('parsePrSnapshot', () => {
     expect(snapshot?.checks).toEqual([]);
     expect(snapshot?.files).toEqual([]);
   });
+
+  it('carries the description, and an empty one when the author wrote none', () => {
+    expect(parsePrSnapshot(ref, JSON.stringify({ ...base, body: 'Risk Evaluation: high' }))?.body)
+      .toBe('Risk Evaluation: high');
+    expect(parsePrSnapshot(ref, JSON.stringify(base))?.body).toBe('');
+  });
 });

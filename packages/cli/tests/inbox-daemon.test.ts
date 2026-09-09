@@ -28,7 +28,7 @@ const emptyForge: Forge = {
 
 function snapshot(number: number, additions: number): PrSnapshot {
   return {
-    owner: 'o', repo: 'r', number, title: `T${number}`, url: `https://github.com/o/r/pull/${number}`,
+    owner: 'o', repo: 'r', number, title: `T${number}`, body: '', url: `https://github.com/o/r/pull/${number}`,
     author: 'alice', isBot: false, isDraft: false, state: 'OPEN', headSha: 'aaa', baseRef: 'main',
     additions, deletions: 0, changedFiles: 1, createdAt: 'now', updatedAt: 'now', checks: [], files: [],
   };
@@ -64,7 +64,7 @@ function config(port: number) {
   return {
     pollMinutes: 5, port, reposDir: join(root, 'repos'), worktreesDir: join(root, 'inbox', 'worktrees'),
     filter: '', skipTitles: [], alertWhen: '', alertPaths: [], postAlerts: false,
-    postPrefix: '[not yet checked by human]', agent: agentConfig(), validate: { model: null, timeoutMinutes: 15, maxBudgetUsd: null },
+    postPrefix: '[not yet checked by human]', postFooter: '', agent: agentConfig(), validate: { model: null, timeoutMinutes: 15, maxBudgetUsd: null },
     waitForCi: false, prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10,
   };
 }
@@ -235,7 +235,7 @@ describe('runDaemon singleton and reclaim ordering', () => {
   it('polls but prepares nothing while paused, and takes the queue up once the pause has passed', async () => {
     const store = new InboxStore(join(root, 'inbox', 'inbox.sqlite'));
     const snap: PrSnapshot = {
-      owner: 'o', repo: 'r', number: 1, title: 'T', url: 'https://github.com/o/r/pull/1', author: 'alice', isBot: false,
+      owner: 'o', repo: 'r', number: 1, title: 'T', body: '', url: 'https://github.com/o/r/pull/1', author: 'alice', isBot: false,
       isDraft: false, state: 'OPEN', headSha: 'aaa', baseRef: 'main', additions: 1, deletions: 0, changedFiles: 1,
       createdAt: 'now', updatedAt: 'now', checks: [], files: [],
     };

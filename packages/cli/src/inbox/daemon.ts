@@ -80,7 +80,7 @@ export function settingsHost(config: InboxConfig, configPath: string | undefined
   return {
     get: () => ({
       filter: config.filter, skipTitles: config.skipTitles, alertWhen: config.alertWhen, alertPaths: config.alertPaths,
-      postAlerts: config.postAlerts, postPrefix: config.postPrefix,
+      postAlerts: config.postAlerts, postPrefix: config.postPrefix, postFooter: config.postFooter,
       maxPrepared: config.maxPrepared, pollMinutes: config.pollMinutes,
       live: config.live, liveTimeoutMinutes: config.liveTimeoutMinutes, prepareTimeoutMinutes: config.prepareTimeoutMinutes,
       waitForCi: config.waitForCi, agent: config.agent, validate: config.validate,
