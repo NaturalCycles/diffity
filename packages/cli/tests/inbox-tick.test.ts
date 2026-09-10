@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { InboxStore, prId } from '../src/inbox/store.js';
-import { prepareBumped, runTick, type Forge, type TickDeps, type TriageAgentResult } from '../src/inbox/tick.js';
+import { prepareBumped, runTick, type Forge, type PrepareRequest, type TickDeps, type TriageAgentResult } from '../src/inbox/tick.js';
 import { buildView } from '../src/inbox/view.js';
 import { localHhMm } from '../src/inbox/runs.js';
 import type { PrRef, PrSnapshot, TriageCandidate } from '@diffity/github';
@@ -134,7 +134,7 @@ beforeEach(() => {
     kind: 'prepared', headSha: snap.headSha, bundlePath: `/b/${snap.number}.json`,
     worktree: `/wt/${snap.number}`, logPath: `/l/${snap.number}.log`, at: '2026-09-02T12:00:00.000Z',
     summary: '1 P2', alert: snap.number === 2 ? 'touches auth' : null,
-    alertFindings: snap.number === 2 ? ['cf15e689', '7b2a10c4'] : [], posted: null, run: run(),
+    alertFindings: snap.number === 2 ? ['cf15e689', '7b2a10c4'] : [], quiet: false, posted: null, run: run(),
     validation: 'not-needed', validateRun: null,
   });
 });
@@ -240,6 +240,24 @@ describe('runTick', () => {
     // Only the agent names findings: the path alert has the reviewer's own rule behind it and none.
     expect(store.get('o/r#1')!.alertFindings).toEqual([]);
     expect(store.get('o/r#2')!.alertFindings).toEqual(['cf15e689', '7b2a10c4']);
+  });
+
+  it('leaves a row the reviewer has commented on unalerted, paths and all', async () => {
+    // The preparation dropped the alert because the reviewer has spoken on the pull request; the
+    // reviewer's own path rule must not put one back in its place.
+    prepareResult = snap => ({
+      kind: 'prepared', headSha: snap.headSha, bundlePath: '/b.json', worktree: '/wt',
+      logPath: '/l.log', at: '2026-09-02T12:00:00.000Z', summary: '1 P2', alert: null,
+      alertFindings: [], quiet: true, posted: null, run: run(), validation: 'not-needed', validateRun: null,
+    });
+    forge.set(snapshot({ files: [{ path: 'packages/shared/src/model/user.ts', additions: 2, deletions: 1 }] }));
+
+    await runTick(store, deps({ alertPaths: ['packages/shared/src/model/**'] }));
+
+    const pr = store.get('o/r#1')!;
+    expect(pr.status).toBe('prepared');
+    expect(pr.alert).toBeNull();
+    expect(buildView(store, 'http://localhost:5390', 'now').ready.map(row => row.id)).toEqual(['o/r#1']);
   });
 
   it('carries what CI said about each head to the surface', async () => {
@@ -495,7 +513,7 @@ describe('runTick', () => {
     const logged: string[] = [];
     prepareResult = snap => ({
       kind: 'prepared', headSha: snap.headSha, bundlePath: '/b.json', worktree: '/wt', logPath: '/l.log',
-      at: '2026-09-02T12:00:00.000Z', summary: '1 P1', alert: null, alertFindings: [], posted: null, run: run(),
+      at: '2026-09-02T12:00:00.000Z', summary: '1 P1', alert: null, alertFindings: [], quiet: false, posted: null, run: run(),
       validation: 'validated',
       validateRun: {
         startedAt: '2026-09-02T12:00:00.000Z', endedAt: '2026-09-02T12:03:00.000Z',
@@ -518,7 +536,7 @@ describe('runTick', () => {
     const logged: string[] = [];
     prepareResult = snap => ({
       kind: 'prepared', headSha: snap.headSha, bundlePath: '/b.json', worktree: '/wt', logPath: '/l.log',
-      at: '2026-09-02T12:00:00.000Z', summary: '1 P1 \u00b7 unchecked', alert: null, alertFindings: [], posted: null, run: run(),
+      at: '2026-09-02T12:00:00.000Z', summary: '1 P1 \u00b7 unchecked', alert: null, alertFindings: [], quiet: false, posted: null, run: run(),
       validation: 'unchecked',
       validateRun: {
         startedAt: '2026-09-02T12:00:00.000Z', endedAt: '2026-09-02T12:15:00.000Z', stats: null,
@@ -538,7 +556,7 @@ describe('runTick', () => {
     forge.set(snapshot());
     prepareResult = snap => ({
       kind: 'prepared', headSha: snap.headSha, bundlePath: '/b.json', worktree: '/wt', logPath: '/l.log',
-      at: '2026-09-02T12:00:00.000Z', summary: null, alert: null, alertFindings: [], posted: null, run: run({ stats: null }),
+      at: '2026-09-02T12:00:00.000Z', summary: null, alert: null, alertFindings: [], quiet: false, posted: null, run: run({ stats: null }),
       validation: 'not-needed', validateRun: null,
     });
     await runTick(store, deps());
@@ -807,7 +825,7 @@ describe('a posted review', () => {
     prepareResult = snap => ({
       kind: 'prepared', headSha: snap.headSha, bundlePath: '/b/1.json', worktree: '/wt/1',
       logPath: '/l/1.log', at: '2026-09-02T13:05:00.000Z', summary: '1 P2', alert: null,
-      alertFindings: [], posted: null, run: run(), validation: 'not-needed', validateRun: null,
+      alertFindings: [], quiet: false, posted: null, run: run(), validation: 'not-needed', validateRun: null,
     });
     await prepareBumped(store, deps(), 'o/r#1');
     expect(prepared).toEqual(['o/r#1']);
@@ -927,7 +945,7 @@ describe('a pull request the daemon posted the alert findings to', () => {
     prepareResult = snap => ({
       kind: 'prepared', headSha: snap.headSha, bundlePath: `/b/${snap.number}.json`,
       worktree: `/wt/${snap.number}`, logPath: `/l/${snap.number}.log`, at: POSTED_AT,
-      summary: '1 P1', alert: 'touches auth', alertFindings: ['cf15e689'],
+      summary: '1 P1', alert: 'touches auth', alertFindings: ['cf15e689'], quiet: false,
       posted: { at: POSTED_AT, headSha: snap.headSha, url: REVIEW, commentIds: 1 },
       run: run(), validation: 'not-needed', validateRun: null,
     });
@@ -957,6 +975,19 @@ describe('a pull request the daemon posted the alert findings to', () => {
 
     expect(heads).toEqual([null, 'aaa']);
     expect(store.get('o/r#1')!.autoPosted!.headSha).toBe('bbb');
+  });
+
+  it('tells the preparation who the reviewer is and which head they reviewed themselves', async () => {
+    alerting();
+    forge.set(snapshot());
+    forge.login = 'fiddur';
+    store.recordHandled({ prId: 'o/r#1', headSha: 'aaa', event: 'COMMENT', reviewUrl: REVIEW, at: '2026-09-02T11:00:00.000Z' });
+    const requests: PrepareRequest[] = [];
+    await runTick(store, deps({
+      prepare: (snap, opts) => { requests.push(opts); return Promise.resolve(prepareResult(snap)); },
+    }));
+
+    expect(requests).toEqual([expect.objectContaining({ viewerLogin: 'fiddur', reviewedHead: 'aaa' })]);
   });
 
   it('stays the reviewer\'s to review once the post has withdrawn the request', async () => {

@@ -177,6 +177,22 @@ describe('the inbox page', () => {
     expect(script).toContain("el('postAlerts').checked = settings.postAlerts");
   });
 
+  it('has the severities to post and the quiet-once-commented switch, and sends both back', () => {
+    const html = inboxPage();
+    expect(html).toContain('id="quietOnceCommented" type="checkbox"');
+    expect(html).toContain('Once I have commented on a pull request, stop alerting me about it');
+    expect(html).toContain('id="postSeverities" type="text"');
+    expect(html).toContain('Post only findings labelled');
+    // Both belong with the words that decide what an alert is, not among the numbers.
+    expect(html.indexOf('id="alertWhen"')).toBeLessThan(html.indexOf('id="quietOnceCommented"'));
+    expect(html.indexOf('id="postSeverities"')).toBeLessThan(html.indexOf('id="alertPaths"'));
+    const script = pageScript();
+    expect(script).toContain("postSeverities: el('postSeverities').value.split(',')");
+    expect(script).toContain("quietOnceCommented: el('quietOnceCommented').checked");
+    expect(script).toContain("el('postSeverities').value = (settings.postSeverities || []).join(', ')");
+    expect(script).toContain("el('quietOnceCommented').checked = settings.quietOnceCommented");
+  });
+
   it('has the footer under the posting row, and sends it back with the rest', () => {
     const html = inboxPage();
     expect(html).toContain('id="postFooter"');

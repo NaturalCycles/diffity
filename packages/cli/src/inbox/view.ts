@@ -1,7 +1,7 @@
 import type { CiState } from '@diffity/github';
 import { isRetired, type AutoPosted, type Handled, type InboxPr, type InboxStore, type RunTotals, type TriagePass } from './store.js';
 import { costOf, minutesOf, runDetail } from './runs.js';
-import { BUMPABLE } from './open.js';
+import { isBumpable } from './open.js';
 
 /** What the agent runs behind a prepared review came to, as its card shows it. */
 export interface RunSpend {
@@ -138,7 +138,7 @@ function toRow(pr: InboxPr, openBase: string, store: InboxStore): InboxRow {
   const stale = pr.status === 'stale'
     || (pr.status === 'prepared' && pr.preparedHeadSha != null && pr.preparedHeadSha !== pr.headSha);
   const openable = pr.status === 'prepared' || pr.status === 'stale';
-  const bumpable = BUMPABLE.has(pr.status);
+  const bumpable = isBumpable(pr, handled);
   return {
     id: pr.id,
     number: pr.number,

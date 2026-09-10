@@ -154,7 +154,8 @@ describe('parseInboxConfig', () => {
       writeFileSync(path, JSON.stringify({ port: 5399, filter: 'old', pollMinutes: 2 }, null, 2));
       const settings = {
         filter: 'skip payments', skipTitles: ['\\(payments\\)'], alertWhen: 'a P1', alertPaths: ['packages/shared/**'],
-        postAlerts: true, postPrefix: '[a machine wrote this]', postFooter: 'cc @NaturalCycles/platform',
+        postAlerts: true, postPrefix: '[a machine wrote this]', postSeverities: ['P1'], postFooter: 'cc @NaturalCycles/platform',
+        quietOnceCommented: true,
         maxPrepared: 3, pollMinutes: 7,
         live: false, liveTimeoutMinutes: 4, prepareTimeoutMinutes: 20, waitForCi: true,
         agent: { model: 'opus', effort: 'high', mcpAllow: [], extraArgs: [], maxBudgetUsd: null },
@@ -192,6 +193,24 @@ describe('parseInboxConfig', () => {
     expect(() => parseInboxConfig({ postPrefix: 3 })).toThrow(/postPrefix must be a string/);
     expect(() => parseInboxConfig({ postAlerts: true, postPrefix: '   ' }))
       .toThrow(/postPrefix must not be empty when postAlerts is on/);
+  });
+
+  it('posts the top severities by default, and takes the reviewer\'s own list', () => {
+    expect(parseInboxConfig({}).postSeverities).toEqual(['P1', 'must-fix']);
+    expect(DEFAULT_INBOX_CONFIG.postSeverities).toEqual(['P1', 'must-fix']);
+    expect(parseInboxConfig({ postSeverities: [' P1 ', 'P2'] }).postSeverities).toEqual(['P1', 'P2']);
+    expect(parseInboxConfig({ postSeverities: [] }).postSeverities).toEqual([]);
+    expect(() => parseInboxConfig({ postSeverities: 'P1' }))
+      .toThrow(/postSeverities must be an array of non-empty severity labels/);
+    expect(() => parseInboxConfig({ postSeverities: ['P1', '  '] }))
+      .toThrow(/postSeverities must be an array of non-empty severity labels/);
+  });
+
+  it('takes quietOnceCommented as a boolean, off by default', () => {
+    expect(parseInboxConfig({}).quietOnceCommented).toBe(false);
+    expect(parseInboxConfig({ quietOnceCommented: true }).quietOnceCommented).toBe(true);
+    expect(() => parseInboxConfig({ quietOnceCommented: 'yes' }))
+      .toThrow(/quietOnceCommented must be true or false/);
   });
 
   it('takes the footer as a string, empty by default', () => {
@@ -450,7 +469,8 @@ describe('summarizeFindings', () => {
 describe('parseSettingsPatch', () => {
   const full = {
     filter: 'a', skipTitles: ['Release$'], alertWhen: 'b', alertPaths: ['src/**'],
-    postAlerts: false, postPrefix: '[not yet checked by human]', postFooter: '', maxPrepared: 2, pollMinutes: 3, live: false,
+    postAlerts: false, postPrefix: '[not yet checked by human]', postSeverities: ['P1', 'must-fix'], postFooter: '',
+    quietOnceCommented: false, maxPrepared: 2, pollMinutes: 3, live: false,
     liveTimeoutMinutes: 5, prepareTimeoutMinutes: 15, waitForCi: false,
     agent: { model: null, effort: null, mcpAllow: [], extraArgs: [], maxBudgetUsd: null },
     validate: { model: null, timeoutMinutes: 15, maxBudgetUsd: null },
@@ -500,6 +520,19 @@ describe('parseSettingsPatch', () => {
       .toMatchObject({ ok: false, message: 'postFooter must be a string' });
     expect(parseSettingsPatch(JSON.stringify({ ...full, postFooter: 'x'.repeat(5000) })))
       .toMatchObject({ ok: false, message: expect.stringContaining('postFooter is longer than') });
+  });
+
+  it('takes the severities to post and the quiet-once-commented switch the page edits', () => {
+    const edited = { ...full, postSeverities: ['P1'], quietOnceCommented: true };
+    expect(parseSettingsPatch(JSON.stringify(edited))).toEqual({ ok: true, settings: edited });
+    expect(parseSettingsPatch(JSON.stringify({ ...full, postSeverities: undefined })))
+      .toMatchObject({ ok: false, message: 'postSeverities is missing' });
+    expect(parseSettingsPatch(JSON.stringify({ ...full, postSeverities: 'P1' })))
+      .toMatchObject({ ok: false, message: 'postSeverities must be an array of non-empty severity labels' });
+    expect(parseSettingsPatch(JSON.stringify({ ...full, quietOnceCommented: undefined })))
+      .toMatchObject({ ok: false, message: 'quietOnceCommented is missing' });
+    expect(parseSettingsPatch(JSON.stringify({ ...full, quietOnceCommented: 'yes' })))
+      .toMatchObject({ ok: false, message: 'quietOnceCommented must be true or false' });
   });
 
   it('takes the validate fields the page edits and refuses a bad one by name', () => {

@@ -26,6 +26,10 @@ export interface PrepareRequest {
   alreadyPostedHead: string | null;
   /** Why the triage flagged it, when it did: a reason for an alert on its own. */
   triageReason: string | null;
+  /** The reviewer, so their own comments on the pull request can be recognised as theirs. */
+  viewerLogin: string | null;
+  /** The head the reviewer has reviewed themselves, which is never posted to automatically. */
+  reviewedHead: string | null;
 }
 
 /** What the triage model is given: the pull request, its diff, and what the reviewer cares about. */
@@ -249,7 +253,7 @@ export async function runTick(store: InboxStore, deps: TickDeps): Promise<void> 
       waiting++;
       continue;
     }
-    await prepareOne(store, snapshot, deps, bumped);
+    await prepareOne(store, snapshot, deps, bumped, viewerLogin);
   }
   if (waiting > 0) {
     deps.log(`${waiting} left queued: ${deps.maxPrepared} reviews already prepared`);
@@ -557,10 +561,10 @@ export async function prepareBumped(store: InboxStore, deps: TickDeps, id: strin
     deps.log(`${id} left queued: ${reason}`);
     return;
   }
-  await prepareOne(store, snapshot, deps, true);
+  await prepareOne(store, snapshot, deps, true, viewerLogin);
 }
 
-async function prepareOne(store: InboxStore, snapshot: PrSnapshot, deps: TickDeps, bumped: boolean): Promise<void> {
+async function prepareOne(store: InboxStore, snapshot: PrSnapshot, deps: TickDeps, bumped: boolean, viewerLogin: string | null): Promise<void> {
   const id = prId(snapshot);
   // Claimed in the same breath as it is checked: a bump and a tick can reach the same pull request
   // at once, and two agents must not end up in one worktree.
@@ -578,6 +582,8 @@ async function prepareOne(store: InboxStore, snapshot: PrSnapshot, deps: TickDep
       bumped,
       alreadyPostedHead: existing?.autoPosted?.headSha ?? null,
       triageReason: existing?.triageReason ?? null,
+      viewerLogin,
+      reviewedHead: store.latestHandled(id)?.headSha ?? null,
     });
   } finally {
     deps.inFlight.delete(id);
@@ -594,8 +600,9 @@ async function prepareOne(store: InboxStore, snapshot: PrSnapshot, deps: TickDep
         logPath: result.logPath,
         at: result.at,
         summary: result.summary,
-        // The agent's judgement first; the reviewer's own paths stand in when it raised nothing.
-        alert: result.alert ?? alertForPaths(snapshot.files, deps.alertPaths),
+        // The agent's judgement first; the reviewer's own paths stand in when it raised nothing —
+        // except on a pull request they have commented on, where they asked for no alert at all.
+        alert: result.alert ?? (result.quiet ? null : alertForPaths(snapshot.files, deps.alertPaths)),
         // Only the agent names findings, so a path alert stands on its own with none.
         alertFindings: result.alertFindings,
       });

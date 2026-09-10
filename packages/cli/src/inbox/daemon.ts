@@ -82,7 +82,8 @@ export function settingsHost(config: InboxConfig, configPath: string | undefined
   return {
     get: () => ({
       filter: config.filter, skipTitles: config.skipTitles, alertWhen: config.alertWhen, alertPaths: config.alertPaths,
-      postAlerts: config.postAlerts, postPrefix: config.postPrefix, postFooter: config.postFooter,
+      postAlerts: config.postAlerts, postPrefix: config.postPrefix, postSeverities: config.postSeverities,
+      postFooter: config.postFooter, quietOnceCommented: config.quietOnceCommented,
       maxPrepared: config.maxPrepared, pollMinutes: config.pollMinutes,
       live: config.live, liveTimeoutMinutes: config.liveTimeoutMinutes, prepareTimeoutMinutes: config.prepareTimeoutMinutes,
       waitForCi: config.waitForCi, agent: config.agent, validate: config.validate, triage: config.triage,
@@ -193,7 +194,7 @@ export async function runDaemon(
   // server's error handler) before it can reclaim and kill the first one's in-flight servers.
   const openDeps = options.openDeps ?? realOpenSessionDeps(nodePath, entry);
   const attendants: AttendantHost = options.attendants ?? new Attendants(
-    realAttendantDeps(nodePath, entry, config, worktree => join(logsDir(), `${basename(worktree)}.live.log`), log, run => store.recordRun(run)),
+    realAttendantDeps(nodePath, entry, inboxDataDir, config, worktree => join(logsDir(), `${basename(worktree)}.live.log`), log, run => store.recordRun(run)),
   );
   let timer: NodeJS.Timeout | undefined;
   const armPoll = () => {

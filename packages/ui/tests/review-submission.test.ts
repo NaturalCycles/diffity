@@ -3,6 +3,7 @@ import {
   canSubmitReview,
   isGeneral,
   isSubmittable,
+  movedOnNote,
   summaryFromGeneralThreads,
   threadToPayload,
 } from '../src/lib/review-submission';
@@ -249,5 +250,16 @@ describe('a thread that is only a conversation', () => {
     }));
 
     expect(isSubmittable(thread)).toBe(true);
+  });
+});
+
+describe('where a submitted review landed', () => {
+  it('says nothing when it went to the head the reader was looking at', () => {
+    expect(movedOnNote({ commitSha: 'aaa', headSha: 'aaa' })).toBeNull();
+  });
+
+  it('says the pull request has moved on when it went to an earlier commit', () => {
+    expect(movedOnNote({ commitSha: 'aaa', headSha: 'bbb' }))
+      .toBe('Posted against the commit you reviewed; the pull request has moved on since.');
   });
 });

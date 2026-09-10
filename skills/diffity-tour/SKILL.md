@@ -156,7 +156,7 @@ The tour UI has a dedicated explanation panel. The intro (from `tour-start --bod
 
    - `--file`: Path relative to repo root (e.g. `src/server.ts`)
    - `--line` / `--end-line`: The exact line range to highlight. Keep it focused on the relevant section.
-   - `--annotation`: A short label (3-6 words) shown as the step title. Think of it as a chapter heading. In a review tour it is also the one-line label beside the file in the reordered file list, so make it say why this file is read at this point ("the primitive", "first consumer", "the P1 lives here") rather than restating the file name.
+   - `--annotation`: A short label (3-6 words) shown as the step title. Think of it as a chapter heading. In a review tour it is also the one-line label beside the file in the reordered file list, so make it say why this file is read at this point ("the primitive", "first consumer", "where the contract is enforced") rather than restating the file name.
    - `--body`: The narrative shown in the explanation panel. This has generous space — use it to write thorough explanations using markdown:
 
    **Verify targets before committing to a step.** Before calling `tour-step`, verify that the `--file` path is readable from the repo root and that the function or block you're describing actually lives at the advertised `--line`/`--end-line` range — read the range, don't trust memory from earlier in the session. The same applies to every `goto:` link in the body: a broken goto link is worse than no link because the reader trusts it and gets dropped in the wrong place without any signal that the link is wrong. If you're not sure of the exact line, use plain backtick code instead of a goto link.

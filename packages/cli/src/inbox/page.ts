@@ -152,9 +152,14 @@ export function inboxPage(): string {
     <label>Notify me if:
       <textarea id="alertWhen" rows="3" placeholder="e.g. there is a P1, or the change touches authentication (empty: every prepared review)"></textarea>
     </label>
+    <label class="check"><input id="quietOnceCommented" type="checkbox"> Once I have commented on a pull request, stop alerting me about it</label>
     <div class="settings-row">
       <label class="check"><input id="postAlerts" type="checkbox"> Also post the alert findings to the pull request, each prefixed with</label>
       <input id="postPrefix" type="text" placeholder="[Automated AI pre-review, not yet checked by human]">
+    </div>
+    <div class="settings-row">
+      <label class="check" for="postSeverities">Post only findings labelled</label>
+      <input id="postSeverities" type="text" placeholder="P1, must-fix">
     </div>
     <label>End each posted review with:
       <textarea id="postFooter" rows="2" placeholder="e.g. cc @NaturalCycles/platform \u2014 automated triage, not a review (empty: nothing)"></textarea>
@@ -469,7 +474,9 @@ export function inboxPage(): string {
       el('triageModel').value = triage.model || '';
       el('postAlerts').checked = settings.postAlerts;
       el('postPrefix').value = settings.postPrefix || '';
+      el('postSeverities').value = (settings.postSeverities || []).join(', ');
       el('postFooter').value = settings.postFooter || '';
+      el('quietOnceCommented').checked = settings.quietOnceCommented;
       for (const key of ['maxPrepared', 'pollMinutes', 'prepareTimeoutMinutes', 'liveTimeoutMinutes']) el(key).value = settings[key];
       el('live').checked = settings.live;
       el('waitForCi').checked = settings.waitForCi;
@@ -497,7 +504,9 @@ export function inboxPage(): string {
       alertPaths: el('alertPaths').value.split('\\n').map(line => line.trim()).filter(Boolean),
       postAlerts: el('postAlerts').checked,
       postPrefix: el('postPrefix').value.trim(),
+      postSeverities: el('postSeverities').value.split(',').map(label => label.trim()).filter(Boolean),
       postFooter: el('postFooter').value,
+      quietOnceCommented: el('quietOnceCommented').checked,
       maxPrepared: Number(el('maxPrepared').value),
       pollMinutes: Number(el('pollMinutes').value),
       prepareTimeoutMinutes: Number(el('prepareTimeoutMinutes').value),

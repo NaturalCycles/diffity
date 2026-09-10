@@ -5,6 +5,16 @@ import { GENERAL_THREAD_FILE_PATH } from '@diffity/api';
 const ORDER = ['P1', 'P2', 'P3', 'must-fix', 'suggestion', 'question', 'other'];
 
 /**
+ * A finding as these read one, structurally rather than by its origin: a bundle's threads and the
+ * threads a live session lists both answer to this, so neither has to be converted to the other.
+ */
+export interface FindingThread {
+  filePath: string;
+  status: string;
+  comments: { body: string; kind?: string }[];
+}
+
+/**
  * The severity a finding opens with — `P1: …` or `[must-fix] …` in the vocabularies the review skill
  * uses — or "other" for a finding that names none.
  */
@@ -17,21 +27,28 @@ export function severityOf(body: string): string {
 }
 
 /**
- * "1 P1 · 2 P2", counting each finding thread by the severity it opens with. The general summary is
- * not a finding, and a thread the checking pass dismissed or resolved is not one the reviewer has
- * left to act on.
+ * The severity of every finding the reviewer still has to act on, in the order the threads come.
+ * The general summary is not a finding, and a thread the checking pass dismissed or resolved is
+ * not one left to act on — the one place those two rules live.
  */
-export function summarizeFindings(threads: Pick<BundleThread, 'filePath' | 'status' | 'comments'>[]): string {
-  const counts = new Map<string, number>();
+export function findingSeverities(threads: FindingThread[]): string[] {
+  const labels: string[] = [];
   for (const thread of threads) {
     if (thread.filePath === GENERAL_THREAD_FILE_PATH || thread.status !== 'open') {
       continue;
     }
     const finding = thread.comments.find(comment => comment.kind === 'review') ?? thread.comments[0];
-    if (!finding) {
-      continue;
+    if (finding) {
+      labels.push(severityOf(finding.body));
     }
-    const label = severityOf(finding.body);
+  }
+  return labels;
+}
+
+/** "1 P1 · 2 P2", counting the findings the reviewer has left to act on by severity. */
+export function summarizeFindings(threads: FindingThread[]): string {
+  const counts = new Map<string, number>();
+  for (const label of findingSeverities(threads)) {
     counts.set(label, (counts.get(label) ?? 0) + 1);
   }
   if (counts.size === 0) {
