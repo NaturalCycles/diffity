@@ -22,7 +22,14 @@ beforeEach(() => {
 afterEach(() => {
   // A test that started a real diffity server may still be losing it: the process writes to its
   // data directory until the signal lands, and a plain rm walks into what it is still writing.
-  rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  // Clearing a temp directory is not what any of these tests is about, so one that is still busy
+  // after the retries is left where it is — under the system temp directory — rather than reported
+  // as a failure of the test whose assertions have already passed.
+  try {
+    rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+  } catch {
+    // still being written to
+  }
 });
 
 function attendedPr(): AttendedPr {

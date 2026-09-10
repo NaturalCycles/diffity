@@ -48,7 +48,14 @@ describe('--pr on the command line', () => {
     execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:o/r.git'], { cwd: repo, stdio: 'pipe' });
   });
 
-  afterAll(() => { rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+  // A temp directory the stopped server still holds open is left to the system rather than failing.
+  afterAll(() => {
+    try {
+      rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+    } catch {
+      // still being written to
+    }
+  });
 
   /** Waits for a server told to stop to be gone, so the directory it writes into can be removed. */
   function exited(child: ChildProcess, ms = 5000): Promise<void> {
