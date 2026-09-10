@@ -158,7 +158,7 @@ export function inboxPage(): string {
       <input id="postPrefix" type="text" placeholder="[Automated AI pre-review, not yet checked by human]">
     </div>
     <div class="settings-row">
-      <label class="check">Post only findings labelled</label>
+      <label class="check" for="postSeverities">Post only findings labelled</label>
       <input id="postSeverities" type="text" placeholder="P1, must-fix">
     </div>
     <label>End each posted review with:
