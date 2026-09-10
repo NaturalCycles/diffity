@@ -51,7 +51,14 @@ function preparedStore(): InboxStore {
 }
 
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'diffity-open-')); });
-afterEach(() => { rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+// A temp directory something still holds open is left to the system rather than failing the test.
+afterEach(() => {
+  try {
+    rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+  } catch {
+    // still being written to
+  }
+});
 
 /** Whether the child is gone within a few seconds of being told to go. */
 function exited(child: ChildProcess, ms = 3000): Promise<boolean> {
