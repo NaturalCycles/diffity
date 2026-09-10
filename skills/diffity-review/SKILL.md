@@ -264,6 +264,11 @@ If a repeated pattern appears across files, comment on the first occurrence and 
    - Use `--side old` for comments on removed code
    - Use `--end-line` when the issue spans multiple lines
    - **Lead with the problem**, not background. Be specific and actionable.
+   - **Keep it to two or three sentences, around 60 words.** State the problem, the consequence and
+     the fix, and nothing else: no preamble, no restating what the code does, no closing summary, no
+     repeating the severity label in the prose. At most one code suggestion per comment, and only
+     for a fix that is a line or two. A finding that genuinely needs more than that belongs in the
+     general comment or the walkthrough, not in a longer inline comment.
    - For small, self-contained fixes, include a code suggestion showing the fix
    - For larger fixes (structural changes, multi-location), describe the issue and suggested approach without a full code block
    - If flagging a CLAUDE.md violation, quote the exact rule being broken
@@ -273,7 +278,13 @@ If a repeated pattern appears across files, comment on the first occurrence and 
    - **3+ findings → leave a general comment** summarizing the themes.
    - **Large diffs → always leave a general comment** noting the scope of the review and grouping findings by area.
    - **Do not use severity prefixes in the general comment** — prefixes are only for inline findings.
-   - Lead with the verdict, be direct and concise — no compliments, no filler, no narrating what the code does.
+   - Lead with the verdict, be direct and concise — no compliments, no filler, no narrating what the
+     code does. A short paragraph, at most about five sentences: the themes only, never a recap of
+     the inline findings.
+   - **Name a severity only where a finding with it is open.** In the general comment, the
+     walkthrough and the alert reason alike, say "a P1" only when a P1 finding is actually there,
+     and let any count match the findings that remain. The tooling states the counts; prose that
+     contradicts them is a defect, and a claim nothing carries stops the review being posted.
    ```
    diffity agent general-comment --body "<overall review summary>"
    ```
@@ -293,7 +304,7 @@ one, unless the change is a single file:
    diffity agent tour-done --tour <id>
    ```
 3. The `--annotation` becomes the file's label in the reordered file list, so make it say *why* this
-   file is read at this point ("the primitive", "first consumer", "where the P1 lives") rather than
+   file is read at this point ("the primitive", "first consumer", "where the contract is enforced") rather than
    restating its name. Point a step at the most important lines in the file, not line 1.
 4. Check what you recorded — `diffity agent tour-start --json` and the steps you added. If a step
    went in wrong, `diffity agent tour-delete` and build it again. Adding a second walkthrough

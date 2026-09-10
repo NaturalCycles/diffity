@@ -48,3 +48,18 @@ describe('when the forge could not be asked about resolution', () => {
       .toBe('Pulled 2 comments, could not read which are resolved');
   });
 });
+
+describe('when a comment cannot be placed in this checkout', () => {
+  it('says how many, and does not read as a plain success', () => {
+    const outcome = pullOutcome({ pulled: 0, skipped: 0, resolved: 0, unmapped: 2 });
+
+    expect(outcome.message).toBe('2 comments on lines this checkout does not have');
+    expect(outcome.kind).toBe('info');
+    expect(outcome.refresh).toBe(false);
+  });
+
+  it('says it beside what did arrive', () => {
+    expect(pullOutcome({ pulled: 1, skipped: 0, resolved: 0, unmapped: 1 }).message)
+      .toBe('Pulled 1 comment, 1 comment on lines this checkout does not have');
+  });
+});

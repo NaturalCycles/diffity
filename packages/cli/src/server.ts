@@ -64,6 +64,11 @@ import {
   createReview as createGitHubReview,
   pullComments as pullGitHubComments,
   pullThreadState as pullGitHubThreadState,
+  prCommits as githubPrCommits,
+  prBaseRef as githubPrBaseRef,
+  getCompareDiff as githubCompareDiff,
+  type CreateReviewOptions,
+  type GitHubRemote,
 } from '@diffity/github';
 import { findOrCreateSession, resolveSessionId, agentSeenAt, markAgentSeen } from './session.js';
 import { resolveMayChangeCode, type SessionPurpose } from './live-permissions.js';
@@ -272,6 +277,46 @@ function refusedDirtyFiles(res: ServerResponse, filePaths: string[]): boolean {
   }
   sendError(res, 409, `Uncommitted local changes in ${blocked.join(', ')}. Commit or stash them first.`);
   return true;
+}
+
+/**
+ * Whether a line a remote comment is on exists in this checkout at all. A pull request that has
+ * moved on carries comments about files and lines this checkout may not have; making a local
+ * thread for one of those would put the remark on whatever happens to be at that line here.
+ */
+function fitsCheckout(filePath: string, endLine: number): boolean {
+  try {
+    const fullPath = resolveInRepo(filePath);
+    if (!existsSync(fullPath)) {
+      return false;
+    }
+    return readFileSync(fullPath, 'utf-8').split('\n').length >= endLine;
+  } catch {
+    return false;
+  }
+}
+
+/** Whether the local head is one of the pull request's own commits, older head or not. */
+async function isPrCommit(remote: GitHubRemote, prNumber: number, localHead: string): Promise<boolean> {
+  return (await githubPrCommits(remote.owner, remote.repo, prNumber)).includes(localHead);
+}
+
+/**
+ * Where a review of this checkout goes when the pull request has moved past it: against the local
+ * commit itself, with the lines it may comment on taken from that commit's own diff against the
+ * base branch — the findings were written about that commit, and the forge accepts a review on it.
+ * Null when the local head is no commit of the pull request, which is a different branch rather
+ * than an earlier state of this one.
+ */
+async function reviewedCommit(remote: GitHubRemote, prNumber: number, localHead: string): Promise<CreateReviewOptions | null> {
+  if (!await isPrCommit(remote, prNumber, localHead)) {
+    return null;
+  }
+  const base = await githubPrBaseRef(remote.owner, remote.repo, prNumber);
+  const patch = base ? await githubCompareDiff(remote.owner, remote.repo, base, localHead) : '';
+  // Without that diff the pull request's own patch still allows every line the author has not
+  // touched since, which is more of the review than none of it.
+  return patch ? { commitSha: localHead, patch } : { commitSha: localHead };
 }
 
 /**
@@ -764,7 +809,10 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             return;
           }
           const localHead = getHeadHash();
-          if (localHead !== details.headSha) {
+          const target: CreateReviewOptions | null = localHead === details.headSha
+            ? {}
+            : await reviewedCommit(githubRemote, details.prNumber, localHead);
+          if (!target) {
             sendError(res, 409, 'Local branch is out of sync with the PR. Push or pull your git changes first.');
             return;
           }
@@ -783,11 +831,13 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
               details.prNumber,
               details.headSha,
               submission,
+              target,
             );
             // Only the reader's own submit counts as the pull request being handled; an agent
-            // posting through this route is not the reviewer having reviewed it.
+            // posting through this route is not the reviewer having reviewed it. The mark is
+            // against the commit that was reviewed, which is not always the pull request's head.
             if (result.reviewUrl !== null && req.headers[AGENT_TRAFFIC_HEADER] !== '1') {
-              markInboxHandled(githubRemote, details.prNumber, details.headSha, submission.event, result.reviewUrl);
+              markInboxHandled(githubRemote, details.prNumber, result.commitSha, submission.event, result.reviewUrl);
             }
             const sentBodies = new Map(submission.comments.map(comment => [comment.threadId, comment.body]));
             const forgeIds = new Map(result.commentIds.map(entry => [entry.threadId, entry.githubCommentId]));
@@ -799,7 +849,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
               })),
               {
                 reviewUrl: result.reviewUrl,
-                headSha: details.headSha,
+                headSha: result.commitSha,
               },
             );
             sendJson(res, result);
@@ -818,7 +868,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             return;
           }
           const localHead = getHeadHash();
-          if (localHead !== details.headSha) {
+          if (localHead !== details.headSha && !await isPrCommit(githubRemote, details.prNumber, localHead)) {
             sendError(res, 409, 'Local branch is out of sync with the PR. Push or pull your git changes first.');
             return;
           }
@@ -830,9 +880,12 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             ]);
             const localThreads = getThreadsForSession(sid);
 
-            // Only incoming threads anchor anything; threads already known re-pull freely.
+            // Only incoming threads anchor anything; threads already known re-pull freely. One
+            // whose line this checkout does not have anchors nothing either, so it is left out of
+            // the dirty guard as well as out of the pull.
             const incoming = remoteThreads.filter(rt => !existingThreadFor(localThreads, rt));
-            if (refusedDirtyFiles(res, incoming.map(rt => rt.filePath))) {
+            const unmappable = new Set(incoming.filter(rt => !fitsCheckout(rt.filePath, rt.endLine)));
+            if (refusedDirtyFiles(res, incoming.filter(rt => !unmappable.has(rt)).map(rt => rt.filePath))) {
               return;
             }
 
@@ -844,6 +897,9 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             let pulled = 0;
             let skipped = 0;
             for (const rt of remoteThreads) {
+              if (unmappable.has(rt)) {
+                continue;
+              }
               const firstComment = rt.comments[0];
               const existing = existingThreadFor(localThreads, rt);
               if (existing) {
@@ -871,7 +927,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
               }
               pulled++;
             }
-            sendJson(res, { pulled, skipped, resolved: settled.length, resolutionUnavailable: remoteState === null } satisfies PullCommentsResult);
+            sendJson(res, { pulled, skipped, resolved: settled.length, resolutionUnavailable: remoteState === null, unmapped: unmappable.size } satisfies PullCommentsResult);
           }));
           return;
         }

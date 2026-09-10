@@ -16,6 +16,7 @@ import type { CommentThread } from '../comments/types';
 import {
   canSubmitReview,
   isSubmittable,
+  movedOnNote,
   wasSubmitted,
   summaryFromGeneralThreads,
   threadToPayload,
@@ -137,7 +138,11 @@ export function GitHubDialog(props: GitHubDialogProps) {
         });
       } else {
         const skipped = result.skipped > 0 ? ` (${result.skipped} already on the PR)` : '';
-        toast.success(`Submitted ${result.submitted} comment${result.submitted !== 1 ? 's' : ''} as one review${skipped}`);
+        const moved = movedOnNote({ commitSha: result.commitSha, headSha: details.headSha });
+        toast.success(
+          `Submitted ${result.submitted} comment${result.submitted !== 1 ? 's' : ''} as one review${skipped}`,
+          moved ? { description: moved } : undefined,
+        );
         setCommentCount(prev => prev + result.submitted);
         onClose();
       }

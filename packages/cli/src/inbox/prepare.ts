@@ -1,13 +1,14 @@
 import { join } from 'node:path';
 import { GENERAL_THREAD_FILE_PATH } from '@diffity/api';
-import type { PrComment, PrSnapshot, ReviewResult, ReviewSubmission } from '@diffity/github';
+import type { PrComment, PrContext, PrSnapshot, ReviewResult, ReviewSubmission } from '@diffity/github';
 import type { InboxConfig } from './config.js';
 import { prId } from './store.js';
 import { parseAgentOutput, rateLimitOf, type RunStats } from './agent-output.js';
 import { inboxDir } from './paths.js';
 import { localHhMm } from './runs.js';
 import { composePrompt, verdictOf } from './prompt.js';
-import { summarizeBundleFile } from './summary.js';
+import { severityOf, summarizeBundleFile } from './summary.js';
+import { unbackedBundleClaims, unbackedClaims } from './severity-claims.js';
 import { composeValidatePrompt, generalCommentIdOf, threadsToValidate, validateVerdictOf, type ReviewThread } from './validate.js';
 import { cloneDir, prepareWorktree, removeWorktree, worktreePath } from './worktree.js';
 
@@ -64,9 +65,10 @@ export interface PrepareDeps {
   listThreads(worktree: string): Promise<ReviewThread[]>;
   /**
    * The pull request's description and discussion, written where the agent can read it, with the
-   * daemon's own credentials; the path to it, or null when the forge could not be read.
+   * daemon's own credentials; the file's path and what it holds, or null when the forge could not
+   * be read.
    */
-  prContext(snapshot: PrSnapshot, worktree: string): Promise<string | null>;
+  prContext(snapshot: PrSnapshot, worktree: string): Promise<{ path: string; context: PrContext } | null>;
   /** The daemon's own call to the forge, with its credentials — this is never the agent's. */
   postReview(opts: PostReviewOpts): Promise<ReviewResult>;
   markPosted(opts: MarkPostedOpts): void | Promise<void>;
@@ -142,6 +144,10 @@ export interface PrepareOpts {
   alreadyPostedHead?: string | null;
   /** Why the reviewer's own rules flagged this one, when they did: a reason for an alert of itself. */
   triageReason?: string | null;
+  /** The reviewer, so their own comments on the pull request can be recognised as theirs. */
+  viewerLogin?: string | null;
+  /** The head the reviewer has reviewed themselves, which is never posted to automatically. */
+  reviewedHead?: string | null;
 }
 
 export async function preparePr(snapshot: PrSnapshot, config: InboxConfig, deps: PrepareDeps, opts: PrepareOpts = {}): Promise<PrepareResult> {
@@ -165,7 +171,8 @@ export async function preparePr(snapshot: PrSnapshot, config: InboxConfig, deps:
     server = await deps.startServer(dest, diffRef);
     // Starting the server empties the pull request's data directory, which is where the discussion
     // is written, so it is read after that and before the agent.
-    const contextPath = await prContextPath(snapshot, deps, dest);
+    const discussion = await prContextOf(snapshot, deps, dest);
+    const contextPath = discussion?.path ?? null;
     const startedAt = deps.now();
     const { stdout, timedOut } = await deps.runAgent({
       argv: deps.agentArgv(),
@@ -228,11 +235,22 @@ export async function preparePr(snapshot: PrSnapshot, config: InboxConfig, deps:
       ? 'not-needed'
       : validateRun.outcome === 'validated' ? 'validated' : 'unchecked';
 
+    // A pull request the reviewer has already spoken on is one they have seen, so the review is
+    // theirs to open rather than something to interrupt them about again.
+    const quiet = config.quietOnceCommented && discussion !== null
+      && commentedBy(discussion.context, opts.viewerLogin ?? null);
+    if (quiet) {
+      deps.log(`${prId(snapshot)}: alert dropped — you have commented on this pull request`);
+    }
+    const alert = quiet ? null : verdict.alert;
+    const alertFindings = quiet ? [] : verdict.alertFindings;
+
     // Before the bundle, so the threads it carries already know they are on the pull request; the
     // worktree's own server is still up, which is what the thread listing reads through.
     const posted = await postAlertFindings(snapshot, config, deps, {
-      worktree: dest, head, alert: verdict.alert, alertFindings: verdict.alertFindings,
+      worktree: dest, head, alert, alertFindings,
       alreadyPostedHead: opts.alreadyPostedHead ?? null,
+      reviewedHead: opts.reviewedHead ?? null,
     });
 
     // The head actually checked out, which may be newer than the snapshot if the author pushed
@@ -244,10 +262,17 @@ export async function preparePr(snapshot: PrSnapshot, config: InboxConfig, deps:
       return { kind: 'failed', failure: 'bundle', reason: `the review was prepared but its bundle could not be written: ${err instanceof Error ? err.message : err}`, worktree: dest, logPath, run };
     }
 
+    // The prose can outrun the findings without anything being posted: the card says so, because
+    // "1 P2" beside a walkthrough talking about a P1 is the reviewer being misled.
+    const unbacked = unbackedBundleClaims(bundlePath);
+    if (unbacked.length > 0) {
+      deps.log(`${prId(snapshot)}: the review's prose claims ${unbacked.join(', ')} that no open finding carries`);
+    }
+
     return {
       kind: 'prepared', headSha: head, bundlePath, worktree: dest, logPath, at: deps.now(),
-      summary: withValidation(summarizeBundleFile(bundlePath), validation), alert: verdict.alert,
-      alertFindings: verdict.alertFindings, posted, run, validation, validateRun,
+      summary: withClaims(withValidation(summarizeBundleFile(bundlePath), validation), unbacked),
+      alert, alertFindings, posted, run, validation, validateRun,
     };
   } catch (err) {
     return { kind: 'failed', failure: 'agent', reason: err instanceof Error ? err.message : String(err), worktree: dest, logPath, run };
@@ -257,11 +282,11 @@ export async function preparePr(snapshot: PrSnapshot, config: InboxConfig, deps:
 }
 
 /**
- * Where the pull request's discussion was written for the agent, or nothing: a review that has to
- * do without the description and the comments is still a review, so a forge that cannot be read
- * costs a log line rather than the preparation.
+ * The pull request's discussion as written for the agent, or nothing: a review that has to do
+ * without the description and the comments is still a review, so a forge that cannot be read costs
+ * a log line rather than the preparation.
  */
-async function prContextPath(snapshot: PrSnapshot, deps: PrepareDeps, worktree: string): Promise<string | null> {
+async function prContextOf(snapshot: PrSnapshot, deps: PrepareDeps, worktree: string): Promise<{ path: string; context: PrContext } | null> {
   try {
     return await deps.prContext(snapshot, worktree);
   } catch (err) {
@@ -271,29 +296,63 @@ async function prContextPath(snapshot: PrSnapshot, deps: PrepareDeps, worktree: 
 }
 
 /**
+ * Whether the reviewer has said anything on the pull request at all: a comment on it, a submitted
+ * review, or an inline comment in one. The daemon's posts are made in their name, so those count
+ * too \u2014 which is the point: a pull request is alerted about once.
+ */
+export function commentedBy(context: PrContext, login: string | null): boolean {
+  if (!login) {
+    return false;
+  }
+  const theirs = (author: string) => author.toLowerCase() === login.toLowerCase();
+  return context.comments.some(comment => theirs(comment.author))
+    || context.reviews.some(review => theirs(review.author))
+    || context.reviewComments.some(comment => theirs(comment.author));
+}
+
+/**
  * Puts the findings the agent named behind its alert on the pull request, as one `COMMENT` review
  * in the reviewer's name, every comment opening with the configured prefix so nobody reads it as a
  * verdict a human has stood behind. An alert that named no findings is posted as its reason alone,
  * which is all there is to say; one whose named findings are all settled by the time the review
  * goes out is not posted at all, because the checking pass has just rejected everything the alert
- * rests on. Null when nothing was posted: that case, the setting being off, no alert of the
- * agent's own, a head that has been posted to already, or a post that did not go through — the
- * review is prepared either way, and the reviewer still has the alert and the findings.
+ * rests on, and neither is one whose reason claims a severity no open finding carries. Null when
+ * nothing was posted: any of those, the setting being off, no alert of the agent's own, a head
+ * that has been posted to already, a head the reviewer has reviewed themselves, or a post that did
+ * not go through — the review is prepared either way, and the reviewer still has the alert and the
+ * findings.
  */
 async function postAlertFindings(
   snapshot: PrSnapshot,
   config: InboxConfig,
   deps: PrepareDeps,
-  ctx: { worktree: string; head: string; alert: string | null; alertFindings: string[]; alreadyPostedHead: string | null },
+  ctx: { worktree: string; head: string; alert: string | null; alertFindings: string[]; alreadyPostedHead: string | null; reviewedHead: string | null },
 ): Promise<PostedReview | null> {
   if (!config.postAlerts || ctx.alert === null || ctx.alreadyPostedHead === ctx.head) {
     return null;
   }
   const id = prId(snapshot);
+  // The reviewer has been over this exact code and said their piece on it; a machine's word after
+  // theirs adds nothing to the pull request.
+  if (ctx.reviewedHead === ctx.head) {
+    deps.log(`${id}: not posted — you reviewed this head yourself`);
+    return null;
+  }
   try {
-    const comments = alertComments(await deps.listThreads(ctx.worktree), ctx.alertFindings, config.postPrefix);
+    const threads = await deps.listThreads(ctx.worktree);
+    const { comments, dropped } = alertComments(threads, ctx.alertFindings, config);
+    if (dropped > 0) {
+      deps.log(`${id}: ${dropped} named finding(s) left out — only ${config.postSeverities.join(', ')} goes to the author`);
+    }
     if (ctx.alertFindings.length > 0 && comments.length === 0) {
       deps.log(`${id}: the alert's findings did not survive the check — nothing posted`);
+      return null;
+    }
+    // The reason goes out publicly in the reviewer's name, so a severity it asserts has to be one
+    // the review actually found; prose that outruns the findings is not something to publish.
+    const unbacked = unbackedClaims(ctx.alert, threads);
+    if (unbacked.length > 0) {
+      deps.log(`${id}: not posted — the alert claims ${unbacked.join(', ')} but no open finding carries it`);
       return null;
     }
     const result = await deps.postReview({
@@ -333,18 +392,26 @@ function reviewBody(config: InboxConfig, alert: string): string {
 
 /**
  * The named findings as forge comments, in the order the agent named them: the ones still open
- * after the checking pass — a dismissed or resolved finding is settled and does not go out — each
- * body opening with the prefix on a line of its own. The general summary is not a finding and is
- * never posted as one; the review's body carries the reason instead.
+ * after the checking pass — a dismissed or resolved finding is settled and does not go out — and
+ * of those, only the ones whose severity the reviewer posts, each body opening with the prefix on
+ * a line of its own. The general summary is not a finding and is never posted as one; the review's
+ * body carries the reason instead. `dropped` counts the findings the severity rule left behind, so
+ * the log can say the author was told less than the reviewer was.
  */
-function alertComments(threads: ReviewThread[], named: string[], prefix: string): PrComment[] {
-  const postable = threads.filter(thread => thread.status === 'open' && thread.filePath !== GENERAL_THREAD_FILE_PATH);
+function alertComments(threads: ReviewThread[], named: string[], config: InboxConfig): { comments: PrComment[]; dropped: number } {
+  const open = threads.filter(thread => thread.status === 'open' && thread.filePath !== GENERAL_THREAD_FILE_PATH);
+  const severities = config.postSeverities.map(label => label.toLowerCase());
   const comments: PrComment[] = [];
+  let dropped = 0;
   for (const id of named) {
     // The agent names findings by the 8-character prefix `agent comment` printed, or in full.
-    const thread = postable.find(one => one.threadId === id || one.threadId.startsWith(id));
+    const thread = open.find(one => one.threadId === id || one.threadId.startsWith(id));
     const body = thread?.comments[0]?.body;
     if (!thread || !body || comments.some(already => already.threadId === thread.threadId)) {
+      continue;
+    }
+    if (!severities.includes(severityOf(body).toLowerCase())) {
+      dropped++;
       continue;
     }
     comments.push({
@@ -353,10 +420,10 @@ function alertComments(threads: ReviewThread[], named: string[], prefix: string)
       side: thread.side === 'old' ? 'LEFT' : 'RIGHT',
       startLine: thread.startLine === thread.endLine ? null : thread.startLine,
       endLine: thread.endLine,
-      body: `${prefix}\n\n${body}`,
+      body: `${config.postPrefix}\n\n${body}`,
     });
   }
-  return comments;
+  return { comments, dropped };
 }
 
 /**
@@ -451,4 +518,13 @@ function withValidation(summary: string | null, validation: Validation): string 
     return summary;
   }
   return summary === null ? 'unchecked' : `${summary} \u00b7 unchecked`;
+}
+
+/** And what it says about prose asserting a severity none of the findings carries. */
+function withClaims(summary: string | null, unbacked: string[]): string | null {
+  if (unbacked.length === 0) {
+    return summary;
+  }
+  const note = `unbacked ${unbacked.join(', ')}`;
+  return summary === null ? note : `${summary} \u00b7 ${note}`;
 }

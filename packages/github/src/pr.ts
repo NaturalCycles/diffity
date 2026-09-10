@@ -212,6 +212,14 @@ function toReviewComment(comment: PrComment): ReviewCommentPayload {
   return payload;
 }
 
+/** Where a review goes when that is not the pull request's current head. */
+export interface CreateReviewOptions {
+  /** The commit to post against; the pull request's head when nothing else is named. */
+  commitSha?: string;
+  /** The diff the commentable lines come from; the pull request's own patch when none is given. */
+  patch?: string;
+}
+
 /**
  * Submits one review holding every comment, rather than posting them one at a time: the author
  * gets a single notification, a partial failure cannot leave half a review on the pull request,
@@ -225,9 +233,11 @@ export async function createReview(
   prNumber: number,
   headSha: string,
   submission: ReviewSubmission,
+  options: CreateReviewOptions = {},
 ): Promise<ReviewResult> {
+  const commitSha = options.commitSha ?? headSha;
   const [patch, existing] = await Promise.all([
-    getPatch(owner, repo, prNumber),
+    options.patch === undefined ? getPatch(owner, repo, prNumber) : Promise.resolve(options.patch),
     getComments(owner, repo, prNumber),
   ]);
   const commentable = commentableLines(patch);
@@ -267,13 +277,13 @@ export async function createReview(
   const body = submission.body.trim();
 
   if (comments.length === 0 && !body && submission.event === 'COMMENT') {
-    return { submitted: 0, submittedThreadIds: [], commentIds: [], skipped, failed: dropped, errors, reviewUrl: null };
+    return { submitted: 0, submittedThreadIds: [], commentIds: [], skipped, failed: dropped, errors, reviewUrl: null, commitSha };
   }
 
   try {
     const raw = await ghAsync(
       ['api', `repos/${owner}/${repo}/pulls/${prNumber}/reviews`, '--method', 'POST', '--input', '-'],
-      { input: JSON.stringify({ commit_id: headSha, event: submission.event, body, comments }) },
+      { input: JSON.stringify({ commit_id: commitSha, event: submission.event, body, comments }) },
     );
     const review = JSON.parse(raw) as { html_url?: string; id?: number };
     const created = review.id ? await getReviewCommentIds(owner, repo, prNumber, review.id) : [];
@@ -285,6 +295,7 @@ export async function createReview(
       failed: dropped,
       errors,
       reviewUrl: review.html_url ?? null,
+      commitSha,
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -297,7 +308,76 @@ export async function createReview(
       failed: dropped + comments.length,
       errors: [...errors, ghLine ? ghLine.trim() : 'GitHub rejected the review'],
       reviewUrl: null,
+      commitSha,
     };
+  }
+}
+
+/**
+ * Every commit of the pull request, newest last, as the forge lists them. Empty when the question
+ * could not be asked: a caller deciding whether a local commit belongs to the pull request then
+ * decides it does not, which is the safe answer.
+ */
+export async function prCommits(owner: string, repo: string, prNumber: number): Promise<string[]> {
+  try {
+    const json = await ghAsync([
+      'api', `repos/${owner}/${repo}/pulls/${prNumber}/commits`, '--paginate',
+    ]);
+    return parsePrCommits(json);
+  } catch {
+    return [];
+  }
+}
+
+/** The branch the pull request is against, as the forge names it; empty when it cannot be read. */
+export async function prBaseRef(owner: string, repo: string, prNumber: number): Promise<string> {
+  try {
+    const json = await ghAsync(['pr', 'view', String(prNumber), '--repo', `${owner}/${repo}`, '--json', 'baseRefName']);
+    const data = JSON.parse(json) as { baseRefName?: unknown };
+    return typeof data.baseRefName === 'string' ? data.baseRefName : '';
+  } catch {
+    return '';
+  }
+}
+
+/** The shas of one `gh api .../pulls/<n>/commits`; anything without one is not a commit. */
+export function parsePrCommits(json: string): string[] {
+  if (!json.trim()) {
+    return [];
+  }
+  let data: unknown;
+  try {
+    data = JSON.parse(json);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(data)) {
+    return [];
+  }
+  const shas: string[] = [];
+  for (const item of data) {
+    const sha = (item as { sha?: unknown } | null)?.sha;
+    if (typeof sha === 'string' && sha !== '') {
+      shas.push(sha);
+    }
+  }
+  return shas;
+}
+
+/**
+ * The diff of one commit against a branch, as the review API measures a comment's lines: the
+ * commentable lines of a review posted against a commit the pull request has moved past come from
+ * this, not from the pull request's current patch. Empty when the forge could not be read, which
+ * costs the review its comments rather than posting them at the wrong lines.
+ */
+export async function getCompareDiff(owner: string, repo: string, base: string, sha: string): Promise<string> {
+  try {
+    return await ghAsync(
+      ['api', '-H', 'Accept: application/vnd.github.diff', `repos/${owner}/${repo}/compare/${base}...${sha}`],
+      { maxBuffer: 50 * 1024 * 1024, timeoutMs: 300_000 },
+    );
+  } catch {
+    return '';
   }
 }
 

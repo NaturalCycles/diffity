@@ -61,6 +61,9 @@ export function TourStepper(props: TourStepperProps) {
                 {step.startLine === step.endLine ? step.startLine : `${step.startLine}-${step.endLine}`}
               </span>
             </div>
+            {step.annotation && (
+              <div className="text-xs font-medium text-text truncate mt-0.5">{step.annotation}</div>
+            )}
             {step.body && (
               <div className="text-xs text-text-secondary mt-0.5">
                 <MarkdownContent content={step.body} />

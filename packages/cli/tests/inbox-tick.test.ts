@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { InboxStore, prId } from '../src/inbox/store.js';
-import { prepareBumped, runTick, type Forge, type TickDeps, type TriageAgentResult } from '../src/inbox/tick.js';
+import { prepareBumped, runTick, type Forge, type PrepareRequest, type TickDeps, type TriageAgentResult } from '../src/inbox/tick.js';
 import { buildView } from '../src/inbox/view.js';
 import { localHhMm } from '../src/inbox/runs.js';
 import type { PrRef, PrSnapshot, TriageCandidate } from '@diffity/github';
@@ -957,6 +957,19 @@ describe('a pull request the daemon posted the alert findings to', () => {
 
     expect(heads).toEqual([null, 'aaa']);
     expect(store.get('o/r#1')!.autoPosted!.headSha).toBe('bbb');
+  });
+
+  it('tells the preparation who the reviewer is and which head they reviewed themselves', async () => {
+    alerting();
+    forge.set(snapshot());
+    forge.login = 'fiddur';
+    store.recordHandled({ prId: 'o/r#1', headSha: 'aaa', event: 'COMMENT', reviewUrl: REVIEW, at: '2026-09-02T11:00:00.000Z' });
+    const requests: PrepareRequest[] = [];
+    await runTick(store, deps({
+      prepare: (snap, opts) => { requests.push(opts); return Promise.resolve(prepareResult(snap)); },
+    }));
+
+    expect(requests).toEqual([expect.objectContaining({ viewerLogin: 'fiddur', reviewedHead: 'aaa' })]);
   });
 
   it('stays the reviewer\'s to review once the post has withdrawn the request', async () => {

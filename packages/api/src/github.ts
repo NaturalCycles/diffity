@@ -60,6 +60,11 @@ export interface ReviewResult {
   failed: number;
   errors: string[];
   reviewUrl: string | null;
+  /**
+   * The commit the review was posted against, which is the one that was reviewed rather than
+   * whatever the pull request has got to since.
+   */
+  commitSha: string;
 }
 
 /** What `POST /api/github/pull-comments` answers. */
@@ -69,4 +74,6 @@ export interface PullCommentsResult {
   skipped: number;
   /** True when thread resolution state could not be fetched, so nothing was resolved locally. */
   resolutionUnavailable: boolean;
+  /** Incoming threads whose line is not in this checkout, so no local thread was made for them. */
+  unmapped: number;
 }

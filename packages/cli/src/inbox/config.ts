@@ -98,11 +98,22 @@ export interface InboxConfig {
   /** Opens every posted comment, so nobody reads one as a verdict a human has stood behind. */
   postPrefix: string;
   /**
+   * The severity labels a named finding must open with to be posted — only the top of the scale
+   * goes to the author automatically. A finding of any other severity stays in the prepared review.
+   */
+  postSeverities: string[];
+  /**
    * Ends the posted review's own body, under a blank line: a team to mention, a line saying what
    * posted this. Empty adds nothing. The inline comments never carry it — a mention there would
    * fire once per finding.
    */
   postFooter: string;
+  /**
+   * Whether a comment of the reviewer's own on a pull request — an issue comment, a review, an
+   * inline review comment, the daemon's own earlier post among them — stops it being alerted
+   * about. The review is still prepared; only the alert is dropped.
+   */
+  quietOnceCommented: boolean;
   agent: AgentConfig;
   validate: ValidateConfig;
   triage: TriageConfig;
@@ -134,7 +145,9 @@ export const DEFAULT_INBOX_CONFIG: InboxConfig = {
   alertPaths: [],
   postAlerts: false,
   postPrefix: '[Automated AI pre-review, not yet checked by human]',
+  postSeverities: ['P1', 'must-fix'],
   postFooter: '',
+  quietOnceCommented: false,
   agent: { model: null, effort: null, mcpAllow: [], extraArgs: [], maxBudgetUsd: null },
   validate: { model: null, timeoutMinutes: 15, maxBudgetUsd: null },
   triage: { repos: [], bodyPatterns: [], model: null, maxDiffKb: 150, maxBudgetUsd: 0.25 },
@@ -170,7 +183,7 @@ export function parseInboxConfig(raw: unknown, source = 'inbox config'): InboxCo
     throw new Error(`${source} must be a JSON object`);
   }
   const obj = raw as Record<string, unknown>;
-  const config: InboxConfig = { ...DEFAULT_INBOX_CONFIG, alertPaths: [], skipTitles: [], agent: defaultAgent(), validate: defaultValidate(), triage: defaultTriage() };
+  const config: InboxConfig = { ...DEFAULT_INBOX_CONFIG, alertPaths: [], skipTitles: [], postSeverities: [...DEFAULT_INBOX_CONFIG.postSeverities], agent: defaultAgent(), validate: defaultValidate(), triage: defaultTriage() };
 
   if (obj.prepare !== undefined) {
     throw new Error(`${source}: "prepare" was replaced by the "agent" block — delete it (the built-in command applies) and put extra flags in agent.extraArgs`);
@@ -220,11 +233,23 @@ export function parseInboxConfig(raw: unknown, source = 'inbox config'): InboxCo
     }
     config.postPrefix = obj.postPrefix;
   }
+  if (obj.postSeverities !== undefined) {
+    if (!Array.isArray(obj.postSeverities) || !obj.postSeverities.every(label => typeof label === 'string' && label.trim() !== '')) {
+      throw new Error(`${source}: postSeverities must be an array of non-empty severity labels`);
+    }
+    config.postSeverities = (obj.postSeverities as string[]).map(label => label.trim());
+  }
   if (obj.postFooter !== undefined) {
     if (typeof obj.postFooter !== 'string') {
       throw new Error(`${source}: postFooter must be a string`);
     }
     config.postFooter = obj.postFooter;
+  }
+  if (obj.quietOnceCommented !== undefined) {
+    if (typeof obj.quietOnceCommented !== 'boolean') {
+      throw new Error(`${source}: quietOnceCommented must be true or false`);
+    }
+    config.quietOnceCommented = obj.quietOnceCommented;
   }
   // Nothing goes to a pull request unprefixed: the prefix is what tells the author no human has
   // stood behind the finding yet.
@@ -398,7 +423,7 @@ function parseBodyPatterns(raw: unknown, source: string): string[] {
 }
 
 /** The settings the inbox page edits, kept in the config file beside the keys only the file holds. */
-export type InboxSettings = Pick<InboxConfig, 'filter' | 'skipTitles' | 'alertWhen' | 'alertPaths' | 'postAlerts' | 'postPrefix' | 'postFooter' | 'maxPrepared' | 'pollMinutes' | 'live' | 'liveTimeoutMinutes' | 'prepareTimeoutMinutes' | 'waitForCi' | 'agent' | 'validate' | 'triage'>;
+export type InboxSettings = Pick<InboxConfig, 'filter' | 'skipTitles' | 'alertWhen' | 'alertPaths' | 'postAlerts' | 'postPrefix' | 'postSeverities' | 'postFooter' | 'quietOnceCommented' | 'maxPrepared' | 'pollMinutes' | 'live' | 'liveTimeoutMinutes' | 'prepareTimeoutMinutes' | 'waitForCi' | 'agent' | 'validate' | 'triage'>;
 
 /**
  * Writes the page-editable settings into the config file, leaving every other key as the reviewer

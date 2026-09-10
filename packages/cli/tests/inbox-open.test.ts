@@ -6,10 +6,11 @@ import { createServer } from 'node:http';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
-import { resolveDismiss, resolveOpen } from '../src/inbox/open.js';
+import { resolveBump, resolveDismiss, resolveOpen } from '../src/inbox/open.js';
 import { openPreparedSession, baseRefOf, ensureServer, repoHash, serverArgs, type OpenSessionDeps } from '../src/inbox/open-session.js';
 import { startInboxServer, settingsHost, type AttendantHost, type ServerHooks } from '../src/inbox/daemon.js';
 import { InboxStore } from '../src/inbox/store.js';
+import { buildView } from '../src/inbox/view.js';
 import { readRegistry, registerInstance } from '../src/registry.js';
 import type { AgentConfig, TriageConfig, ValidateConfig } from '../src/inbox/config.js';
 import type { PrSnapshot } from '@diffity/github';
@@ -116,6 +117,56 @@ describe('resolveDismiss', () => {
     store.observe({ ...snapshot(), number: 5 }, true, 'now');
     store.setStatus('o/r#5', 'preparing');
     expect(resolveDismiss(store, 'o/r#5')).toMatchObject({ ok: false, status: 409 });
+    store.close();
+  });
+});
+
+describe('resolveBump', () => {
+  /** A prepared review, and a review the reviewer posted from it a minute later. */
+  function postedFrom(store: InboxStore): void {
+    store.markPrepared('o/r#4', {
+      headSha: 'aaa', bundlePath: '/b.json', worktreePath: '/wt', logPath: '/l',
+      at: '2026-09-08T09:00:00.000Z', summary: null, alert: null, alertFindings: [],
+    });
+    store.recordHandled({
+      prId: 'o/r#4', headSha: 'aaa', event: 'COMMENT',
+      reviewUrl: 'https://github.com/o/r/pull/4#pullrequestreview-9', at: '2026-09-08T09:01:00.000Z',
+    });
+  }
+
+  it('accepts a queued one and refuses a prepared review nobody has posted from', () => {
+    const store = preparedStore();
+    expect(resolveBump(store, 'o/r#4')).toMatchObject({ ok: false, status: 409 });
+    expect(resolveBump(store, 'o/r#9')).toMatchObject({ ok: false, status: 404 });
+
+    store.observe({ ...snapshot(), number: 5 }, true, 'now');
+    store.setStatus('o/r#5', 'queued');
+    expect(resolveBump(store, 'o/r#5').ok).toBe(true);
+    store.close();
+  });
+
+  it('accepts a prepared review the reviewer has since posted from, as the view offers it', () => {
+    const store = new InboxStore(':memory:');
+    store.observe(snapshot(), true, 'now');
+    postedFrom(store);
+
+    expect(resolveBump(store, 'o/r#4').ok).toBe(true);
+    const row = buildView(store, 'http://localhost:5390', 'now').handled[0];
+    expect(row.prepareUrl).toBe('http://localhost:5390/prepare/o%2Fr%234');
+    store.close();
+  });
+
+  it('still refuses one whose review was posted before it was prepared', () => {
+    const store = new InboxStore(':memory:');
+    store.observe(snapshot(), true, 'now');
+    store.recordHandled({ prId: 'o/r#4', headSha: 'aaa', event: 'COMMENT', reviewUrl: null, at: '2026-09-08T08:00:00.000Z' });
+    store.markPrepared('o/r#4', {
+      headSha: 'aaa', bundlePath: '/b.json', worktreePath: '/wt', logPath: '/l',
+      at: '2026-09-08T09:00:00.000Z', summary: null, alert: null, alertFindings: [],
+    });
+
+    expect(resolveBump(store, 'o/r#4')).toMatchObject({ ok: false, status: 409 });
+    expect(buildView(store, 'http://localhost:5390', 'now').ready[0].prepareUrl).toBeNull();
     store.close();
   });
 });
@@ -233,7 +284,7 @@ describe('the inbox server routes', () => {
   };
 
   async function serve(store: InboxStore, logs: string[] = [], attendants: AttendantHost | null = null, onBump: (() => void) | null = null, configPath?: string, extra: Partial<ServerHooks> = {}) {
-    const config = { pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', skipTitles: [], alertWhen: '', alertPaths: [], postAlerts: false, postPrefix: PREFIX, postFooter: '', agent: agentConfig(), validate: validateConfig(), triage: triageConfig(), waitForCi: false, prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10 };
+    const config = { pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', skipTitles: [], alertWhen: '', alertPaths: [], postAlerts: false, postPrefix: PREFIX, postSeverities: ['P1', 'must-fix'], postFooter: '', quietOnceCommented: false, agent: agentConfig(), validate: validateConfig(), triage: triageConfig(), waitForCi: false, prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10 };
     const server = startInboxServer(store, config, m => logs.push(m), stubOpen, { attendants, onBump, settings: settingsHost(config, configPath), ...extra });
     await new Promise(resolve => server.on('listening', resolve));
     const { port } = server.address() as { port: number };
@@ -366,7 +417,8 @@ describe('the inbox server routes', () => {
     try {
       const before = await (await fetch(`http://127.0.0.1:${port}/api/settings`)).json();
       expect(before).toEqual({
-        filter: '', skipTitles: [], alertWhen: '', alertPaths: [], postAlerts: false, postPrefix: PREFIX, postFooter: '',
+        filter: '', skipTitles: [], alertWhen: '', alertPaths: [], postAlerts: false, postPrefix: PREFIX,
+        postSeverities: ['P1', 'must-fix'], postFooter: '', quietOnceCommented: false,
         maxPrepared: 5, pollMinutes: 5, live: true,
         liveTimeoutMinutes: 10, prepareTimeoutMinutes: 30, waitForCi: false, agent: agentConfig(), validate: validateConfig(),
         triage: triageConfig(),
@@ -374,7 +426,8 @@ describe('the inbox server routes', () => {
 
       const next = {
         filter: 'skip payments', skipTitles: ['\\(payments\\)'], alertWhen: 'a P1', alertPaths: ['packages/shared/src/model/**'],
-        postAlerts: true, postPrefix: '[a machine wrote this]', postFooter: 'cc @NaturalCycles/platform',
+        postAlerts: true, postPrefix: '[a machine wrote this]', postSeverities: ['P1'], postFooter: 'cc @NaturalCycles/platform',
+        quietOnceCommented: true,
         maxPrepared: 2, pollMinutes: 3, live: false, liveTimeoutMinutes: 4, prepareTimeoutMinutes: 20, waitForCi: true, validate: validateConfig(),
         triage: { ...triageConfig(), repos: ['NaturalCycles/NCBackend3'], bodyPatterns: ['^\\* platform - risk level: high$'] },
         agent: { ...agentConfig(), model: 'opus', mcpAllow: ['mcp__atlassian__getJiraIssue'] },
@@ -472,7 +525,7 @@ describe('the inbox server routes', () => {
       ensureServer: () => Promise.resolve(7788),
       importBundle: () => { throw new Error('head moved'); },
     };
-    const config = { pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', skipTitles: [], alertWhen: '', alertPaths: [], postAlerts: false, postPrefix: PREFIX, postFooter: '', agent: agentConfig(), validate: validateConfig(), triage: triageConfig(), waitForCi: false, prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10 };
+    const config = { pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', skipTitles: [], alertWhen: '', alertPaths: [], postAlerts: false, postPrefix: PREFIX, postSeverities: ['P1', 'must-fix'], postFooter: '', quietOnceCommented: false, agent: agentConfig(), validate: validateConfig(), triage: triageConfig(), waitForCi: false, prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10 };
     const server = startInboxServer(store, config, m => logs.push(m), failingOpen);
     await new Promise(resolve => server.on('listening', resolve));
     const { port } = server.address() as { port: number };

@@ -73,6 +73,18 @@ export function canSubmitReview(input: {
   return input.comments > 0 || input.summary.trim().length > 0;
 }
 
+/**
+ * What to say about where a submitted review landed: nothing when it went to the pull request's
+ * head, and one line when the author had pushed since, so the review went to the commit that was
+ * actually reviewed. GitHub marks any line the author has changed since as outdated, which is the
+ * right outcome and worth knowing about.
+ */
+export function movedOnNote(input: { commitSha: string; headSha: string }): string | null {
+  return input.commitSha === input.headSha
+    ? null
+    : 'Posted against the commit you reviewed; the pull request has moved on since.';
+}
+
 /** Already on the pull request, so resending has to be asked for rather than assumed. */
 export function wasSubmitted(thread: CommentThread): boolean {
   return !!thread.submittedAt;

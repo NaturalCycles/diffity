@@ -1,14 +1,14 @@
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { LiveRequest } from '@diffity/api';
-import { createReview, fetchPrContext, type PrSnapshot } from '@diffity/github';
+import { createReview, fetchPrContext, type PrContext, type PrSnapshot } from '@diffity/github';
 import { createWriteStream, mkdirSync, readFileSync, rmSync, writeFileSync, type WriteStream } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { logsDir, type ExportOpts, type MarkPostedOpts, type PrepareDeps, type RunAgentOpts, type ServerHandle } from './prepare.js';
 import type { InboxConfig } from './config.js';
 import { buildAgentArgv, skillBody } from './agent-argv.js';
 import { parseAgentOutput, rateLimitOf } from './agent-output.js';
-import { parseAwaitOutcome, type AttendantDeps } from './attendant.js';
+import { parseAwaitOutcome, type AttendantDeps, type LivePrContext } from './attendant.js';
 import { prId, runRecordOf, type RunRecord } from './store.js';
 import { triageVerdictOf } from './triage.js';
 import { buildTriageArgv, composeTriagePrompt, TRIAGE_TIMEOUT_MINUTES } from './triage-agent.js';
@@ -76,16 +76,31 @@ const PR_CONTEXT_FILE = 'pr-context.json';
  * where an untracked file would turn up in the review's own diff. Null when the forge could not be
  * read: the review goes ahead without the discussion, and the reason is logged.
  */
-async function writePrContext(snapshot: PrSnapshot, dataDir: string, log: (message: string) => void): Promise<string | null> {
+async function writePrContext(snapshot: PrSnapshot, dataDir: string, log: (message: string) => void): Promise<{ path: string; context: PrContext } | null> {
   const path = join(dataDir, PR_CONTEXT_FILE);
   try {
     const context = await fetchPrContext(snapshot);
     mkdirSync(dataDir, { recursive: true });
     writeFileSync(path, JSON.stringify(context, null, 2) + '\n');
-    return path;
+    return { path, context };
   } catch (err) {
     log(`could not read the discussion on ${prId(snapshot)}: ${err instanceof Error ? err.message : err}`);
     return null;
+  }
+}
+
+/**
+ * What the preparation left beside this session for an answering agent to read: the description as
+ * text and the discussion as a path. A session prepared before the file was written, or one whose
+ * forge could not be read, has neither — the agent answers from the diff, as it did before.
+ */
+export function readPrContext(dataDir: string): LivePrContext {
+  const path = join(dataDir, PR_CONTEXT_FILE);
+  try {
+    const context = JSON.parse(readFileSync(path, 'utf-8')) as { body?: unknown };
+    return { body: typeof context.body === 'string' ? context.body : '', contextPath: path };
+  } catch {
+    return { body: '', contextPath: null };
   }
 }
 
@@ -328,12 +343,14 @@ function agentEnv(dataDir: string, mcpAllow: string[]): NodeJS.ProcessEnv {
 export function realAttendantDeps(
   nodePath: string,
   entry: string,
+  dataDirFor: (worktree: string) => string,
   config: InboxConfig,
   logPathFor: (worktree: string) => string,
   log: (message: string) => void,
   recordRun: (run: RunRecord) => void = () => {},
 ): AttendantDeps {
   return {
+    prContext: worktree => readPrContext(dataDirFor(worktree)),
     awaitRequest: (worktree, signal) => new Promise(resolve => {
       const child = spawn(nodePath, [entry, '--repo', worktree, 'agent', 'await', '--timeout', '240'], { stdio: ['ignore', 'pipe', 'pipe'] });
       let stdout = '';

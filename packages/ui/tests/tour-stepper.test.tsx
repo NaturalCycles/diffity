@@ -4,7 +4,7 @@ import { TourStepper } from '../src/components/diff/tour-stepper';
 import { TOUR_NOT_STARTED } from '../src/lib/tour-navigation';
 import type { Tour, TourStep } from '../src/lib/api';
 
-function step(sortOrder: number, filePath: string): TourStep {
+function step(sortOrder: number, filePath: string, annotation = ''): TourStep {
   return {
     id: `s${sortOrder}`,
     tourId: 't',
@@ -13,7 +13,7 @@ function step(sortOrder: number, filePath: string): TourStep {
     startLine: 1,
     endLine: 2,
     body: `read ${filePath}`,
-    annotation: '',
+    annotation,
     createdAt: '2026-08-24T10:00:00.000Z',
   };
 }
@@ -115,5 +115,31 @@ describe('TourStepper once it is started', () => {
     renderStepper(0);
 
     expect(screen.queryByTitle('Back to the first stop')).toBeNull();
+  });
+});
+
+describe('the annotation a stop carries', () => {
+  function annotated(annotation: string): void {
+    const one: Tour = {
+      id: 't', sessionId: 'sess', topic: 'Reading order', body: '', status: 'ready',
+      createdAt: '2026-08-24T10:00:00.000Z', steps: [step(1, 'f1.ts', annotation)],
+    };
+    render(<TourStepper tour={one} stepIndex={0} onStepChange={vi.fn()} />);
+  }
+
+  // It was written to say why this file is read here, and until now it showed only in the bulb's
+  // tooltip and the file list — never where the stop is actually read.
+  it('is shown as the stop\'s title, above the body', () => {
+    annotated('the primitive');
+
+    expect(screen.getByText('the primitive')).toBeTruthy();
+    expect(screen.getByText('read f1.ts')).toBeTruthy();
+  });
+
+  it('takes no room when the stop has none', () => {
+    annotated('');
+
+    expect(screen.getByText('f1.ts')).toBeTruthy();
+    expect(screen.getByText('read f1.ts')).toBeTruthy();
   });
 });

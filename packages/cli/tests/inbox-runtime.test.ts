@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 
 const ENTRY = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'index.js');
-import { noneInflight, realAttendantDeps, realPrepareDeps, realTriageAgent, runAgent, startDiffityServer } from '../src/inbox/runtime.js';
+import { noneInflight, readPrContext, realAttendantDeps, realPrepareDeps, realTriageAgent, runAgent, startDiffityServer } from '../src/inbox/runtime.js';
 import { generalCommentIdOf, threadsToValidate } from '../src/inbox/validate.js';
 import type { AttendedPr } from '../src/inbox/attendant.js';
 import type { InboxConfig } from '../src/inbox/config.js';
@@ -32,7 +32,8 @@ function attendedPr(): AttendedPr {
 function liveConfig(): InboxConfig {
   return {
     pollMinutes: 5, port: 0, reposDir: root, worktreesDir: root, filter: '', skipTitles: [], alertWhen: '', alertPaths: [],
-    postAlerts: false, postPrefix: '[not yet checked by human]', postFooter: '',
+    postAlerts: false, postPrefix: '[not yet checked by human]', postSeverities: ['P1', 'must-fix'], postFooter: '',
+    quietOnceCommented: false,
     agent: { model: 'the-configured-model', effort: null, mcpAllow: [], extraArgs: [], maxBudgetUsd: null },
     validate: { model: null, timeoutMinutes: 15, maxBudgetUsd: null },
     triage: { repos: [], bodyPatterns: [], model: null, maxDiffKb: 150, maxBudgetUsd: 0.25 },
@@ -182,7 +183,7 @@ describe('realAttendantDeps', () => {
     mkdirSync(bin, { recursive: true });
     writeFileSync(join(bin, 'claude'), `#!/bin/sh\nexec '${process.execPath}' '${dump}' "$@"\n`, { mode: 0o755 });
 
-    const deps = realAttendantDeps(process.execPath, entry, liveConfig(), () => join(root, 'live.log'), () => {});
+    const deps = realAttendantDeps(process.execPath, entry, () => join(root, 'live-data'), liveConfig(), () => join(root, 'live.log'), () => {});
 
     await withStandInAgent(bin, () => deps.answer(root, attendedPr(), 'the live prompt\n', new AbortController().signal).then(() => {}));
 
@@ -205,7 +206,7 @@ describe('realAttendantDeps', () => {
 
     const config = { ...liveConfig(), validate: { model: 'the-checking-model', timeoutMinutes: 15, maxBudgetUsd: 9 } };
     const runs: RunRecord[] = [];
-    const deps = realAttendantDeps(process.execPath, join(root, 'index.js'), config, () => join(root, 'live.log'), () => {}, run => runs.push(run));
+    const deps = realAttendantDeps(process.execPath, join(root, 'index.js'), () => join(root, 'live-data'), config, () => join(root, 'live.log'), () => {}, run => runs.push(run));
 
     await withStandInAgent(bin, () => deps.answer(root, attendedPr(), 'the live prompt\n', new AbortController().signal).then(() => {}));
 
@@ -228,7 +229,7 @@ describe('realAttendantDeps', () => {
     writeFileSync(join(bin, 'claude'), `#!/bin/sh\ncat > /dev/null\ncat <<'JSON'\n${result}\nJSON\n`, { mode: 0o755 });
 
     const runs: RunRecord[] = [];
-    const deps = realAttendantDeps(process.execPath, join(root, 'index.js'), liveConfig(), () => join(root, 'live.log'), () => {}, run => runs.push(run));
+    const deps = realAttendantDeps(process.execPath, join(root, 'index.js'), () => join(root, 'live-data'), liveConfig(), () => join(root, 'live.log'), () => {}, run => runs.push(run));
 
     await withStandInAgent(bin, () => deps.answer(root, attendedPr(), 'the live prompt\n', new AbortController().signal).then(() => {}));
 
@@ -249,7 +250,7 @@ describe('realAttendantDeps', () => {
     writeFileSync(join(bin, 'claude'), '#!/bin/sh\ncat > /dev/null\nsleep 30\n', { mode: 0o755 });
 
     const runs: RunRecord[] = [];
-    const deps = realAttendantDeps(process.execPath, join(root, 'index.js'), liveConfig(), () => join(root, 'live.log'), () => {}, run => runs.push(run));
+    const deps = realAttendantDeps(process.execPath, join(root, 'index.js'), () => join(root, 'live-data'), liveConfig(), () => join(root, 'live.log'), () => {}, run => runs.push(run));
     const control = new AbortController();
 
     await withStandInAgent(bin, async () => {
@@ -359,8 +360,9 @@ describe('the real prContext', () => {
     const logged: string[] = [];
     const deps = realPrepareDeps(process.execPath, ENTRY, () => dataDir, liveConfig(), message => logged.push(message));
 
-    let path: string | null = null;
-    await withPathBin(bin, async () => { path = await deps.prContext(snapshot(), worktree); });
+    let written: Awaited<ReturnType<typeof deps.prContext>> = null;
+    await withPathBin(bin, async () => { written = await deps.prContext(snapshot(), worktree); });
+    const path = (written as { path: string } | null)?.path ?? null;
 
     expect(path).toBe(join(dataDir, 'pr-context.json'));
     expect(existsSync(join(worktree, 'pr-context.json'))).toBe(false);
@@ -384,14 +386,41 @@ describe('the real prContext', () => {
     const logged: string[] = [];
     const deps = realPrepareDeps(process.execPath, ENTRY, () => dataDir, liveConfig(), message => logged.push(message));
 
-    let path: string | null = 'unset';
-    await withPathBin(bin, async () => { path = await deps.prContext(snapshot(), join(root, 'refused-worktree')); });
+    let written: Awaited<ReturnType<typeof deps.prContext>> | 'unset' = 'unset';
+    await withPathBin(bin, async () => { written = await deps.prContext(snapshot(), join(root, 'refused-worktree')); });
 
-    expect(path).toBeNull();
+    expect(written).toBeNull();
     expect(existsSync(join(dataDir, 'pr-context.json'))).toBe(false);
     expect(logged).toHaveLength(1);
     expect(logged[0]).toContain('could not read the discussion on o/r#4');
     expect(logged[0]).toContain('Not Found');
+  });
+});
+
+describe('readPrContext', () => {
+  it('reads the description and the path back out of the data directory', () => {
+    const dataDir = join(root, 'live-context');
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(join(dataDir, 'pr-context.json'), JSON.stringify({ body: 'Adds a widget.', comments: [] }));
+
+    expect(readPrContext(dataDir)).toEqual({ body: 'Adds a widget.', contextPath: join(dataDir, 'pr-context.json') });
+  });
+
+  it('answers with neither when there is no file, or nothing readable in it', () => {
+    expect(readPrContext(join(root, 'nothing-there'))).toEqual({ body: '', contextPath: null });
+
+    const broken = join(root, 'broken-context');
+    mkdirSync(broken, { recursive: true });
+    writeFileSync(join(broken, 'pr-context.json'), 'not json');
+    expect(readPrContext(broken)).toEqual({ body: '', contextPath: null });
+  });
+
+  it('takes a context without a description as one with an empty one', () => {
+    const dataDir = join(root, 'bodyless-context');
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(join(dataDir, 'pr-context.json'), JSON.stringify({ comments: [] }));
+
+    expect(readPrContext(dataDir)).toEqual({ body: '', contextPath: join(dataDir, 'pr-context.json') });
   });
 });
 

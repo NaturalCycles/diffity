@@ -3,14 +3,14 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { preparePr, type MarkPostedOpts, type PostReviewOpts, type PrepareDeps } from '../src/inbox/prepare.js';
+import { commentedBy, preparePr, type MarkPostedOpts, type PostReviewOpts, type PrepareDeps } from '../src/inbox/prepare.js';
 import type { ReviewThread } from '../src/inbox/validate.js';
 import { worktreePath } from '../src/inbox/worktree.js';
 import { startInboxServer } from '../src/inbox/daemon.js';
 import { InboxStore } from '../src/inbox/store.js';
 import { buildView } from '../src/inbox/view.js';
 import type { AgentConfig, InboxConfig, TriageConfig, ValidateConfig } from '../src/inbox/config.js';
-import type { PrSnapshot, ReviewResult } from '@diffity/github';
+import type { PrContext, PrSnapshot, ReviewResult } from '@diffity/github';
 
 /** The built-in agent settings, fresh each call so a test cannot leak into the next. */
 function agentConfig(): AgentConfig {
@@ -44,10 +44,20 @@ function snapshot(): PrSnapshot {
   };
 }
 
+/** The discussion as the daemon read it: nobody but the author has said anything. */
+function prContext(over: Partial<PrContext> = {}): PrContext {
+  return {
+    owner: 'o', repo: 'demo', number: 4, title: 'A change', author: 'alice',
+    url: 'https://github.com/o/demo/pull/4', headSha: head, baseRef: 'main', body: 'What this does.',
+    comments: [], reviews: [], reviewComments: [], ...over,
+  };
+}
+
 function config(): InboxConfig {
   return {
     pollMinutes: 5, port: 0, reposDir, worktreesDir, filter: '', skipTitles: [], alertWhen: '', alertPaths: [],
-    postAlerts: false, postPrefix: '[not yet checked by human]', postFooter: '',
+    postAlerts: false, postPrefix: '[not yet checked by human]', postSeverities: ['P1', 'must-fix'], postFooter: '',
+    quietOnceCommented: false,
     agent: agentConfig(), validate: validateConfig(), triage: triageConfig(),
     waitForCi: false, prepareTimeoutMinutes: 30, maxPrepared: 5, live: true, liveTimeoutMinutes: 10,
   };
@@ -95,7 +105,7 @@ beforeEach(() => {
     submittedThreadIds: opts.submission.comments.map(comment => comment.threadId!),
     commentIds: opts.submission.comments.map((comment, index) => ({ threadId: comment.threadId!, githubCommentId: 500 + index })),
     skipped: 0, failed: 0, errors: [],
-    reviewUrl: 'https://github.com/o/demo/pull/4#pullrequestreview-9',
+    reviewUrl: 'https://github.com/o/demo/pull/4#pullrequestreview-9', commitSha: opts.headSha,
   });
 });
 
@@ -131,7 +141,7 @@ function deps(over: Partial<PrepareDeps> = {}): PrepareDeps {
     listThreads: () => Promise.resolve([]),
     prContext: (snapshot, worktree) => {
       contextCalls.push({ snapshot, worktree });
-      return Promise.resolve('/data/o-demo-4/pr-context.json');
+      return Promise.resolve({ path: '/data/o-demo-4/pr-context.json', context: prContext() });
     },
     runAgent: ({ cwd, prompt, argv, logPath, timeoutMs }) => {
       prompts.push(prompt);
@@ -381,6 +391,44 @@ describe('preparePr', () => {
     expect(result.kind === 'prepared' && result.summary).toBe('1 P3');
   });
 
+  it('marks a summary whose prose claims a severity the findings do not carry', async () => {
+    const result = await preparePr(snapshot(), config(), deps({
+      exportBundle: ({ outPath }) => {
+        mkdirSync(dirname(outPath), { recursive: true });
+        writeFileSync(outPath, JSON.stringify({
+          threads: [
+            { filePath: 'a.ts', status: 'open', comments: [{ body: 'P2: this reads oddly', kind: 'review' }] },
+            { filePath: '__general__', status: 'open', comments: [{ body: 'Two nits and a new P1.', kind: 'review' }] },
+          ],
+          tours: [{ topic: 'Reading order', body: '', status: 'ready', steps: [
+            { filePath: 'a.ts', startLine: 1, endLine: 1, body: '', annotation: 'where the must-fix lives' },
+          ] }],
+        }));
+      },
+    }));
+
+    expect(result.kind === 'prepared' && result.summary).toBe('1 P2 · unbacked P1, must-fix');
+    expect(daemonLog).toContain('o/demo#4: the review\'s prose claims P1, must-fix that no open finding carries');
+  });
+
+  it('leaves the summary alone when the prose and the findings agree', async () => {
+    const result = await preparePr(snapshot(), config(), deps({
+      exportBundle: ({ outPath }) => {
+        mkdirSync(dirname(outPath), { recursive: true });
+        writeFileSync(outPath, JSON.stringify({
+          threads: [
+            { filePath: 'a.ts', status: 'open', comments: [{ body: 'P1: the token is logged', kind: 'review' }] },
+            { filePath: '__general__', status: 'open', comments: [{ body: 'One P1 in the token path.', kind: 'review' }] },
+          ],
+          tours: [],
+        }));
+      },
+    }));
+
+    expect(result.kind === 'prepared' && result.summary).toBe('1 P1');
+    expect(daemonLog.some(line => line.includes('no open finding carries'))).toBe(false);
+  });
+
   it('keeps the draft and marks it unchecked when the checking agent times out', async () => {
     const result = await preparePr(snapshot(), checking(), deps({
       listThreads: () => Promise.resolve([draftedThread()]),
@@ -620,7 +668,7 @@ describe('posting the findings behind an alert', () => {
   it('leaves the review prepared and the alert standing when the forge refuses the post', async () => {
     reviewResult = () => ({
       submitted: 0, submittedThreadIds: [], commentIds: [], skipped: 0, failed: 1,
-      errors: ['gh: 422 Unprocessable Entity'], reviewUrl: null,
+      errors: ['gh: 422 Unprocessable Entity'], reviewUrl: null, commitSha: head,
     });
     const result = await preparePr(snapshot(), posting(), deps({
       ...alerting('cf15e689'),
@@ -647,7 +695,7 @@ describe('posting the findings behind an alert', () => {
     expect(await failed({ listThreads: () => Promise.reject(new Error('no session')) }))
       .toEqual([null, 'could not post alert findings to o/demo#4: no session']);
 
-    reviewResult = () => ({ submitted: 0, submittedThreadIds: [], commentIds: [], skipped: 0, failed: 0, errors: [], reviewUrl: null });
+    reviewResult = () => ({ submitted: 0, submittedThreadIds: [], commentIds: [], skipped: 0, failed: 0, errors: [], reviewUrl: null, commitSha: head });
     expect(await failed({}))
       .toEqual([null, 'could not post alert findings to o/demo#4: the forge created no review']);
   });
@@ -658,7 +706,7 @@ describe('posting the findings behind an alert', () => {
       submittedThreadIds: [FULL_ID],
       commentIds: [{ threadId: FULL_ID, githubCommentId: 500 }],
       skipped: 0, failed: 1, errors: ['b.ts:9 — not in PR diff'],
-      reviewUrl: 'https://github.com/o/demo/pull/4#pullrequestreview-9',
+      reviewUrl: 'https://github.com/o/demo/pull/4#pullrequestreview-9', commitSha: head,
     });
     const result = await preparePr(snapshot(), posting(), deps({
       ...alerting('cf15e689'),
@@ -694,6 +742,216 @@ describe('posting the findings behind an alert', () => {
     }));
 
     expect(order).toEqual(['marked', 'exported']);
+  });
+
+  it('posts nothing to a head the reviewer has reviewed themselves, keeping the alert', async () => {
+    const result = await preparePr(snapshot(), posting(), deps({
+      ...alerting('cf15e689'),
+      listThreads: () => Promise.resolve([named()]),
+    }), { reviewedHead: head });
+
+    expect(submissions).toEqual([]);
+    expect(daemonLog).toContain('o/demo#4: not posted — you reviewed this head yourself');
+    expect(result.kind === 'prepared' && [result.alert, result.posted]).toEqual(['touches auth', null]);
+  });
+
+  it('posts to a head the reviewer\'s own last review was not for', async () => {
+    await preparePr(snapshot(), posting(), deps({
+      ...alerting('cf15e689'),
+      listThreads: () => Promise.resolve([named()]),
+    }), { reviewedHead: 'an-older-head' });
+
+    expect(submissions).toHaveLength(1);
+    expect(daemonLog).not.toContain('o/demo#4: not posted — you reviewed this head yourself');
+  });
+
+  it('leaves out a named finding below the severities the reviewer posts, saying how many', async () => {
+    const suggestion = 'aaaabbbb-1111-2222-3333-444455556666';
+    const result = await preparePr(snapshot(), posting(), deps({
+      ...alerting('cf15e689', 'aaaabbbb'),
+      listThreads: () => Promise.resolve([
+        named(),
+        named({ threadId: suggestion, startLine: 2, endLine: 2, comments: [{ id: 'c2', body: 'P2: and this reads oddly' }] }),
+      ]),
+    }));
+
+    expect(submissions[0].submission.comments.map(comment => comment.threadId)).toEqual([FULL_ID]);
+    expect(daemonLog).toContain('o/demo#4: 1 named finding(s) left out — only P1, must-fix goes to the author');
+    // The reviewer still has both findings in the prepared review.
+    expect(result.kind === 'prepared' && result.alertFindings).toEqual(['cf15e689', 'aaaabbbb']);
+  });
+
+  it('takes a must-fix finding as readily as a P1, and any label the reviewer names', async () => {
+    const mustFix = 'aaaabbbb-1111-2222-3333-444455556666';
+    await preparePr(snapshot(), posting(), deps({
+      ...alerting('aaaabbbb'),
+      listThreads: () => Promise.resolve([
+        named({ threadId: mustFix, comments: [{ id: 'c2', body: '[must-fix] the token is logged' }] }),
+      ]),
+    }));
+
+    expect(submissions[0].submission.comments).toHaveLength(1);
+
+    submissions = [];
+    daemonLog = [];
+    await preparePr(snapshot(), { ...posting(), postSeverities: ['P2'] }, deps({
+      ...alerting('aaaabbbb'),
+      listThreads: () => Promise.resolve([
+        named({ threadId: mustFix, comments: [{ id: 'c2', body: 'P2: and this reads oddly' }] }),
+      ]),
+    }));
+
+    expect(submissions[0].submission.comments).toHaveLength(1);
+  });
+
+  it('posts nothing when the reason claims a severity no open finding carries', async () => {
+    // The named finding is postable, so nothing else is holding the review back.
+    const result = await preparePr(snapshot(), { ...posting(), postSeverities: ['P1', 'P2'] }, deps({
+      runAgent: () => Promise.resolve({
+        stdout: 'reviewing\nALERT: touches auth, and a new P1\nALERT-FINDINGS: cf15e689\nPREPARED\n',
+        timedOut: false,
+      }),
+      listThreads: () => Promise.resolve([named({ comments: [{ id: 'c1', body: 'P2: this reads oddly' }] })]),
+    }));
+
+    expect(submissions).toEqual([]);
+    expect(daemonLog).toContain('o/demo#4: not posted — the alert claims P1 but no open finding carries it');
+    // The reviewer keeps the row under Alerted and can still post it by hand.
+    expect(result.kind === 'prepared' && result.alert).toBe('touches auth, and a new P1');
+  });
+
+  it('posts that same reason once a finding carries the severity it claims', async () => {
+    await preparePr(snapshot(), posting(), deps({
+      runAgent: () => Promise.resolve({
+        stdout: 'reviewing\nALERT: touches auth, and a new P1\nALERT-FINDINGS: cf15e689\nPREPARED\n',
+        timedOut: false,
+      }),
+      listThreads: () => Promise.resolve([named()]),
+    }));
+
+    expect(submissions).toHaveLength(1);
+    expect(daemonLog.some(line => line.includes('no open finding carries it'))).toBe(false);
+  });
+
+  it('posts a reason that only denies a severity', async () => {
+    await preparePr(snapshot(), { ...posting(), postSeverities: ['P2'] }, deps({
+      runAgent: () => Promise.resolve({
+        stdout: 'reviewing\nALERT: touches auth, though no P1\nALERT-FINDINGS: cf15e689\nPREPARED\n',
+        timedOut: false,
+      }),
+      listThreads: () => Promise.resolve([named({ comments: [{ id: 'c1', body: 'P2: this reads oddly' }] })]),
+    }));
+
+    expect(submissions).toHaveLength(1);
+  });
+
+  it('posts nothing when every named finding is below those severities', async () => {
+    const result = await preparePr(snapshot(), posting(), deps({
+      ...alerting('cf15e689'),
+      listThreads: () => Promise.resolve([named({ comments: [{ id: 'c1', body: 'P3: a nit' }] })]),
+    }));
+
+    expect(submissions).toEqual([]);
+    expect(daemonLog).toContain('o/demo#4: 1 named finding(s) left out — only P1, must-fix goes to the author');
+    expect(daemonLog).toContain('o/demo#4: the alert\'s findings did not survive the check — nothing posted');
+    expect(result.kind === 'prepared' && result.alert).toBe('touches auth');
+  });
+});
+
+describe('a pull request the reviewer has already commented on', () => {
+  /** The agent's output for a review it flagged, with a finding named behind the flag. */
+  const alerting: Partial<PrepareDeps> = {
+    runAgent: () => Promise.resolve({
+      stdout: 'reviewing\nALERT: touches auth\nALERT-FINDINGS: cf15e689\nPREPARED\n',
+      timedOut: false,
+    }),
+  };
+
+  const thread = (): ReviewThread => draftedThread({ threadId: 'cf15e689-1111-2222-3333-444455556666' });
+
+  /** The setting on, with posting on too, so a dropped alert can be seen to post nothing. */
+  function quiet(): InboxConfig {
+    return { ...config(), quietOnceCommented: true, postAlerts: true, postPrefix: '[not yet checked by human]' };
+  }
+
+  /** A discussion the reviewer has spoken in, in whichever of the three ways. */
+  function said(over: Partial<PrContext>): Partial<PrepareDeps> {
+    return { prContext: () => Promise.resolve({ path: '/data/pr-context.json', context: prContext(over) }) };
+  }
+
+  it('is prepared without an alert, and nothing is posted to it', async () => {
+    const result = await preparePr(snapshot(), quiet(), deps({
+      ...alerting, ...said({ comments: [{ author: 'fiddur', createdAt: 'then', body: 'Looks off to me' }] }),
+      listThreads: () => Promise.resolve([thread()]),
+    }), { viewerLogin: 'fiddur' });
+
+    expect(result.kind).toBe('prepared');
+    expect(result.kind === 'prepared' && [result.alert, result.alertFindings, result.posted]).toEqual([null, [], null]);
+    expect(submissions).toEqual([]);
+    expect(daemonLog).toContain('o/demo#4: alert dropped — you have commented on this pull request');
+  });
+
+  it('keeps the alert when the reviewer has said nothing on it', async () => {
+    const result = await preparePr(snapshot(), quiet(), deps({
+      ...alerting, ...said({ comments: [{ author: 'bob', createdAt: 'then', body: 'Needs a migration?' }] }),
+      listThreads: () => Promise.resolve([thread()]),
+    }), { viewerLogin: 'fiddur' });
+
+    expect(result.kind === 'prepared' && result.alert).toBe('touches auth');
+    expect(submissions).toHaveLength(1);
+  });
+
+  it('keeps the alert while the setting is off, however much the reviewer has said', async () => {
+    const result = await preparePr(snapshot(), { ...quiet(), quietOnceCommented: false }, deps({
+      ...alerting, ...said({ reviews: [{ author: 'fiddur', state: 'COMMENTED', submittedAt: 'then', body: 'A note' }] }),
+      listThreads: () => Promise.resolve([thread()]),
+    }), { viewerLogin: 'fiddur' });
+
+    expect(result.kind === 'prepared' && result.alert).toBe('touches auth');
+    expect(daemonLog).not.toContain('o/demo#4: alert dropped — you have commented on this pull request');
+  });
+
+  it('keeps the alert when the forge would not say who has commented', async () => {
+    const result = await preparePr(snapshot(), quiet(), deps({
+      ...alerting, prContext: () => Promise.resolve(null),
+      listThreads: () => Promise.resolve([thread()]),
+    }), { viewerLogin: 'fiddur' });
+
+    expect(result.kind === 'prepared' && result.alert).toBe('touches auth');
+  });
+
+  it('keeps the alert when the reviewer\'s own login is not known', async () => {
+    const result = await preparePr(snapshot(), quiet(), deps({
+      ...alerting, ...said({ comments: [{ author: 'fiddur', createdAt: 'then', body: 'Looks off to me' }] }),
+      listThreads: () => Promise.resolve([thread()]),
+    }));
+
+    expect(result.kind === 'prepared' && result.alert).toBe('touches auth');
+  });
+});
+
+describe('commentedBy', () => {
+  const context = (over: Partial<PrContext>): PrContext => prContext(over);
+
+  it('finds the reviewer in any of the three places, whatever the case of the login', () => {
+    expect(commentedBy(context({ comments: [{ author: 'Fiddur', createdAt: '', body: 'x' }] }), 'fiddur')).toBe(true);
+    expect(commentedBy(context({ reviews: [{ author: 'fiddur', state: 'APPROVED', submittedAt: '', body: '' }] }), 'fiddur')).toBe(true);
+    expect(commentedBy(context({
+      reviewComments: [{ author: 'fiddur', path: 'a.ts', line: 1, side: 'RIGHT', createdAt: '', body: 'x', inReplyTo: null }],
+    }), 'fiddur')).toBe(true);
+  });
+
+  it('is false for a discussion of other people\'s, and for a reviewer nobody named', () => {
+    const others = context({
+      comments: [{ author: 'bob', createdAt: '', body: 'x' }],
+      reviews: [{ author: 'carol', state: 'APPROVED', submittedAt: '', body: '' }],
+      reviewComments: [{ author: 'carol', path: 'a.ts', line: 1, side: 'RIGHT', createdAt: '', body: 'x', inReplyTo: null }],
+    });
+
+    expect(commentedBy(others, 'fiddur')).toBe(false);
+    expect(commentedBy(context({}), 'fiddur')).toBe(false);
+    expect(commentedBy(context({ comments: [{ author: 'fiddur', createdAt: '', body: 'x' }] }), null)).toBe(false);
+    expect(commentedBy(context({ comments: [{ author: 'fiddur', createdAt: '', body: 'x' }] }), '')).toBe(false);
   });
 });
 
