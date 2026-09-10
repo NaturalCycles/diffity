@@ -845,15 +845,17 @@ describe('posting the findings behind an alert', () => {
     expect(submissions).toHaveLength(1);
   });
 
-  it('posts nothing when every named finding is below those severities', async () => {
+  it('posts nothing when every named finding is below those severities, and says which it is', async () => {
     const result = await preparePr(snapshot(), posting(), deps({
       ...alerting('cf15e689'),
       listThreads: () => Promise.resolve([named({ comments: [{ id: 'c1', body: 'P3: a nit' }] })]),
     }));
 
     expect(submissions).toEqual([]);
-    expect(daemonLog).toContain('o/demo#4: 1 named finding(s) left out — only P1, must-fix goes to the author');
-    expect(daemonLog).toContain('o/demo#4: the alert\'s findings did not survive the check — nothing posted');
+    expect(daemonLog).toContain('o/demo#4: no finding the alert named is a P1, must-fix finding — nothing posted');
+    // Not the checking pass's doing: nothing was dismissed, and saying so would send the reader
+    // after a rejection that never happened.
+    expect(daemonLog).not.toContain('o/demo#4: the alert\'s findings did not survive the check — nothing posted');
     expect(result.kind === 'prepared' && result.alert).toBe('touches auth');
   });
 });

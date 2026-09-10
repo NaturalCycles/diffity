@@ -2,8 +2,12 @@ import { readFileSync } from 'node:fs';
 import { GENERAL_THREAD_FILE_PATH, type BundleThread, type BundleTour } from '@diffity/api';
 import { findingSeverities, type FindingThread } from './summary.js';
 
-/** The severities prose can name, in the two vocabularies a review is written in. */
-const CLAIM = /\b(p[1-3]|must-fix)\b/gi;
+/**
+ * The severities prose can name, in the two vocabularies a review is written in. A plural counts:
+ * "two P1s remain" is how a count is written, and the suffix stays outside the capture so the
+ * label still normalises to the one spelling.
+ */
+const CLAIM = /\b(p[1-3]|must-fix)(?:e?s)?\b/gi;
 
 /** How far back a denial reaches: "no P1", "not a P1", "without a P1" all fit in a dozen characters. */
 const NEGATION_WINDOW = 12;

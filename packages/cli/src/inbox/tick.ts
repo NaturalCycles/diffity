@@ -600,8 +600,9 @@ async function prepareOne(store: InboxStore, snapshot: PrSnapshot, deps: TickDep
         logPath: result.logPath,
         at: result.at,
         summary: result.summary,
-        // The agent's judgement first; the reviewer's own paths stand in when it raised nothing.
-        alert: result.alert ?? alertForPaths(snapshot.files, deps.alertPaths),
+        // The agent's judgement first; the reviewer's own paths stand in when it raised nothing —
+        // except on a pull request they have commented on, where they asked for no alert at all.
+        alert: result.alert ?? (result.quiet ? null : alertForPaths(snapshot.files, deps.alertPaths)),
         // Only the agent names findings, so a path alert stands on its own with none.
         alertFindings: result.alertFindings,
       });

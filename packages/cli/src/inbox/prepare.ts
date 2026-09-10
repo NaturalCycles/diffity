@@ -112,8 +112,12 @@ export interface PostedReview {
   commentIds: number;
 }
 
+/**
+ * What one preparation came to. On a prepared review, `quiet` says the reviewer's own comment on
+ * the pull request dropped the alert, so no other rule may put one back in its place.
+ */
 export type PrepareResult =
-  | { kind: 'prepared'; headSha: string; bundlePath: string; worktree: string; logPath: string; at: string; summary: string | null; alert: string | null; alertFindings: string[]; posted: PostedReview | null; run: RunLog; validation: Validation; validateRun: ValidateRun | null }
+  | { kind: 'prepared'; headSha: string; bundlePath: string; worktree: string; logPath: string; at: string; summary: string | null; alert: string | null; alertFindings: string[]; quiet: boolean; posted: PostedReview | null; run: RunLog; validation: Validation; validateRun: ValidateRun | null }
   | { kind: 'skipped'; reason: string; logPath: string; run: RunLog }
   | { kind: 'failed'; reason: string; failure: PrepareFailure; worktree: string | null; logPath: string | null; run: RunLog; resetsAt?: string | null };
 
@@ -272,7 +276,7 @@ export async function preparePr(snapshot: PrSnapshot, config: InboxConfig, deps:
     return {
       kind: 'prepared', headSha: head, bundlePath, worktree: dest, logPath, at: deps.now(),
       summary: withClaims(withValidation(summarizeBundleFile(bundlePath), validation), unbacked),
-      alert, alertFindings, posted, run, validation, validateRun,
+      alert, alertFindings, quiet, posted, run, validation, validateRun,
     };
   } catch (err) {
     return { kind: 'failed', failure: 'agent', reason: err instanceof Error ? err.message : String(err), worktree: dest, logPath, run };
@@ -341,12 +345,16 @@ async function postAlertFindings(
   try {
     const threads = await deps.listThreads(ctx.worktree);
     const { comments, dropped } = alertComments(threads, ctx.alertFindings, config);
+    if (ctx.alertFindings.length > 0 && comments.length === 0) {
+      // Two different things end here, and sending the reader after a dismissal that never
+      // happened wastes their time: the severity rule accounts for it, or the check does.
+      deps.log(dropped === ctx.alertFindings.length
+        ? `${id}: no finding the alert named is a ${config.postSeverities.join(', ')} finding — nothing posted`
+        : `${id}: the alert's findings did not survive the check — nothing posted`);
+      return null;
+    }
     if (dropped > 0) {
       deps.log(`${id}: ${dropped} named finding(s) left out — only ${config.postSeverities.join(', ')} goes to the author`);
-    }
-    if (ctx.alertFindings.length > 0 && comments.length === 0) {
-      deps.log(`${id}: the alert's findings did not survive the check — nothing posted`);
-      return null;
     }
     // The reason goes out publicly in the reviewer's name, so a severity it asserts has to be one
     // the review actually found; prose that outruns the findings is not something to publish.

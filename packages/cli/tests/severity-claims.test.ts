@@ -34,6 +34,16 @@ describe('claimedSeverities', () => {
     expect(claimedSeverities('P1: the token is logged')).toEqual(['P1']);
   });
 
+  it('reads a plural as the claim it is, which is how a count is written', () => {
+    expect(claimedSeverities('two P1s remain')).toEqual(['P1']);
+    expect(claimedSeverities('three must-fixes and a P2')).toEqual(['must-fix', 'P2']);
+  });
+
+  it('leaves out a plural that is denied', () => {
+    expect(claimedSeverities('no P1s here')).toEqual([]);
+    expect(claimedSeverities('without must-fixes')).toEqual([]);
+  });
+
   it('does not take a severity inside a longer word for a claim', () => {
     expect(claimedSeverities('the P12 experiment and the must-fixture helper')).toEqual([]);
   });
@@ -44,9 +54,11 @@ describe('unbackedClaims', () => {
     expect(unbackedClaims('a new P1 in the token path', [finding('P1: the token is logged')])).toEqual([]);
   });
 
-  it('names the severity the findings do not carry', () => {
+  it('names the severity the findings do not carry, however the prose counts them', () => {
     expect(unbackedClaims('and a new P1', [finding('P2: this reads oddly')])).toEqual(['P1']);
     expect(unbackedClaims('a P1 and a must-fix', [finding('P2: this reads oddly')])).toEqual(['P1', 'must-fix']);
+    expect(unbackedClaims('two P1s remain', [finding('P2: this reads oddly')])).toEqual(['P1']);
+    expect(unbackedClaims('no P1s here', [finding('P2: this reads oddly')])).toEqual([]);
   });
 
   it('counts only findings the reviewer still has to act on, by the summary\'s own rules', () => {
