@@ -64,17 +64,22 @@ function alreadyThere(body: string, login: string): void {
   );
 }
 
-/** A finding recorded locally, as the page records one, so it has an identity to be known by. */
-async function recordFinding(body: string): Promise<string> {
+async function ensureSession(): Promise<string> {
   const session = await (await fetch(`http://127.0.0.1:${port}/api/sessions/ensure`, {
     method: 'POST',
     headers: { 'Sec-Fetch-Site': 'same-origin' },
   })).json() as { id: string };
+  return session.id;
+}
+
+/** A finding recorded locally, as the page records one, so it has an identity to be known by. */
+async function recordFinding(body: string): Promise<string> {
+  const sessionId = await ensureSession();
   const res = await fetch(`http://127.0.0.1:${port}/api/threads`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
     body: JSON.stringify({
-      sessionId: session.id,
+      sessionId,
       filePath: 'a.ts',
       side: 'new',
       startLine: 1,
@@ -213,6 +218,30 @@ describe('a finding on a line that already carries a comment', () => {
 
     alreadyThere('P2: as first written', 'me');
     const again = await post({ body: 'P2: reworded since, same finding', threadId });
+
+    expect(again.body.skipped).toBe(1);
+    expect(again.body.submitted).toBe(0);
+  }, 15000);
+
+  it('is held back when it was pulled from GitHub rather than sent from here', async () => {
+    // A pulled comment knows the forge comment it exists as but was never submitted from here,
+    // and editing it locally moves it out of reach of the wording comparison.
+    alreadyThere('P2: someone else wrote this on the pull request', 'someone-else');
+    const sessionId = await ensureSession();
+    await fetch(`http://127.0.0.1:${port}/api/github/pull-comments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
+      body: JSON.stringify({ sessionId }),
+    });
+    const threads = await (await fetch(`http://127.0.0.1:${port}/api/threads?session=${sessionId}`)).json() as {
+      id: string;
+      githubCommentId: number | null;
+      comments: { body: string }[];
+    }[];
+    const pulled = threads.find(thread => thread.comments[0]?.body.includes('someone else wrote this'));
+    expect(pulled?.githubCommentId).toBe(1);
+
+    const again = await post({ body: 'P2: reworded by me after pulling it', threadId: pulled!.id });
 
     expect(again.body.skipped).toBe(1);
     expect(again.body.submitted).toBe(0);

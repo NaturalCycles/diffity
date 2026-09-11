@@ -212,7 +212,7 @@ export interface CreateReviewOptions {
   commitSha?: string;
   /** The diff the commentable lines come from; the pull request's own patch when none is given. */
   patch?: string;
-  /** The findings diffity's record says already went to this pull request, by thread id. */
+  /** The findings diffity's record places on this pull request already, by thread id. */
   postedThreadIds?: ReadonlySet<string>;
   /** The account the review posts as, so a resend is told apart from another reviewer's remark. */
   viewerLogin?: string | null;

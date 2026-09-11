@@ -50,7 +50,7 @@ export function commentableLines(patch: string): Map<string, CommentableSides> {
 
 /** What makes a finding one already sent, beyond the line it would sit on. */
 export interface PostedBefore {
-  /** The findings diffity's own record says have gone to this pull request. */
+  /** The findings diffity's own record places on this pull request already. */
   threadIds?: ReadonlySet<string>;
   /** The account the review is posted as, when it is known. */
   viewerLogin?: string | null;
@@ -62,10 +62,11 @@ export interface PostedBefore {
  * reviewers' — so its position says nothing about which finding is there, and dropping on
  * position alone silently swallows new findings.
  *
- * Identity settles it where there is a record: a finding diffity sent is not sent twice, however
- * it has been reworded since, because the forge cannot update the comment already there. Where
- * there is no record — a finding imported from a bundle, or posted from another machine — the
- * same wording in the same place from the same account is the best evidence left.
+ * Identity settles it where there is a record: a finding already on the forge — sent from here,
+ * or pulled from there — is not sent again, however it has been reworded since, because the forge
+ * cannot update the comment already present. Where there is no record — a finding imported from a
+ * bundle, or posted from another machine — the same wording in the same place from the same
+ * account is the best evidence left.
  */
 export function isAlreadyCommented(
   existing: ExistingComment[],

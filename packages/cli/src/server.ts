@@ -84,7 +84,7 @@ import { computeDiffFingerprint } from './fingerprint.js';
 import { parseDiffStatFiles } from './diff-stat.js';
 import { parseDiffStatSummary } from './diff-stat.js';
 import { anyReviewInProgress, getReviewRun } from './review-run.js';
-import { createThread, addReply, getThreadsForSession, markThreadsSubmitted, setThreadForgeComment, submittedThreadIds, updateThreadStatus } from './threads.js';
+import { createThread, addReply, getThreadsForSession, markThreadsSubmitted, setThreadForgeComment, threadsOnTheForge, updateThreadStatus } from './threads.js';
 import { existingThreadFor } from './github-pull.js';
 import { threadsResolvedRemotely } from './github-resolution.js';
 import { noteViewerSeen, markViewerGone, viewerSnapshot, viewerIsPresent, viewerHasGone, awakeMs, VIEWER_POLL_MS } from './viewers.js';
@@ -837,7 +837,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
                 // Which findings are already on the pull request is a question about these
                 // findings, not about the lines they sit on — a line collects comments over
                 // rounds, and the ones on it may be nothing to do with what is being sent now.
-                postedThreadIds: submittedThreadIds(
+                postedThreadIds: threadsOnTheForge(
                   submission.comments.map(comment => comment.threadId).filter((id): id is string => !!id),
                 ),
                 viewerLogin: await getViewerLogin(),
