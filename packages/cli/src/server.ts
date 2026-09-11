@@ -67,6 +67,7 @@ import {
   prCommits as githubPrCommits,
   prBaseRef as githubPrBaseRef,
   getCompareDiff as githubCompareDiff,
+  getViewerLogin,
   type CreateReviewOptions,
   type GitHubRemote,
 } from '@diffity/github';
@@ -83,7 +84,7 @@ import { computeDiffFingerprint } from './fingerprint.js';
 import { parseDiffStatFiles } from './diff-stat.js';
 import { parseDiffStatSummary } from './diff-stat.js';
 import { anyReviewInProgress, getReviewRun } from './review-run.js';
-import { createThread, addReply, getThreadsForSession, markThreadsSubmitted, setThreadForgeComment, updateThreadStatus } from './threads.js';
+import { createThread, addReply, getThreadsForSession, markThreadsSubmitted, setThreadForgeComment, threadsOnTheForge, updateThreadStatus } from './threads.js';
 import { existingThreadFor } from './github-pull.js';
 import { threadsResolvedRemotely } from './github-resolution.js';
 import { noteViewerSeen, markViewerGone, viewerSnapshot, viewerIsPresent, viewerHasGone, awakeMs, VIEWER_POLL_MS } from './viewers.js';
@@ -831,7 +832,16 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
               details.prNumber,
               details.headSha,
               submission,
-              target,
+              {
+                ...target,
+                // Which findings are already on the pull request is a question about these
+                // findings, not about the lines they sit on — a line collects comments over
+                // rounds, and the ones on it may be nothing to do with what is being sent now.
+                postedThreadIds: threadsOnTheForge(
+                  submission.comments.map(comment => comment.threadId).filter((id): id is string => !!id),
+                ),
+                viewerLogin: await getViewerLogin(),
+              },
             );
             // Only the reader's own submit counts as the pull request being handled; an agent
             // posting through this route is not the reviewer having reviewed it. The mark is

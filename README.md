@@ -236,7 +236,7 @@ The forge dialog is a composer, not a push button:
 - **Comment**, **Approve** or **Request changes** — and an approval needs nothing attached, since a verdict stands on its own. Approve and Request changes are disabled on your own pull request, which the forge refuses anyway
 - everything goes as **one review**: one notification for the author, a summary that has somewhere to live, and no half-posted review if something fails
 
-A comment on a line the pull request does not touch is caught before anything is sent, because the whole review is a single request and one unpostable line would reject all of it. Findings already sent are marked *already on the pull request* and left unselected.
+A comment on a line the pull request does not touch is caught before anything is sent, because the whole review is a single request and one unpostable line would reject all of it. Findings already sent are marked *already on the pull request* and left unselected. A finding that has been sent once is not sent again, however it has been reworded since, because the forge cannot update the comment already there — but a new finding on a line that already carries someone's comment does go out, since the line says nothing about which finding is on it.
 
 Existing inline comments can be pulled into the viewer from the same dialog.
 

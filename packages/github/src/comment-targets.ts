@@ -11,6 +11,8 @@ export interface ExistingComment {
   line: number;
   side: string;
   body: string;
+  /** Who wrote it, so another reviewer's remark is not mistaken for one of ours. */
+  login: string;
 }
 
 /**
@@ -46,15 +48,46 @@ export function commentableLines(patch: string): Map<string, CommentableSides> {
   return byFile;
 }
 
+/** What makes a finding one already sent, beyond the line it would sit on. */
+export interface PostedBefore {
+  /** The findings diffity's own record places on this pull request already. */
+  threadIds?: ReadonlySet<string>;
+  /** The account the review is posted as, when it is known. */
+  viewerLogin?: string | null;
+}
+
 /**
- * Matched on position rather than wording: editing a finding locally and submitting again is not
- * a new remark about that line, and the forge has no way to update the one already there.
+ * Whether this finding is already on the pull request, as opposed to a new remark about a line
+ * that happens to carry one. A line collects comments over rounds — resolved ones, other
+ * reviewers' — so its position says nothing about which finding is there, and dropping on
+ * position alone silently swallows new findings.
+ *
+ * Identity settles it where there is a record: a finding already on the forge — sent from here,
+ * or pulled from there — is not sent again, however it has been reworded since, because the forge
+ * cannot update the comment already present. Where there is no record — a finding imported from a
+ * bundle, or posted from another machine — the same wording in the same place from the same
+ * account is the best evidence left.
  */
-export function isAlreadyCommented(existing: ExistingComment[], comment: PrComment): boolean {
+export function isAlreadyCommented(
+  existing: ExistingComment[],
+  comment: PrComment,
+  posted: PostedBefore = {},
+): boolean {
+  if (comment.threadId && posted.threadIds?.has(comment.threadId)) {
+    return true;
+  }
+
   return existing.some(
     one =>
       one.path === comment.filePath &&
       one.line === comment.endLine &&
-      one.side === comment.side,
+      one.side === comment.side &&
+      sameWording(one.body, comment.body) &&
+      (!posted.viewerLogin || one.login === posted.viewerLogin),
   );
+}
+
+/** Line endings and trailing space differ between what was sent and what comes back. */
+function sameWording(one: string, other: string): boolean {
+  return one.replace(/\r\n/g, '\n').trim() === other.replace(/\r\n/g, '\n').trim();
 }

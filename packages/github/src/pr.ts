@@ -1,15 +1,8 @@
 import { ghAsync } from './exec.js';
 import { matchCreatedComments, type CreatedComment, type SentComment } from './comment-ids.js';
 import type { PrComment, PulledThread, ReviewResult, ReviewSubmission } from './types.js';
-import { commentableLines, isAlreadyCommented } from './comment-targets.js';
+import { commentableLines, isAlreadyCommented, type ExistingComment } from './comment-targets.js';
 
-
-interface ExistingComment {
-  path: string;
-  line: number;
-  side: string;
-  body: string;
-}
 
 export async function getComments(owner: string, repo: string, prNumber: number): Promise<ExistingComment[]> {
   try {
@@ -25,11 +18,12 @@ export async function getComments(owner: string, repo: string, prNumber: number)
     if (!Array.isArray(data)) {
       return [];
     }
-    return data.map((c: { path: string; line: number; side: string; body: string }) => ({
+    return data.map((c: { path: string; line: number; side: string; body: string; user?: { login?: string } }) => ({
       path: c.path,
       line: c.line,
       side: c.side,
       body: c.body,
+      login: c.user?.login ?? '',
     }));
   } catch {
     return [];
@@ -218,6 +212,10 @@ export interface CreateReviewOptions {
   commitSha?: string;
   /** The diff the commentable lines come from; the pull request's own patch when none is given. */
   patch?: string;
+  /** The findings diffity's record places on this pull request already, by thread id. */
+  postedThreadIds?: ReadonlySet<string>;
+  /** The account the review posts as, so a resend is told apart from another reviewer's remark. */
+  viewerLogin?: string | null;
 }
 
 /**
@@ -262,7 +260,7 @@ export async function createReview(
       );
       continue;
     }
-    if (isAlreadyCommented(existing, comment)) {
+    if (isAlreadyCommented(existing, comment, { threadIds: options.postedThreadIds, viewerLogin: options.viewerLogin })) {
       skipped++;
       continue;
     }
