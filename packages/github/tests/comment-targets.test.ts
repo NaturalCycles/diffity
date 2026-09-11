@@ -26,6 +26,10 @@ function comment(filePath: string, endLine: number, body = 'P2: x'): PrComment {
   return { filePath, side: 'RIGHT', startLine: null, endLine, body };
 }
 
+function onThePr(body: string, login = 'fiddur', line = 11, path = 'src/a.ts') {
+  return { path, line, side: 'RIGHT', body, login };
+}
+
 describe('commentableLines', () => {
   it('collects the lines each file actually shows', () => {
     const lines = commentableLines(patch);
@@ -51,11 +55,39 @@ describe('commentableLines', () => {
 });
 
 describe('isAlreadyCommented', () => {
-  const existing = [{ path: 'src/a.ts', line: 11, side: 'RIGHT', body: 'the original wording' }];
+  const existing = [onThePr('P2: the original wording')];
 
-  it('matches on position, not on wording', () => {
-    // Editing a finding locally and resubmitting used to post a second comment beside the first.
-    expect(isAlreadyCommented(existing, comment('src/a.ts', 11, 'reworded since'))).toBe(true);
+  it('drops a finding the record says was already sent, however it reads now', () => {
+    // The forge cannot update the comment already there, so a locally edited finding that
+    // has been posted once is not posted a second time beside it.
+    const sent: PrComment = { ...comment('src/a.ts', 11, 'reworded since'), threadId: 'abc' };
+
+    expect(isAlreadyCommented(existing, sent, { threadIds: new Set(['abc']) })).toBe(true);
+  });
+
+  it('sends a new finding on a line that already carries an older one', () => {
+    // The reported bug: earlier rounds leave comments on a line, resolved or not, and a fresh
+    // finding there was silently swallowed as a resend.
+    const fresh: PrComment = { ...comment('src/a.ts', 11, 'P1: this is a different problem'), threadId: 'new' };
+
+    expect(isAlreadyCommented(existing, fresh, { threadIds: new Set(['abc']), viewerLogin: 'fiddur' })).toBe(false);
+  });
+
+  it('takes the same wording in the same place as a resend when no record says otherwise', () => {
+    // A finding imported from a bundle, or posted from another machine, has no local mark.
+    expect(isAlreadyCommented(existing, comment('src/a.ts', 11, 'P2: the original wording'))).toBe(true);
+  });
+
+  it('ignores line endings and trailing space in that comparison', () => {
+    const withCrLf = [onThePr('P2: one\r\ntwo\r\n')];
+
+    expect(isAlreadyCommented(withCrLf, comment('src/a.ts', 11, 'P2: one\ntwo'))).toBe(true);
+  });
+
+  it('does not treat another reviewer\'s identical remark as ours', () => {
+    const theirs = [onThePr('P2: the original wording', 'someone-else')];
+
+    expect(isAlreadyCommented(theirs, comment('src/a.ts', 11, 'P2: the original wording'), { viewerLogin: 'fiddur' })).toBe(false);
   });
 
   it('leaves a different line alone', () => {
@@ -67,7 +99,7 @@ describe('isAlreadyCommented', () => {
   });
 
   it('distinguishes the two sides', () => {
-    const onLeft: PrComment = { ...comment('src/a.ts', 11), side: 'LEFT' };
+    const onLeft: PrComment = { ...comment('src/a.ts', 11, 'P2: the original wording'), side: 'LEFT' };
 
     expect(isAlreadyCommented(existing, onLeft)).toBe(false);
   });

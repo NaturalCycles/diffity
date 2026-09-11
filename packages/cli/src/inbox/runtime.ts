@@ -1,7 +1,7 @@
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { LiveRequest } from '@diffity/api';
-import { createReview, fetchPrContext, type PrContext, type PrSnapshot } from '@diffity/github';
+import { createReview, fetchPrContext, getViewerLogin, type PrContext, type PrSnapshot } from '@diffity/github';
 import { createWriteStream, mkdirSync, readFileSync, rmSync, writeFileSync, type WriteStream } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { logsDir, type ExportOpts, type MarkPostedOpts, type PrepareDeps, type RunAgentOpts, type ServerHandle } from './prepare.js';
@@ -59,7 +59,9 @@ export function realPrepareDeps(nodePath: string, entry: string, dataDirFor: (wo
     prContext: (snapshot, worktree) => writePrContext(snapshot, dataDirFor(worktree), log),
     // In this process, with the reviewer's own credentials: posting the alert findings is the
     // daemon's own act, after the agent has finished, and never something the agent can reach.
-    postReview: opts => createReview(opts.owner, opts.repo, opts.prNumber, opts.headSha, opts.submission),
+    postReview: async opts => createReview(opts.owner, opts.repo, opts.prNumber, opts.headSha, opts.submission, {
+      viewerLogin: await getViewerLogin(),
+    }),
     markPosted: opts => markPosted(nodePath, entry, opts, dataDirFor(opts.worktree)),
     exportBundle: opts => exportBundle(nodePath, entry, opts, dataDirFor(opts.worktree)),
     log,

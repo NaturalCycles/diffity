@@ -4,6 +4,7 @@ export { getComments, getCommentCount, pullComments, pullThreadState, createRevi
 export type { RemoteThreadState, CreateReviewOptions } from './pr.js';
 export { getReviews, parseReviews } from './reviews.js';
 export { commentableLines, isAlreadyCommented } from './comment-targets.js';
+export type { ExistingComment, PostedBefore } from './comment-targets.js';
 export { matchCreatedComments } from './comment-ids.js';
 export type { CreatedComment, SentComment } from './comment-ids.js';
 export { isGitHubPrUrl, parseGitHubPrUrl, checkoutPr, getPrBase, parsePrBase } from './pr-url.js';

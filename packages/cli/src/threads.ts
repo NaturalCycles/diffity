@@ -173,6 +173,24 @@ export function markThreadsSubmitted(
   }
 }
 
+/**
+ * Of these findings, the ones already sent to the forge. What is on a line cannot say which
+ * finding put it there, so this record is what tells a resend from a new remark in the same place.
+ */
+export function submittedThreadIds(ids: string[]): Set<string> {
+  if (ids.length === 0) {
+    return new Set();
+  }
+
+  const rows = queryAll<{ id: string }>(
+    `SELECT id FROM comment_threads
+      WHERE submitted_at IS NOT NULL AND id IN (${ids.map(() => '?').join(', ')})`,
+    ...ids,
+  );
+
+  return new Set(rows.map(row => row.id));
+}
+
 /** Records which forge comment a thread exists as, once that is learned. */
 export function setThreadForgeComment(threadId: string, githubCommentId: number): void {
   getDb()
