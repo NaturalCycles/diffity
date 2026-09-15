@@ -46,6 +46,7 @@ export function OrphanedThreads(props: OrphanedThreadsProps) {
               ? `Line ${thread.startLine}`
               : `Lines ${thread.startLine}–${thread.endLine}`;
 
+            // Ask and Act stay off: the agent would be pointed at an anchor the diff no longer has.
             return (
               <ThreadCard
                 key={thread.id}

@@ -3,6 +3,7 @@ import { render, cleanup, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { OrphanedThreads } from '../src/components/comments/orphaned-threads';
 import type { CommentActions } from '../src/hooks/use-comment-actions';
+import { DEFAULT_AUTHOR } from '../src/components/comments/types';
 import type { CommentThread } from '../src/components/comments/types';
 import { makeComment, makeThread } from './helpers/wire';
 
@@ -47,7 +48,7 @@ describe('an outdated thread', () => {
     expect(commentActions.addReply).toHaveBeenCalledWith(
       'gone',
       'still applies, see line 40',
-      expect.anything(),
+      DEFAULT_AUTHOR,
     );
   });
 
