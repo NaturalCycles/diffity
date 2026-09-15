@@ -38,37 +38,37 @@ afterEach(cleanup);
 
 describe('an outdated thread', () => {
   it('can be replied to', async () => {
+    // Per-keystroke delays are the default and make this the slowest test in the file.
+    const user = userEvent.setup({ delay: null });
     const commentActions = actions();
     renderThreads(commentActions);
 
-    await userEvent.click(screen.getByText('Reply'));
-    await userEvent.type(screen.getByPlaceholderText('Reply...'), 'still applies, see line 40');
-    await userEvent.click(screen.getByRole('button', { name: 'Reply' }));
+    await user.click(screen.getByText('Reply'));
+    await user.type(screen.getByPlaceholderText('Reply...'), 'still applies');
+    await user.click(screen.getByRole('button', { name: 'Reply' }));
 
-    expect(commentActions.addReply).toHaveBeenCalledWith(
-      'gone',
-      'still applies, see line 40',
-      DEFAULT_AUTHOR,
-    );
+    expect(commentActions.addReply).toHaveBeenCalledWith('gone', 'still applies', DEFAULT_AUTHOR);
   });
 
   it('can be resolved', async () => {
+    const user = userEvent.setup({ delay: null });
     const commentActions = actions();
     renderThreads(commentActions);
 
-    await userEvent.click(screen.getByText('Resolve'));
+    await user.click(screen.getByText('Resolve'));
 
     expect(commentActions.resolveThread).toHaveBeenCalledWith('gone');
   });
 
   it('offers reopen once resolved, not resolve again', async () => {
+    const user = userEvent.setup({ delay: null });
     const commentActions = actions();
     renderThreads(commentActions, outdated({ status: 'resolved' }));
     // Nothing here is open, so the list starts collapsed.
-    await userEvent.click(screen.getByText('1 outdated comment'));
+    await user.click(screen.getByText('1 outdated comment'));
 
     expect(screen.queryByText('Resolve')).toBeNull();
-    await userEvent.click(screen.getByText('Reopen'));
+    await user.click(screen.getByText('Reopen'));
 
     expect(commentActions.unresolveThread).toHaveBeenCalledWith('gone');
   });
