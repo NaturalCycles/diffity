@@ -546,9 +546,7 @@ export function FileBlock(props: FileBlockProps) {
             <>
             <OrphanedThreads
               threads={orphanedThreads}
-              onEditComment={editComment}
-              onDeleteComment={deleteComment}
-              onDeleteThread={deleteThread}
+              commentActions={commentActions}
             />
             <div className="code-scroll">
             <table className="w-full border-collapse table-fixed code-table">

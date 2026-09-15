@@ -351,9 +351,7 @@ export function DiffView(props: DiffViewProps) {
         <div className="px-4 pt-2" data-testid="threads-without-file">
           <OrphanedThreads
             threads={lostThreads}
-            onEditComment={commentActions.editComment}
-            onDeleteComment={commentActions.deleteComment}
-            onDeleteThread={commentActions.deleteThread}
+            commentActions={commentActions}
           />
         </div>
       )}
