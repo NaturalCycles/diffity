@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { CommentThread as CommentThreadType } from './types';
-import { isThreadResolved } from './types';
+import { DEFAULT_AUTHOR, isThreadResolved } from './types';
+import type { CommentActions } from '../../hooks/use-comment-actions';
 import { CommentIcon } from '../icons/comment-icon';
 import { ChevronIcon } from '../icons/chevron-icon';
 import { ThreadBadge } from '../ui/thread-badge';
@@ -8,13 +9,11 @@ import { ThreadCard } from './thread-card';
 
 interface OrphanedThreadsProps {
   threads: CommentThreadType[];
-  onEditComment: (commentId: string, body: string) => void;
-  onDeleteComment: (threadId: string, commentId: string) => void;
-  onDeleteThread: (threadId: string) => void;
+  commentActions: CommentActions;
 }
 
 export function OrphanedThreads(props: OrphanedThreadsProps) {
-  const { threads, onEditComment, onDeleteComment, onDeleteThread } = props;
+  const { threads, commentActions } = props;
   const [isExpanded, setIsExpanded] = useState(() => threads.some(thread => !isThreadResolved(thread)));
 
   useEffect(() => {
@@ -47,13 +46,17 @@ export function OrphanedThreads(props: OrphanedThreadsProps) {
               ? `Line ${thread.startLine}`
               : `Lines ${thread.startLine}–${thread.endLine}`;
 
+            // Ask and Act stay off: the agent would be pointed at an anchor the diff no longer has.
             return (
               <ThreadCard
                 key={thread.id}
                 thread={thread}
-                onEditComment={(commentId, body) => onEditComment(commentId, body)}
-                onDeleteComment={(commentId) => onDeleteComment(thread.id, commentId)}
-                onDeleteThread={() => onDeleteThread(thread.id)}
+                onReply={(body) => commentActions.addReply(thread.id, body, DEFAULT_AUTHOR)}
+                onResolve={() => commentActions.resolveThread(thread.id)}
+                onUnresolve={() => commentActions.unresolveThread(thread.id)}
+                onEditComment={(commentId, body) => commentActions.editComment(commentId, body)}
+                onDeleteComment={(commentId) => commentActions.deleteComment(thread.id, commentId)}
+                onDeleteThread={() => commentActions.deleteThread(thread.id)}
                 className="border border-border max-w-[700px]"
                 headerLeft={
                   <>
