@@ -24,4 +24,9 @@ export interface RepoInfoResponse {
   review?: ReviewRun | null;
   github: GitHubRemote | null;
   editor: 'vscode' | null;
+  /**
+   * Served by the hosted server, which reviews pushed commits: there is no working tree to browse
+   * and nothing is posted to the forge from the page. Absent means the local CLI.
+   */
+  hosted?: boolean;
 }

@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { apiPath } from '../lib/base';
 
 const BEAT_MS = 15_000;
 
@@ -17,7 +18,7 @@ export function useViewerPresence(enabled: boolean): void {
     }
 
     const beat = (): void => {
-      void fetch('/api/viewer', { method: 'POST', keepalive: true }).catch(() => {});
+      void fetch(apiPath('/api/viewer'), { method: 'POST', keepalive: true }).catch(() => {});
     };
 
     beat();
@@ -29,7 +30,7 @@ export function useViewerPresence(enabled: boolean): void {
       }
     };
     const onHide = (): void => {
-      navigator.sendBeacon?.('/api/viewer/gone');
+      navigator.sendBeacon?.(apiPath('/api/viewer/gone'));
     };
 
     document.addEventListener('visibilitychange', onVisible);

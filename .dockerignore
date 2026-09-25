@@ -1,0 +1,11 @@
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+**/.react-router
+.git
+.diffity
+.claude
+.bin
+plans
+tmp
+snapshot-*

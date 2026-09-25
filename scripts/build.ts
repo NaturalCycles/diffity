@@ -15,6 +15,7 @@ const steps = [
   'npm run build -w @diffity/git',
   'npm run build -w @diffity/github',
   'npm run build -w @diffity/ui',
+  'npm run build -w @diffity/server',
   'npm run build -w @naturalcycles/diffity',
 ];
 

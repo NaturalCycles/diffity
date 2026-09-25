@@ -5,7 +5,7 @@ export { getDiff, getDiffFiles, getDiffStat, getDiffStatForRef, getRenameStatus,
 export type { RefDiffArgs } from './diff.js';
 export { getDirtyPaths } from './status.js';
 export { getRecentCommits } from './commits.js';
-export { readRepoConfig, resolveDataDir, REPO_CONFIG_FILE, DEFAULT_SEVERITIES } from './config.js';
+export { readRepoConfig, parseRepoConfig, resolveDataDir, REPO_CONFIG_FILE, DEFAULT_SEVERITIES } from './config.js';
 export type { RepoConfig, ReviewConfig } from './config.js';
 export { getTree, getTreeEntries, getTreeFingerprint, getWorkingTreeFileContent, getWorkingTreeRawFile, resolveInRepo } from './tree.js';
 export type { TreeEntry } from './tree.js';

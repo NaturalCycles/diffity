@@ -32,8 +32,19 @@ export function readRepoConfig(repoRoot: string): RepoConfig {
     return {};
   }
 
+  let text: string;
   try {
-    const parsed = JSON.parse(readFileSync(path, 'utf-8')) as RepoConfig;
+    text = readFileSync(path, 'utf-8');
+  } catch {
+    return {};
+  }
+  return parseRepoConfig(text);
+}
+
+/** The same reading as `readRepoConfig`, for a config that did not come from a checkout. */
+export function parseRepoConfig(text: string): RepoConfig {
+  try {
+    const parsed = JSON.parse(text) as RepoConfig;
     const config: RepoConfig = {};
 
     if (typeof parsed?.dataDir === 'string') {
