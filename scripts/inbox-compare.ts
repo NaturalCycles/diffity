@@ -6,16 +6,17 @@
  * what it costs. One agent run per invocation; everything it writes stays in a scratch directory.
  */
 
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GENERAL_THREAD_FILE_PATH, parseReviewBundle, type BundleThread, type ReviewBundle } from '@diffity/api';
-import { viewPr } from '@diffity/github';
+import { parseChecks, viewPr, type PrSnapshot } from '@diffity/github';
 import type { RunStats } from '../packages/cli/src/inbox/agent-output.js';
 import { DEFAULT_INBOX_CONFIG, expandHome, type InboxConfig } from '../packages/cli/src/inbox/config.js';
 import { preparePr, type PrepareResult } from '../packages/cli/src/inbox/prepare.js';
-import { realPrepareDeps } from '../packages/cli/src/inbox/runtime.js';
+import { realPrepareDeps, startDiffityServer } from '../packages/cli/src/inbox/runtime.js';
 import { severityOf } from '../packages/cli/src/inbox/summary.js';
 import { cloneDir, removeWorktree } from '../packages/cli/src/inbox/worktree.js';
 
@@ -384,6 +385,44 @@ function readBaseline(options: Options): { path: string; bundle: ReviewBundle } 
   return newest;
 }
 
+/** What GitHub says about one commit of a pull request, as opposed to the pull request as it is now. */
+export interface HeadFacts {
+  checks: PrSnapshot['checks'];
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+}
+
+/**
+ * The pull request as a reviewer saw it at `head`. `gh pr view` describes it as it is now: the
+ * newest head's CI and size, and a description that may have been rewritten since. The
+ * description is dropped rather than guessed at, which also keeps runs comparable with the ones
+ * made before the prompt carried it.
+ */
+export function atHead(snapshot: PrSnapshot, head: string, facts: HeadFacts): PrSnapshot {
+  return { ...snapshot, headSha: head, body: '', ...facts };
+}
+
+function ghJson(args: string[]): unknown {
+  return JSON.parse(execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 50 * 1024 * 1024 }));
+}
+
+function headFacts(snapshot: PrSnapshot, head: string): HeadFacts {
+  const base = `repos/${snapshot.owner}/${snapshot.repo}`;
+  const runs = ghJson(['api', `${base}/commits/${head}/check-runs?per_page=100`]) as { check_runs?: unknown[] };
+  const statuses = ghJson(['api', `${base}/commits/${head}/status`]) as { statuses?: unknown[] };
+  const compare = ghJson(['api', `${base}/compare/${snapshot.baseRef}...${head}`]) as {
+    files?: { additions?: number; deletions?: number }[];
+  };
+  const files = compare.files ?? [];
+  return {
+    checks: parseChecks([...(runs.check_runs ?? []), ...(statuses.statuses ?? [])]),
+    additions: files.reduce((sum, file) => sum + (file.additions ?? 0), 0),
+    deletions: files.reduce((sum, file) => sum + (file.deletions ?? 0), 0),
+    changedFiles: files.length,
+  };
+}
+
 function prName(ref: PrRefSpec): string {
   return `${ref.owner}/${ref.repo}#${ref.number}`;
 }
@@ -445,11 +484,17 @@ async function main(): Promise<number> {
     validate: { ...DEFAULT_INBOX_CONFIG.validate, model: null },
   };
   const candidate = candidateLabel(options.model, options.effort);
-  const deps = realPrepareDeps(
-    process.execPath, entry,
-    worktree => join(scratch, 'data', basename(worktree)),
-    config, message => console.error(`   ${message}`),
-  );
+  const dataDirFor = (worktree: string) => join(scratch, 'data', basename(worktree));
+  const deps = {
+    ...realPrepareDeps(process.execPath, entry, dataDirFor, config, message => console.error(`   ${message}`)),
+    // Comparisons run back to back on a busy machine, where a large clone can take longer than the
+    // daemon's 30s to serve; a missed start would be scored as the candidate failing.
+    startServer: (worktree: string, diffRef: string) =>
+      startDiffityServer(process.execPath, entry, worktree, diffRef, dataDirFor(worktree), 120_000),
+    // The discussion as it stands now holds the reviews of this very head, the baseline's findings
+    // among them, so a candidate given it would be told what it is being scored on finding.
+    prContext: async () => null,
+  };
 
   console.error(`🤖 preparing ${prName(options.ref)} at ${short} with ${candidate} — agent running…`);
   const startedAt = Date.now();
@@ -457,7 +502,7 @@ async function main(): Promise<number> {
   const ticker = setInterval(() => console.error(`   … ${elapsed().toFixed(0)} min`), 60_000);
   let result: PrepareResult;
   try {
-    result = await preparePr({ ...snapshot, headSha: head }, config, deps, { bumped: true, pinHead: head });
+    result = await preparePr(atHead(snapshot, head, headFacts(snapshot, head)), config, deps, { bumped: true, pinHead: head });
   } finally {
     clearInterval(ticker);
   }
