@@ -47,6 +47,8 @@ interface ToolbarProps {
   githubDetails?: GitHubDetails | null;
   sessionId?: string | null;
   onGitHubPulled?: () => void;
+  /** False on the hosted server, which does not post to the forge from the page yet. */
+  postingAvailable?: boolean;
 }
 
 function extractCodeContext(diff: ParsedDiff | undefined, filePath: string, side: 'old' | 'new', startLine: number, endLine: number): string[] {
@@ -147,6 +149,7 @@ export function Toolbar(props: ToolbarProps) {
     onGoToAnswer,
     sessionId,
     onGitHubPulled,
+    postingAvailable,
   } = props;
   const [showGitHub, setShowGitHub] = useState(false);
 
@@ -247,6 +250,7 @@ export function Toolbar(props: ToolbarProps) {
         <GitHubDialog
           details={githubDetails}
           reviewInProgress={reviewInProgress}
+          postingAvailable={postingAvailable}
           threads={threads}
           sessionId={sessionId ?? null}
           onPulled={() => onGitHubPulled?.()}

@@ -698,6 +698,7 @@ export function DiffPage() {
         onGoToAnswer={handleGoToAnswer}
         sessionId={sessionId}
         onGitHubPulled={() => queryClient.invalidateQueries({ queryKey: ['threads'] })}
+        postingAvailable={!info?.hosted}
       />
       {isStale && <StaleDiffBanner onRefresh={handleRefreshDiff} message={staleMessage(namedStaleFiles)} />}
       <PullRequestPanel details={githubDetails} hasPullRequest={!!info?.github} repoRoot={repoRoot} />

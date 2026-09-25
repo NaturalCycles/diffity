@@ -20,6 +20,7 @@ import type {
   TreePathsResponse,
 } from '@diffity/api';
 import type { DiffFile } from '@diffity/parser';
+import { apiPath } from './base';
 
 export type {
   DiffResponse,
@@ -38,7 +39,7 @@ export type {
 } from '@diffity/api';
 
 export async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  const res = await fetch(apiPath(url), init);
   if (!res.ok) {
     throw new Error(await errorMessage(res));
   }
@@ -46,7 +47,7 @@ export async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 async function apiVoid(url: string, init?: RequestInit): Promise<void> {
-  const res = await fetch(url, init);
+  const res = await fetch(apiPath(url), init);
   if (!res.ok) {
     throw new Error(await errorMessage(res));
   }
@@ -109,7 +110,7 @@ export function openInEditor(filePath: string, line?: number): Promise<{ ok: boo
 
 
 export async function fetchThreads(sessionId: string, status?: ThreadStatus): Promise<CommentThread[]> {
-  const res = await fetch(buildUrl('/api/threads', { session: sessionId, status }));
+  const res = await fetch(apiPath(buildUrl('/api/threads', { session: sessionId, status })));
   if (!res.ok) {
     return [];
   }
@@ -211,7 +212,7 @@ export async function fetchFileContent(filePath: string, ref?: string): Promise<
 }
 
 export async function fetchGitHubDetails(): Promise<GitHubDetails | null> {
-  const res = await fetch('/api/github/details');
+  const res = await fetch(apiPath('/api/github/details'));
   if (!res.ok) {
     return null;
   }

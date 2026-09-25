@@ -13,6 +13,7 @@ const packagePaths = [
   'packages/git',
   'packages/github',
   'packages/parser',
+  'packages/server',
   'packages/ui',
 ];
 

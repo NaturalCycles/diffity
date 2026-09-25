@@ -5,6 +5,7 @@ import { Toaster } from "sonner";
 import NProgress from "nprogress";
 import { queryClient } from "./lib/query-client";
 import { ErrorPage } from "./components/error-page";
+import { pagePath } from "./lib/base";
 import "nprogress/nprogress.css";
 import "./styles/app.css";
 
@@ -79,7 +80,7 @@ export function ErrorBoundary() {
       error={error}
       actions={[
         { label: "Reload page", primary: true, onClick: () => window.location.reload() },
-        { label: "Go to diff view", onClick: () => { window.location.href = "/diff"; } },
+        { label: "Go to diff view", onClick: () => { window.location.href = pagePath("/diff"); } },
       ]}
     />
   );

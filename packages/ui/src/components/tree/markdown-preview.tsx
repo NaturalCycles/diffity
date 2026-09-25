@@ -8,6 +8,7 @@ import { useHighlighter } from '../../hooks/use-highlighter';
 import { getTheme } from '../../hooks/use-theme';
 import { MermaidDiagram } from '../mermaid-diagram';
 import { markdownSanitizeSchema } from '../../lib/markdown-sanitize';
+import { apiPath } from '../../lib/base';
 
 interface MarkdownPreviewProps {
   content: string[];
@@ -33,7 +34,7 @@ function resolveImageSrc(src: string | undefined, filePath: string | undefined):
       resolved.push(part);
     }
   }
-  return `/api/tree/raw/${resolved.map(encodeURIComponent).join('/')}`;
+  return apiPath(`/api/tree/raw/${resolved.map(encodeURIComponent).join('/')}`);
 }
 
 interface Frontmatter {
