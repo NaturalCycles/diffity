@@ -16,7 +16,7 @@ import { parseChecks, viewPr, type PrSnapshot } from '@diffity/github';
 import type { RunStats } from '../packages/cli/src/inbox/agent-output.js';
 import { DEFAULT_INBOX_CONFIG, expandHome, type InboxConfig } from '../packages/cli/src/inbox/config.js';
 import { preparePr, type PrepareResult } from '../packages/cli/src/inbox/prepare.js';
-import { realPrepareDeps } from '../packages/cli/src/inbox/runtime.js';
+import { realPrepareDeps, startDiffityServer } from '../packages/cli/src/inbox/runtime.js';
 import { severityOf } from '../packages/cli/src/inbox/summary.js';
 import { cloneDir, removeWorktree } from '../packages/cli/src/inbox/worktree.js';
 
@@ -484,12 +484,13 @@ async function main(): Promise<number> {
     validate: { ...DEFAULT_INBOX_CONFIG.validate, model: null },
   };
   const candidate = candidateLabel(options.model, options.effort);
+  const dataDirFor = (worktree: string) => join(scratch, 'data', basename(worktree));
   const deps = {
-    ...realPrepareDeps(
-      process.execPath, entry,
-      worktree => join(scratch, 'data', basename(worktree)),
-      config, message => console.error(`   ${message}`),
-    ),
+    ...realPrepareDeps(process.execPath, entry, dataDirFor, config, message => console.error(`   ${message}`)),
+    // Comparisons run back to back on a busy machine, where a large clone can take longer than the
+    // daemon's 30s to serve; a missed start would be scored as the candidate failing.
+    startServer: (worktree: string, diffRef: string) =>
+      startDiffityServer(process.execPath, entry, worktree, diffRef, dataDirFor(worktree), 120_000),
     // The discussion as it stands now holds the reviews of this very head, the baseline's findings
     // among them, so a candidate given it would be told what it is being scored on finding.
     prContext: async () => null,
