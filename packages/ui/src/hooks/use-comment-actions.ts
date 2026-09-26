@@ -12,25 +12,22 @@ export function useCommentActions(sessionId: string | null, enabled: boolean) {
     queryClient.invalidateQueries({ queryKey: ['threads', sessionId] });
   }, [queryClient, sessionId]);
 
-  const addThread = useCallback((filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor, anchorContent?: string, options?: api.ReplyOptions) => {
+  const addThread = useCallback((filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor, anchorContent?: string) => {
     if (!enabled || !sessionId) {
       return;
     }
     api.createThread({
       sessionId, filePath, side, startLine, endLine, body, author, anchorContent,
-      kind: options?.aside ? 'aside' : 'review',
-      live: options?.live === true,
-      intent: options?.intent ?? 'ask',
     }).then(() => {
       invalidateThreads();
     });
   }, [enabled, sessionId, invalidateThreads]);
 
-  const addReply = useCallback((threadId: string, body: string, author: CommentAuthor, options?: api.ReplyOptions) => {
+  const addReply = useCallback((threadId: string, body: string, author: CommentAuthor) => {
     if (!enabled) {
       return;
     }
-    api.replyToThread(threadId, body, author, options).then(() => {
+    api.replyToThread(threadId, body, author).then(() => {
       invalidateThreads();
     });
   }, [enabled, invalidateThreads]);

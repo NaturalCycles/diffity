@@ -1,15 +1,12 @@
 import {
   COMMENT_KINDS,
   COMMENT_SIDES,
-  LIVE_INTENTS,
   THREAD_STATUSES,
   type CommentAuthor,
   type CommentKind,
   type CommentSide,
-  type LiveIntent,
   type ThreadStatus,
 } from './threads.js';
-import { TOUR_STATUSES, type TourStatus } from './tours.js';
 import {
   PR_COMMENT_SIDES,
   REVIEW_EVENTS,
@@ -23,8 +20,6 @@ import {
   int,
   lineRange,
   member,
-  optBool,
-  optInt,
   optMember,
   optStr,
   parseWith,
@@ -47,10 +42,6 @@ export interface CreateThreadRequest {
   anchorContent?: string;
   /** An aside starts a conversation rather than a finding, and is never posted. Absent means review. */
   kind?: CommentKind;
-  /** Ask the agent to answer, amend or act on it. Only an aside can. */
-  live?: boolean;
-  /** A question, or a request for a change. Absent is a question. */
-  intent?: LiveIntent;
 }
 
 /** What `POST /api/threads/:id/reply` accepts. */
@@ -58,8 +49,6 @@ export interface ReplyRequest {
   body: string;
   author: CommentAuthor;
   kind?: CommentKind;
-  live?: boolean;
-  intent?: LiveIntent;
 }
 
 /** What `PATCH /api/threads/:id/status` accepts. */
@@ -78,44 +67,6 @@ export interface EditCommentRequest {
   body: string;
 }
 
-/** What `POST /api/tours` accepts. */
-export interface CreateTourRequest {
-  sessionId: string;
-  topic: string;
-  body?: string;
-}
-
-/** What `POST /api/tours/:id/steps` accepts. */
-export interface AddTourStepRequest {
-  filePath: string;
-  startLine: number;
-  endLine: number;
-  body?: string;
-  annotation?: string;
-}
-
-/** What `PATCH /api/tours/:id` accepts. */
-export interface UpdateTourStatusRequest {
-  status: TourStatus;
-}
-
-/** What `POST /api/revert-file` accepts. */
-export interface RevertFileRequest {
-  filePath: string;
-  isUntracked?: boolean;
-}
-
-/** What `POST /api/revert-hunk` accepts. */
-export interface RevertHunkRequest {
-  patch: string;
-}
-
-/** What `POST /api/open-in-editor` accepts. An empty path means the repository root. */
-export interface OpenInEditorRequest {
-  filePath: string;
-  line?: number;
-}
-
 /** What `POST /api/github/pull-comments` accepts. */
 export interface PullCommentsRequest {
   sessionId: string;
@@ -132,8 +83,6 @@ export function parseCreateThreadRequest(body: unknown): ParseResult<CreateThrea
     author: author(obj.author, 'author'),
     anchorContent: optStr(obj.anchorContent, 'anchorContent'),
     kind: optMember(obj.kind, 'kind', COMMENT_KINDS),
-    live: optBool(obj.live, 'live'),
-    intent: optMember(obj.intent, 'intent', LIVE_INTENTS),
   }));
 }
 
@@ -142,8 +91,6 @@ export function parseReplyRequest(body: unknown): ParseResult<ReplyRequest> {
     body: str(obj.body, 'body'),
     author: author(obj.author, 'author'),
     kind: optMember(obj.kind, 'kind', COMMENT_KINDS),
-    live: optBool(obj.live, 'live'),
-    intent: optMember(obj.intent, 'intent', LIVE_INTENTS),
   }));
 }
 
@@ -163,49 +110,6 @@ export function parseDeleteThreadsRequest(body: unknown): ParseResult<DeleteThre
 export function parseEditCommentRequest(body: unknown): ParseResult<EditCommentRequest> {
   return parseWith(body, obj => ({
     body: str(obj.body, 'body'),
-  }));
-}
-
-export function parseCreateTourRequest(body: unknown): ParseResult<CreateTourRequest> {
-  return parseWith(body, obj => ({
-    sessionId: str(obj.sessionId, 'sessionId'),
-    topic: str(obj.topic, 'topic'),
-    body: optStr(obj.body, 'body'),
-  }));
-}
-
-export function parseAddTourStepRequest(body: unknown): ParseResult<AddTourStepRequest> {
-  return parseWith(body, obj => ({
-    filePath: str(obj.filePath, 'filePath'),
-    ...lineRange(obj, 0),
-    body: optStr(obj.body, 'body'),
-    annotation: optStr(obj.annotation, 'annotation'),
-  }));
-}
-
-export function parseUpdateTourStatusRequest(body: unknown): ParseResult<UpdateTourStatusRequest> {
-  return parseWith(body, obj => ({
-    status: member(obj.status, 'status', TOUR_STATUSES),
-  }));
-}
-
-export function parseRevertFileRequest(body: unknown): ParseResult<RevertFileRequest> {
-  return parseWith(body, obj => ({
-    filePath: str(obj.filePath, 'filePath'),
-    isUntracked: optBool(obj.isUntracked, 'isUntracked'),
-  }));
-}
-
-export function parseRevertHunkRequest(body: unknown): ParseResult<RevertHunkRequest> {
-  return parseWith(body, obj => ({
-    patch: str(obj.patch, 'patch'),
-  }));
-}
-
-export function parseOpenInEditorRequest(body: unknown): ParseResult<OpenInEditorRequest> {
-  return parseWith(body, obj => ({
-    filePath: anyStr(obj.filePath, 'filePath'),
-    line: optInt(obj.line, 'line', 1),
   }));
 }
 

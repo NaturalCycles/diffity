@@ -1,39 +1,27 @@
 {
   "name": "@diffity",
-  "version": "0.3.0",
+  "version": "0.11.0",
   "private": true,
   "type": "module",
-  "description": "GitHub-style git diff viewer in the browser",
+  "description": "Hosted, multi-user diffity: a GitHub-style review page for agents' findings, and an MCP endpoint that writes them",
   "workspaces": [
-    "packages/api",
-    "packages/cli",
-    "packages/git",
-    "packages/github",
     "packages/parser",
+    "packages/api",
     "packages/ui",
     "packages/server"
   ],
   "scripts": {
-    "build": "tsx scripts/build.ts",
-    "build:skills": "tsx scripts/build-skills.ts",
-    "test": "npm run typecheck && npm run test -w @diffity/api && npm run test -w @diffity/git && npm run test -w @diffity/github && npm run test -w @diffity/parser && npm run test -w @diffity/ui && npm run test -w @naturalcycles/diffity && npm run test -w @diffity/server && npm run test:scripts",
-    "link-dev": "tsx scripts/link-dev.ts",
-    "dev": "tsx scripts/dev.ts",
-    "test:scripts": "vitest run --dir scripts",
-    "typecheck": "npm run typecheck -w @diffity/parser && npm run typecheck -w @diffity/api && npm run typecheck -w @diffity/git && npm run typecheck -w @diffity/github && npm run typecheck -w @diffity/ui && npm run typecheck -w @naturalcycles/diffity && npm run typecheck -w @diffity/server && tsc -p tsconfig.scripts.json"
+    "build": "npm run build -w @diffity/parser && npm run build -w @diffity/api && npm run build -w @diffity/ui && npm run build -w @diffity/server",
+    "typecheck": "npm run typecheck --workspaces",
+    "test": "npm run typecheck && npm run test --workspaces",
+    "dev": "concurrently -n ui,server \"npx -w @diffity/ui vite build --watch\" \"npm run dev -w @diffity/server\""
   },
-  "keywords": [
-    "git",
-    "diff",
-    "viewer",
-    "cli"
-  ],
-  "author": "",
+  "engines": {
+    "node": ">=24"
+  },
+  "author": "Natural Cycles",
   "license": "MIT",
   "devDependencies": {
-    "concurrently": "^9.2.1",
-    "gray-matter": "^4.0.3",
-    "tsx": "^4.21.0",
-    "vitest": "^4.1.0"
+    "concurrently": "^9.2.1"
   }
 }

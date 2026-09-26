@@ -2,8 +2,6 @@ import { useState } from 'react';
 import type { CommentThread as CommentThreadType } from './types';
 import { isThreadResolved } from './types';
 import { submittedLabel } from '../../lib/submitted-marker';
-import { unheardNote } from '../../lib/unheard-request';
-import { UnheardNotice } from './unheard-notice';
 import { CommentBubble } from './comment-bubble';
 import { CommentForm } from './comment-form';
 import { TrashIcon } from '../icons/trash-icon';
@@ -15,11 +13,6 @@ interface ThreadCardProps {
   onDeleteComment: (commentId: string) => void;
   onDeleteThread: () => void;
   onReply?: (body: string) => void;
-  /** Hands the reply to the agent as a question. Absent when no agent can be reached. */
-  onAskReply?: (body: string) => void;
-  /** Asks the agent to make the change. Absent when the code is not the reader's to change. */
-  onActReply?: (body: string) => void;
-  askIsHeard?: boolean;
   onResolve?: () => void;
   onUnresolve?: () => void;
   headerLeft?: React.ReactNode;
@@ -41,24 +34,13 @@ export function ThreadCard(props: ThreadCardProps) {
     headerRight,
     className,
     children,
-    onAskReply,
-    onActReply,
-    askIsHeard,
   } = props;
   const [showReply, setShowReply] = useState(false);
-  const [unheard, setUnheard] = useState<{ title: string; description: string } | null>(null);
   const resolved = isThreadResolved(thread);
   const sentLabel = submittedLabel(thread.submittedAt);
 
   return (
     <div className={cn('relative rounded-lg overflow-hidden', className)} data-thread-id={thread.id}>
-      {unheard && (
-        <UnheardNotice
-          title={unheard.title}
-          description={unheard.description}
-          onDone={() => setUnheard(null)}
-        />
-      )}
       <div className="flex items-center justify-between px-3 pt-2.5 pb-1.5">
         <div className="flex items-center gap-2">
           {headerLeft}
@@ -115,17 +97,6 @@ export function ThreadCard(props: ThreadCardProps) {
                 onReply(body);
                 setShowReply(false);
               }}
-              onAsk={onAskReply && ((body) => {
-                onAskReply(body);
-                setUnheard(unheardNote('ask', askIsHeard !== false));
-                setShowReply(false);
-              })}
-              onAct={onActReply && ((body) => {
-                onActReply(body);
-                setUnheard(unheardNote('act', askIsHeard !== false));
-                setShowReply(false);
-              })}
-              askIsHeard={askIsHeard}
               onCancel={() => setShowReply(false)}
               placeholder="Reply..."
               submitLabel="Reply"

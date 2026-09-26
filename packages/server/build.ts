@@ -1,13 +1,15 @@
 import { build } from 'esbuild';
-import { cpSync, existsSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const distDir = join(here, 'dist');
-const uiSource = join(here, '../cli/dist/ui/client');
+const uiSource = join(distDir, 'ui/client');
+const { version } = JSON.parse(readFileSync(join(here, '../../package.json'), 'utf8')) as { version: string };
 
-rmSync(distDir, { recursive: true, force: true });
+// Not the whole of dist: the UI's build writes into dist/ui.
+rmSync(join(distDir, 'index.js'), { force: true });
 
 await build({
   entryPoints: [join(here, 'src/index.ts')],
@@ -21,15 +23,15 @@ await build({
   packages: 'external',
   alias: {
     '@diffity/api': join(here, '../api/src/index.ts'),
-    '@diffity/git': join(here, '../git/src/index.ts'),
     '@diffity/parser': join(here, '../parser/src/index.ts'),
   },
+  define: { __DIFFITY_VERSION__: JSON.stringify(version) },
   minifySyntax: true,
   treeShaking: true,
 });
 
-// Copied rather than referenced, so dist is the whole server and a container needs nothing else.
+copyFileSync(join(here, 'src/review-prompt.md'), join(distDir, 'review-prompt.md'));
+
 if (!existsSync(join(uiSource, 'index.html'))) {
   throw new Error(`${uiSource} is missing: build @diffity/ui first (npm run build at the repository root)`);
 }
-cpSync(uiSource, join(distDir, 'ui'), { recursive: true });

@@ -1,18 +1,17 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { join } from 'node:path';
-import { Store } from '../src/db.js';
+import type { Db } from '../src/db.js';
 import { Mirrors } from '../src/git.js';
 import { GitHubApi, StoredTokenAccess } from '../src/github.js';
 import { Reviews } from '../src/reviews.js';
 import { ReviewService, ServiceError, describeSession, gitHubDetailsFor, parseRepoSlug } from '../src/service.js';
 import { Users } from '../src/users.js';
-import { git, makeFixture, removeDir, startFakeGitHub, tempDir, type FakeGitHub, type Fixture } from './helpers.js';
+import { git, makeFixture, memoryDb, removeDir, startFakeGitHub, tempDir, type FakeGitHub, type Fixture } from './helpers.js';
 import { randomBytes } from 'node:crypto';
 
 let fixture: Fixture;
 let github: FakeGitHub;
 let dataDir: string;
-let store: Store;
+let db: Db;
 let users: Users;
 let reviews: Reviews;
 let service: ReviewService;
@@ -32,14 +31,14 @@ beforeAll(async () => {
     },
   ]);
   dataDir = tempDir('service');
-  store = new Store(join(dataDir, 'diffity.db'));
-  users = new Users(store, randomBytes(32));
-  reviews = new Reviews(store);
-  alice = users.findOrCreate('alice@example.com').id;
-  bob = users.findOrCreate('bob@example.com').id;
-  mallory = users.findOrCreate('mallory@example.com').id;
-  users.setGitHubToken(alice, 'alice-token');
-  users.setGitHubToken(bob, 'bob-token');
+  db = await memoryDb();
+  users = new Users(db, randomBytes(32));
+  reviews = new Reviews(db);
+  alice = (await users.findOrCreate('alice@example.com')).id;
+  bob = (await users.findOrCreate('bob@example.com')).id;
+  mallory = (await users.findOrCreate('mallory@example.com')).id;
+  await users.setGitHubToken(alice, 'alice-token');
+  await users.setGitHubToken(bob, 'bob-token');
   service = new ReviewService(
     reviews,
     new Mirrors(dataDir, fixture.remoteUrl),
@@ -50,7 +49,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  store.close();
+  await db.close();
   await github.close();
   removeDir(fixture.root);
   removeDir(dataDir);
@@ -102,14 +101,14 @@ describe('createSession', () => {
     const mine = await service.createSession(alice, { repo: 'acme/widgets', base: fixture.base, head: fixture.head1 });
     const theirs = await service.createSession(bob, { repo: 'acme/widgets', base: fixture.base, head: fixture.head1 });
     expect(theirs.session.id).not.toBe(mine.session.id);
-    expect(reviews.getSession(bob, mine.session.id)).toBeNull();
-    expect(() => service.requireSession(bob, mine.session.id)).toThrow('No session matches');
+    expect(await reviews.getSession(bob, mine.session.id)).toBeNull();
+    await expect(service.requireSession(bob, mine.session.id)).rejects.toThrow('No session matches');
   });
 
   it('checks access with the caller’s own token before fetching anything', async () => {
     const before = github.requests.length;
-    await expect(service.createSession(mallory, { repo: 'acme/widgets', pr: 1 })).rejects.toThrow('is not readable without a GitHub token');
-    users.setGitHubToken(mallory, 'wrong-token');
+    await expect(service.createSession(mallory, { repo: 'acme/widgets', pr: 1 })).rejects.toThrow('is not readable without GitHub access');
+    await users.setGitHubToken(mallory, 'wrong-token');
     await expect(service.createSession(mallory, { repo: 'acme/widgets', pr: 1 })).rejects.toThrow('your GitHub token cannot read it');
     expect(github.requests.slice(before).every(request => request.startsWith('GET /repos/acme/widgets'))).toBe(true);
     expect(github.requests.slice(before).some(request => request.includes('/pulls/'))).toBe(false);
@@ -141,20 +140,20 @@ describe('createSession', () => {
 describe('carry-forward', () => {
   it('moves open findings to the pull request’s newer head, following renames and moved lines', async () => {
     const first = (await service.createSession(bob, { repo: 'acme/widgets', pr: 1 })).session;
-    const onLine10 = reviews.createThread({
+    const onLine10 = await reviews.createThread({
       userId: bob, sessionId: first.id, filePath: 'src.ts', side: 'new', startLine: 10, endLine: 10,
       body: 'Why this change?', author: { name: 'Agent', type: 'agent' }, anchorContent: 'line 10 changed by the feature',
     });
-    const onRenamed = reviews.createThread({
+    const onRenamed = await reviews.createThread({
       userId: bob, sessionId: first.id, filePath: 'old-name.ts', side: 'new', startLine: 1, endLine: 1,
       body: 'Name this better', author: { name: 'Agent', type: 'agent' }, anchorContent: 'export const moved = true;',
     });
-    const done = reviews.createThread({
+    const done = await reviews.createThread({
       userId: bob, sessionId: first.id, filePath: 'added.ts', side: 'new', startLine: 1, endLine: 1,
       body: 'Resolved already', author: { name: 'Agent', type: 'agent' },
     });
-    reviews.updateThreadStatus(bob, done.id, 'resolved');
-    const tour = reviews.createTour(bob, first.id, 'Reading order', '');
+    await reviews.updateThreadStatus(bob, done.id, 'resolved');
+    const tour = await reviews.createTour(bob, first.id, 'Reading order', '');
 
     fixture.pushPull(fixture.head2);
     try {
@@ -163,15 +162,15 @@ describe('carry-forward', () => {
       expect(second.session.headSha).toBe(fixture.head2);
       expect(second.carried).toBe(2);
 
-      const carried = reviews.threadsForSession(bob, second.session.id);
+      const carried = await reviews.threadsForSession(bob, second.session.id);
       expect(carried.map(t => t.id).sort()).toEqual([onLine10.id, onRenamed.id].sort());
       expect(carried.find(t => t.id === onLine10.id)).toMatchObject({ startLine: 13, endLine: 13 });
       expect(carried.find(t => t.id === onRenamed.id)).toMatchObject({ filePath: 'new-name.ts' });
-      expect(reviews.threadsForSession(bob, first.id).map(t => t.id)).toEqual([done.id]);
-      expect(reviews.getTour(bob, tour.id)?.sessionId).toBe(second.session.id);
+      expect((await reviews.threadsForSession(bob, first.id)).map(t => t.id)).toEqual([done.id]);
+      expect((await reviews.getTour(bob, tour.id))?.sessionId).toBe(second.session.id);
 
       // Alice's session of the same pull request is hers alone and is not touched.
-      const alices = reviews.listSessions(alice).filter(s => s.prNumber === 1);
+      const alices = (await reviews.listSessions(alice)).filter(s => s.prNumber === 1);
       expect(alices.every(s => s.headSha === fixture.head1)).toBe(true);
     } finally {
       fixture.pushPull(fixture.head1);

@@ -75,8 +75,8 @@ beforeAll(async () => {
   server = await startTestServer(dataDir, github.url, { remoteUrl: fixture.remoteUrl, uiDir: fakeUiDir(dataDir) });
   const aliceCookie = await login(server.base, 'alice@example.com');
   const bobCookie = await login(server.base, 'bob@example.com');
-  server.users.setGitHubToken(server.users.findOrCreate('alice@example.com').id, 'alice-token');
-  server.users.setGitHubToken(server.users.findOrCreate('bob@example.com').id, 'bob-token');
+  await server.users.setGitHubToken((await server.users.findOrCreate('alice@example.com')).id, 'alice-token');
+  await server.users.setGitHubToken((await server.users.findOrCreate('bob@example.com')).id, 'bob-token');
   alice = await mcpClient((await connectAgent(server.base, aliceCookie, 'Test Agent')).accessToken);
   bob = await mcpClient((await connectAgent(server.base, bobCookie)).accessToken);
 });
@@ -204,6 +204,28 @@ describe('a review through the tools', () => {
     expect(await failed(alice, 'reply', { id: 'deadbeef', body: 'x' })).toContain('No thread matches');
     expect(await failed(alice, 'amend', { id: 'deadbeef', body: 'x' })).toContain('No comment or thread');
     expect(await failed(alice, 'tour_done', { tour: 'deadbeef' })).toContain('No walkthrough');
+  });
+});
+
+describe('the review prompt', () => {
+  it('holds the review method, aimed at the pull request asked for', async () => {
+    const { prompts } = await alice.listPrompts();
+    expect(prompts.map(prompt => [prompt.name, prompt.arguments?.map(arg => [arg.name, arg.required ?? false])])).toEqual([
+      ['review', [['repo', true], ['pr', false]]],
+    ]);
+    const withPr = await alice.getPrompt({ name: 'review', arguments: { repo: 'acme/widgets', pr: '#7' } });
+    const text = (withPr.messages[0].content as { text: string }).text;
+    expect(text).toMatch(/^Review pull request #7 of acme\/widgets: `create_session \{ repo: "acme\/widgets", pr: 7 \}`\./);
+    expect(text).toContain('review_start');
+    expect(text).toContain('### Step 6: Hand over the review');
+    expect(text).not.toContain('user-invocable');
+    const repoOnly = await alice.getPrompt({ name: 'review', arguments: { repo: 'acme/widgets' } });
+    expect((repoOnly.messages[0].content as { text: string }).text).toMatch(/^Review a change in acme\/widgets\./);
+  });
+
+  it('is named in create_session\'s description', async () => {
+    const { tools } = await alice.listTools();
+    expect(tools.find(tool => tool.name === 'create_session')?.description).toContain('`review` prompt');
   });
 });
 

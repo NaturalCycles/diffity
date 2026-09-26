@@ -12,7 +12,8 @@ import { WebSessions as WebSessionsClass } from './users.js';
 import { hashPresentedClientSecret, type OAuthProvider } from './oauth.js';
 import type { ReviewService } from './service.js';
 import { describeSession } from './service.js';
-import type { LoginProvider } from './login.js';
+import type { DevLoginProvider, IapLogin } from './login.js';
+import { GitHubConnectError, type GitHubAppAccess } from './github-app.js';
 import { createMcpServer } from './mcp.js';
 import { uiApiRouter } from './ui-api.js';
 import { escapeHtml, page } from './html.js';
@@ -28,12 +29,16 @@ import {
 } from './web.js';
 
 export interface AppDeps {
-  config: Pick<Config, 'publicUrl'>;
+  config: Pick<Config, 'publicUrl' | 'trustProxy'>;
   users: Users;
   webSessions: WebSessions;
   oauth: OAuthProvider;
   service: ReviewService;
-  login: LoginProvider | null;
+  devLogin: DevLoginProvider | null;
+  /** When set, identity comes from IAP's header on every request, and there is no login form. */
+  iap: IapLogin | null;
+  /** When set, users connect GitHub through the App instead of pasting a token. */
+  githubApp: GitHubAppAccess | null;
   /** The built review UI; null serves a notice instead of the page. */
   uiDir: string | null;
   version: string;
@@ -51,6 +56,7 @@ interface PendingConsent {
 }
 
 const CONSENT_TTL_MS = 10 * 60 * 1000;
+const IAP_SIGN_OUT = '/_gcp_iap/clear_login_cookie';
 
 function authorizeUrl(client: OAuthClientInformationFull, params: AuthorizationParams): string {
   const query = new URLSearchParams({
@@ -90,6 +96,7 @@ export function createApp(deps: AppDeps): express.Express {
   const pending = new Map<string, PendingConsent>();
   const app = express();
   app.disable('x-powered-by');
+  app.set('trust proxy', config.trustProxy);
 
   const indexHtml = deps.uiDir && existsSync(join(deps.uiDir, 'index.html'))
     ? readFileSync(join(deps.uiDir, 'index.html'), 'utf-8')
@@ -97,8 +104,12 @@ export function createApp(deps: AppDeps): express.Express {
 
   const cookieToken = (req: Request): string | undefined => parseCookies(req.headers.cookie)[SESSION_COOKIE];
 
-  const userFor = (req: Request): User | null => {
-    const userId = webSessions.userFor(cookieToken(req));
+  const userFor = async (req: Request): Promise<User | null> => {
+    if (deps.iap) {
+      const identity = await deps.iap.identify(req);
+      return identity ? users.findOrCreate(identity.email, identity.name) : null;
+    }
+    const userId = await webSessions.userFor(cookieToken(req));
     return userId ? users.get(userId) : null;
   };
 
@@ -110,8 +121,13 @@ export function createApp(deps: AppDeps): express.Express {
       .send(page({ title, body, user }));
   };
 
-  const loginRedirect = (req: Request, res: Response) => {
-    res.redirect(302, `/login?next=${encodeURIComponent(req.originalUrl)}`);
+  /** Behind IAP a request without a valid assertion did not come through IAP, so there is nowhere to send it. */
+  const notSignedIn = (res: Response, next: string) => {
+    if (deps.iap) {
+      sendPage(res, 401, 'Not signed in', '<h1>Not signed in</h1><p>This request carried no valid Google sign-in.</p>', null);
+      return;
+    }
+    res.redirect(302, `/login?next=${encodeURIComponent(next)}`);
   };
 
   app.use((_req, res, next) => {
@@ -133,10 +149,9 @@ export function createApp(deps: AppDeps): express.Express {
   }
 
   oauth.onAuthorize = async (client, params, res) => {
-    const req = res.req;
-    const user = userFor(req);
+    const user = await userFor(res.req);
     if (!user) {
-      res.redirect(302, `/login?next=${encodeURIComponent(authorizeUrl(client, params))}`);
+      notSignedIn(res, authorizeUrl(client, params));
       return;
     }
     const now = Date.now();
@@ -191,14 +206,14 @@ export function createApp(deps: AppDeps): express.Express {
 
   app.post('/mcp', bearer, express.json({ limit: '12mb' }), async (req, res) => {
     const userId = req.auth?.extra?.userId;
-    if (typeof userId !== 'string' || !users.get(userId)) {
+    if (typeof userId !== 'string' || !(await users.get(userId))) {
       res.status(401).json({ error: 'The token belongs to no user' });
       return;
     }
     const server = createMcpServer({
       service,
       userId,
-      agentName: oauth.clientsStore.clientName(req.auth!.clientId) ?? 'Claude',
+      agentName: (await oauth.clientsStore.clientName(req.auth!.clientId)) ?? 'Claude',
       version: deps.version,
     });
     // Stateless: every request is complete in itself, so nothing is held between them.
@@ -232,43 +247,51 @@ export function createApp(deps: AppDeps): express.Express {
   const sameOrigin = requireSameOrigin(publicUrl);
   const forms = express.urlencoded({ extended: false, limit: '64kb' });
 
-  app.get('/login', (req, res) => {
+  app.get('/login', async (req, res) => {
     const next = safeNext(req.query.next);
-    if (userFor(req)) {
+    if (await userFor(req)) {
       res.redirect(302, next);
       return;
     }
-    const form = deps.login
-      ? deps.login.renderForm({ action: '/login', next })
+    if (deps.iap) {
+      notSignedIn(res, next);
+      return;
+    }
+    const form = deps.devLogin
+      ? deps.devLogin.renderForm({ action: '/login', next })
       : '<p class="error">No sign-in method is configured on this server.</p>';
     sendPage(res, 200, 'Sign in', `<h1>Sign in</h1>${form}`, null);
   });
 
   app.post('/login', sameOrigin, forms, async (req, res) => {
     const next = safeNext(req.body?.next);
-    if (!deps.login) {
-      sendPage(res, 404, 'Sign in', '<p class="error">No sign-in method is configured on this server.</p>', null);
+    if (!deps.devLogin) {
+      sendPage(res, 404, 'Sign in', '<p class="error">No sign-in form on this server.</p>', null);
       return;
     }
-    const result = await deps.login.handleLogin(req);
+    const result = await deps.devLogin.handleLogin(req);
     if ('error' in result) {
-      sendPage(res, 403, 'Sign in', `<h1>Sign in</h1><p class="error">${escapeHtml(result.error)}</p>${deps.login.renderForm({ action: '/login', next })}`, null);
+      sendPage(res, 403, 'Sign in', `<h1>Sign in</h1><p class="error">${escapeHtml(result.error)}</p>${deps.devLogin.renderForm({ action: '/login', next })}`, null);
       return;
     }
-    const user = users.findOrCreate(result.email, result.name);
-    const token = webSessions.create(user.id);
+    const user = await users.findOrCreate(result.email, result.name);
+    const token = await webSessions.create(user.id);
     res.set('Set-Cookie', sessionCookie(token, { secure: secureCookies, maxAgeSeconds: WebSessionsClass.maxAgeSeconds() }));
     res.redirect(303, next);
   });
 
-  app.post('/logout', sameOrigin, (req, res) => {
-    webSessions.destroy(cookieToken(req));
+  app.post('/logout', sameOrigin, async (req, res) => {
+    if (deps.iap) {
+      res.redirect(303, IAP_SIGN_OUT);
+      return;
+    }
+    await webSessions.destroy(cookieToken(req));
     res.set('Set-Cookie', sessionCookie('', { secure: secureCookies, maxAgeSeconds: 0 }));
     res.redirect(303, '/login');
   });
 
-  app.post('/oauth/consent', sameOrigin, forms, (req, res) => {
-    const user = userFor(req);
+  app.post('/oauth/consent', sameOrigin, forms, async (req, res) => {
+    const user = await userFor(req);
     const id = typeof req.body?.request === 'string' ? req.body.request : '';
     const entry = pending.get(id);
     if (!user || !entry || entry.userId !== user.id || entry.expiresAt < Date.now()) {
@@ -278,7 +301,7 @@ export function createApp(deps: AppDeps): express.Express {
     pending.delete(id);
     const target = new URL(entry.params.redirectUri);
     if (req.body.decision === 'allow') {
-      target.searchParams.set('code', oauth.issueCode(entry.client.client_id, user.id, entry.params));
+      target.searchParams.set('code', await oauth.issueCode(entry.client.client_id, user.id, entry.params));
     } else {
       target.searchParams.set('error', 'access_denied');
       target.searchParams.set('error_description', 'The user did not allow access');
@@ -290,50 +313,116 @@ export function createApp(deps: AppDeps): express.Express {
     res.redirect(302, target.href);
   });
 
-  app.get('/settings', (req, res) => {
-    const user = userFor(req);
-    if (!user) {
-      loginRedirect(req, res);
-      return;
+  const gitHubSection = async (user: User): Promise<string> => {
+    if (deps.githubApp) {
+      const login = await deps.githubApp.connectedLogin(user.id);
+      const install = deps.githubApp.installUrl
+        ? `<p class="muted">The app can only read repositories it is installed on. <a href="${escapeHtml(deps.githubApp.installUrl)}">Install it</a> on more.</p>`
+        : '';
+      return login !== null
+        ? `<p>Connected as <strong>${escapeHtml(login || 'a GitHub user')}</strong>.</p>
+           <form method="post" action="/github/disconnect"><button type="submit">Disconnect</button></form>${install}`
+        : `<p>Not connected: only public repositories can be reviewed.</p>
+           <p><a href="/github/connect">Connect GitHub</a></p>${install}`;
     }
-    const own = users.gitHubToken(user.id) !== null;
+    const own = (await users.gitHubToken(user.id)) !== null;
     const status = own
-      ? 'Your own token is set.'
+      ? `Your own token is set${user.githubLogin ? ` (${user.githubLogin})` : ''}.`
       : deps.gitHubTokenFallback
         ? 'No token of your own; this server’s development token is used.'
         : 'No token set: only public repositories can be reviewed.';
-    sendPage(res, 200, 'Settings', `
-      <h1>Settings</h1>
-      <h2>GitHub access</h2>
+    return `
       <p>${escapeHtml(status)} Every session is checked against GitHub with this token before anything is fetched.</p>
       <form method="post" action="/settings/github-token">
         <label>Personal access token <input type="password" name="token" autocomplete="off" required></label>
         <button type="submit">Save</button>
       </form>
-      ${own ? '<form method="post" action="/settings/github-token"><input type="hidden" name="clear" value="1"><button type="submit">Remove my token</button></form>' : ''}
+      ${own ? '<form method="post" action="/settings/github-token"><input type="hidden" name="clear" value="1"><button type="submit">Remove my token</button></form>' : ''}`;
+  };
+
+  app.get('/settings', async (req, res) => {
+    const user = await userFor(req);
+    if (!user) {
+      notSignedIn(res, req.originalUrl);
+      return;
+    }
+    sendPage(res, 200, 'Settings', `
+      <h1>Settings</h1>
+      <h2>GitHub access</h2>
+      ${await gitHubSection(user)}
       <h2>Connect an agent</h2>
-      <p>Add this server to Claude Code as an MCP connector; it signs you in through this page the first time.</p>
+      <p>Add this server to Claude Code as an MCP connector; it signs you in through this page the first time.
+        Its <code>review</code> prompt holds the review method.</p>
       <pre>claude mcp add --transport http diffity ${escapeHtml(mcpUrl.href)}</pre>`, user);
   });
 
-  app.post('/settings/github-token', sameOrigin, forms, (req, res) => {
-    const user = userFor(req);
+  app.post('/settings/github-token', sameOrigin, forms, async (req, res) => {
+    const user = await userFor(req);
     if (!user) {
-      res.redirect(303, '/login?next=/settings');
+      notSignedIn(res, '/settings');
       return;
     }
-    const token = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
-    users.setGitHubToken(user.id, req.body?.clear === '1' ? null : token || null);
+    if (deps.githubApp) {
+      sendPage(res, 404, 'Settings', '<p class="error">This server connects GitHub through its app; see <a href="/settings">Settings</a>.</p>', user);
+      return;
+    }
+    const token = req.body?.clear === '1' ? null : (typeof req.body?.token === 'string' ? req.body.token.trim() : '') || null;
+    await users.setGitHubToken(user.id, token, token ? await service.github.viewerLogin(token) : null);
     res.redirect(303, '/settings');
   });
 
-  app.get('/', (req, res) => {
-    const user = userFor(req);
+  app.get('/github/connect', async (req, res) => {
+    const user = await userFor(req);
     if (!user) {
-      loginRedirect(req, res);
+      notSignedIn(res, req.originalUrl);
       return;
     }
-    const sessions = reviews.listSessions(user.id);
+    if (!deps.githubApp) {
+      res.redirect(302, '/settings');
+      return;
+    }
+    res.redirect(302, await deps.githubApp.authorizeUrl(user.id));
+  });
+
+  app.get('/github/callback', async (req, res) => {
+    const user = await userFor(req);
+    if (!user) {
+      notSignedIn(res, '/settings');
+      return;
+    }
+    const code = typeof req.query.code === 'string' ? req.query.code : '';
+    const state = typeof req.query.state === 'string' ? req.query.state : '';
+    if (!deps.githubApp || !code || !state) {
+      sendPage(res, 400, 'GitHub', '<p class="error">GitHub did not connect. Try again from <a href="/settings">Settings</a>.</p>', user);
+      return;
+    }
+    try {
+      await deps.githubApp.complete(user.id, code, state);
+    } catch (err) {
+      if (!(err instanceof GitHubConnectError)) {
+        throw err;
+      }
+      sendPage(res, 400, 'GitHub', `<p class="error">${escapeHtml(err.message)}</p><p><a href="/settings">Settings</a></p>`, user);
+      return;
+    }
+    res.redirect(302, '/settings');
+  });
+
+  app.post('/github/disconnect', sameOrigin, async (req, res) => {
+    const user = await userFor(req);
+    if (user && deps.githubApp) {
+      await deps.githubApp.disconnect(user.id);
+    }
+    res.redirect(303, '/settings');
+  });
+
+  app.get('/', async (req, res) => {
+    const user = await userFor(req);
+    if (!user) {
+      notSignedIn(res, req.originalUrl);
+      return;
+    }
+    const sessions = await reviews.listSessions(user.id);
     const rows = sessions.map(session => `
       <tr>
         <td><a href="/s/${session.id}/">${escapeHtml(`${session.owner}/${session.repo}`)}</a></td>
@@ -352,13 +441,13 @@ export function createApp(deps: AppDeps): express.Express {
     next();
   }, uiApiRouter({ service, userFor }));
 
-  app.get('/s/:sid{/*rest}', (req, res) => {
-    const user = userFor(req);
+  app.get('/s/:sid{/*rest}', async (req, res) => {
+    const user = await userFor(req);
     if (!user) {
-      loginRedirect(req, res);
+      notSignedIn(res, req.originalUrl);
       return;
     }
-    const session = reviews.getSession(user.id, req.params.sid);
+    const session = await reviews.getSession(user.id, req.params.sid);
     if (!session || session.id !== req.params.sid) {
       sendPage(res, 404, 'Not found', '<h1>No such session</h1><p><a href="/">Your sessions</a></p>', user);
       return;

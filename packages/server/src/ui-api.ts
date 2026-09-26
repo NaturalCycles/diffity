@@ -5,25 +5,26 @@ import {
   parseCreateThreadRequest,
   parseDeleteThreadsRequest,
   parseEditCommentRequest,
+  parsePullCommentsRequest,
   parseReplyRequest,
+  parseReviewSubmission,
   parseUpdateThreadStatusRequest,
   THREAD_STATUSES,
   type CommentAuthor,
   type DiffFileResponse,
   type DiffFingerprint,
   type FileContentResponse,
-  type LiveStatusResponse,
   type ParseResult,
   type RepoInfoResponse,
 } from '@diffity/api';
 import type { ReviewSessionRecord } from './reviews.js';
-import { describeSession, gitHubDetailsFor, type ReviewService } from './service.js';
+import { describeSession, ServiceError, type ReviewService } from './service.js';
 import { splitLines } from './anchor.js';
 import type { User } from './users.js';
 
 export interface UiApiDeps {
   service: ReviewService;
-  userFor: (req: Request) => User | null;
+  userFor: (req: Request) => Promise<User | null>;
 }
 
 interface Scoped {
@@ -50,13 +51,13 @@ export function uiApiRouter(deps: UiApiDeps): Router {
   const router = express.Router({ mergeParams: true });
   router.use(express.json({ limit: '2mb' }));
 
-  const scope = (req: Request, res: Response): Scoped | null => {
-    const user = deps.userFor(req);
+  const scope = async (req: Request, res: Response): Promise<Scoped | null> => {
+    const user = await deps.userFor(req);
     if (!user) {
       fail(res, 401, 'Sign in first');
       return null;
     }
-    const session = reviews.getSession(user.id, String(req.params.sid));
+    const session = await reviews.getSession(user.id, String(req.params.sid));
     // Somebody else's session answers exactly like one that does not exist.
     if (!session || session.id !== req.params.sid) {
       fail(res, 404, 'Session not found');
@@ -67,15 +68,14 @@ export function uiApiRouter(deps: UiApiDeps): Router {
 
   const handle = (work: (scoped: Scoped, req: Request, res: Response) => Promise<void> | void) =>
     async (req: Request, res: Response): Promise<void> => {
-      const scoped = scope(req, res);
-      if (!scoped) {
-        return;
-      }
       try {
-        await work(scoped, req, res);
+        const scoped = await scope(req, res);
+        if (scoped) {
+          await work(scoped, req, res);
+        }
       } catch (err) {
         if (!res.headersSent) {
-          fail(res, 500, err instanceof Error ? err.message : String(err));
+          fail(res, err instanceof ServiceError ? err.status : 500, err instanceof Error ? err.message : String(err));
         }
       }
     };
@@ -90,8 +90,8 @@ export function uiApiRouter(deps: UiApiDeps): Router {
     return true;
   };
 
-  const threadInSession = (res: Response, { user, session }: Scoped, threadId: string) => {
-    const thread = reviews.getThread(user.id, threadId);
+  const threadInSession = async (res: Response, { user, session }: Scoped, threadId: string) => {
+    const thread = await reviews.getThread(user.id, threadId);
     if (!thread || thread.sessionId !== session.id) {
       fail(res, 404, 'Thread not found');
       return null;
@@ -99,8 +99,8 @@ export function uiApiRouter(deps: UiApiDeps): Router {
     return thread;
   };
 
-  const commentInSession = (res: Response, { user, session }: Scoped, commentId: string) => {
-    const comment = reviews.findComment(user.id, commentId);
+  const commentInSession = async (res: Response, { user, session }: Scoped, commentId: string) => {
+    const comment = await reviews.findComment(user.id, commentId);
     if (!comment || comment.sessionId !== session.id) {
       fail(res, 404, 'Comment not found');
       return null;
@@ -114,12 +114,9 @@ export function uiApiRouter(deps: UiApiDeps): Router {
       branch: session.prMeta?.headRef ?? session.headSha.slice(0, 7),
       root: `github.com/${session.owner}/${session.repo}`,
       description: describeSession(session),
-      capabilities: { reviews: true, revert: false, staleness: false },
       sessionId: session.id,
       review: session.review,
       github: session.prNumber !== null ? { owner: session.owner, repo: session.repo } : null,
-      editor: null,
-      hosted: true,
     } satisfies RepoInfoResponse);
   }));
 
@@ -162,7 +159,7 @@ export function uiApiRouter(deps: UiApiDeps): Router {
   // The rich markdown and SVG preview reads the new side through the tree route.
   router.get('/tree/file/{*path}', serveFile('new'));
 
-  router.get('/threads', handle(({ user, session }, req, res) => {
+  router.get('/threads', handle(async ({ user, session }, req, res) => {
     if (!sessionMatches(res, session, req.query.session)) {
       return;
     }
@@ -171,15 +168,15 @@ export function uiApiRouter(deps: UiApiDeps): Router {
       fail(res, 400, `status must be one of: ${THREAD_STATUSES.join(', ')}`);
       return;
     }
-    res.json(reviews.threadsForSession(user.id, session.id, status));
+    res.json(await reviews.threadsForSession(user.id, session.id, status));
   }));
 
-  router.post('/threads', handle(({ user, session }, req, res) => {
+  router.post('/threads', handle(async ({ user, session }, req, res) => {
     const body = parsed(res, parseCreateThreadRequest(req.body));
     if (!body || !sessionMatches(res, session, body.sessionId)) {
       return;
     }
-    res.json(reviews.createThread({
+    res.json(await reviews.createThread({
       userId: user.id,
       sessionId: session.id,
       filePath: body.filePath,
@@ -193,31 +190,31 @@ export function uiApiRouter(deps: UiApiDeps): Router {
     }));
   }));
 
-  router.delete('/threads', handle(({ user, session }, req, res) => {
+  router.delete('/threads', handle(async ({ user, session }, req, res) => {
     const body = parsed(res, parseDeleteThreadsRequest(req.body));
     if (!body || !sessionMatches(res, session, body.sessionId)) {
       return;
     }
-    reviews.deleteThreadsForSession(user.id, session.id);
+    await reviews.deleteThreadsForSession(user.id, session.id);
     res.json({ ok: true });
   }));
 
-  router.post('/threads/:id/reply', handle((scoped, req, res) => {
-    const thread = threadInSession(res, scoped, String(req.params.id));
+  router.post('/threads/:id/reply', handle(async (scoped, req, res) => {
+    const thread = await threadInSession(res, scoped, String(req.params.id));
     const body = thread && parsed(res, parseReplyRequest(req.body));
     if (!thread || !body) {
       return;
     }
-    res.json(reviews.addReply(scoped.user.id, thread.id, body.body, author(scoped.user), body.kind ?? 'review'));
+    res.json(await reviews.addReply(scoped.user.id, thread.id, body.body, author(scoped.user), body.kind ?? 'review'));
   }));
 
-  router.patch('/threads/:id/status', handle((scoped, req, res) => {
-    const thread = threadInSession(res, scoped, String(req.params.id));
+  router.patch('/threads/:id/status', handle(async (scoped, req, res) => {
+    const thread = await threadInSession(res, scoped, String(req.params.id));
     const body = thread && parsed(res, parseUpdateThreadStatusRequest(req.body));
     if (!thread || !body) {
       return;
     }
-    reviews.updateThreadStatus(
+    await reviews.updateThreadStatus(
       scoped.user.id,
       thread.id,
       body.status,
@@ -227,43 +224,43 @@ export function uiApiRouter(deps: UiApiDeps): Router {
     res.json({ ok: true });
   }));
 
-  router.delete('/threads/:id', handle((scoped, req, res) => {
-    const thread = threadInSession(res, scoped, String(req.params.id));
+  router.delete('/threads/:id', handle(async (scoped, req, res) => {
+    const thread = await threadInSession(res, scoped, String(req.params.id));
     if (!thread) {
       return;
     }
-    reviews.deleteThread(scoped.user.id, thread.id);
+    await reviews.deleteThread(scoped.user.id, thread.id);
     res.json({ ok: true });
   }));
 
-  router.patch('/comments/:id', handle((scoped, req, res) => {
-    const comment = commentInSession(res, scoped, String(req.params.id));
+  router.patch('/comments/:id', handle(async (scoped, req, res) => {
+    const comment = await commentInSession(res, scoped, String(req.params.id));
     const body = comment && parsed(res, parseEditCommentRequest(req.body));
     if (!comment || !body) {
       return;
     }
-    reviews.editComment(scoped.user.id, comment.comment.id, body.body);
+    await reviews.editComment(scoped.user.id, comment.comment.id, body.body);
     res.json({ ok: true });
   }));
 
-  router.delete('/comments/:id', handle((scoped, req, res) => {
-    const comment = commentInSession(res, scoped, String(req.params.id));
+  router.delete('/comments/:id', handle(async (scoped, req, res) => {
+    const comment = await commentInSession(res, scoped, String(req.params.id));
     if (!comment) {
       return;
     }
-    reviews.deleteComment(scoped.user.id, comment.comment.id);
+    await reviews.deleteComment(scoped.user.id, comment.comment.id);
     res.json({ ok: true });
   }));
 
-  router.get('/tours', handle(({ user, session }, req, res) => {
+  router.get('/tours', handle(async ({ user, session }, req, res) => {
     if (!sessionMatches(res, session, req.query.session)) {
       return;
     }
-    res.json(reviews.toursForSession(user.id, session.id));
+    res.json(await reviews.toursForSession(user.id, session.id));
   }));
 
-  router.get('/tours/:id', handle(({ user, session }, req, res) => {
-    const tour = reviews.getTour(user.id, String(req.params.id));
+  router.get('/tours/:id', handle(async ({ user, session }, req, res) => {
+    const tour = await reviews.getTour(user.id, String(req.params.id));
     if (!tour || tour.sessionId !== session.id) {
       fail(res, 404, 'Tour not found');
       return;
@@ -271,31 +268,22 @@ export function uiApiRouter(deps: UiApiDeps): Router {
     res.json(tour);
   }));
 
-  router.get('/live/status', handle((_scoped, _req, res) => {
-    res.json({
-      enabled: false,
-      listening: false,
-      working: false,
-      waiting: 0,
-      mayChangeCode: false,
-      viewerPresent: false,
-    } satisfies LiveStatusResponse);
+  router.get('/github/details', handle(async ({ session }, _req, res) => {
+    res.json(await service.gitHubDetails(session));
   }));
 
-  // Presence only matters to a parked live agent, which this server does not have.
-  router.post('/viewer', handle((_scoped, _req, res) => {
-    res.json({ ok: true });
-  }));
-  router.post('/viewer/gone', handle((_scoped, _req, res) => {
-    res.json({ ok: true });
-  }));
-
-  router.get('/github/details', handle(({ session }, _req, res) => {
-    res.json(gitHubDetailsFor(session));
+  router.post('/github/create-review', handle(async ({ session }, req, res) => {
+    const body = parsed(res, parseReviewSubmission(req.body));
+    if (body) {
+      res.json(await service.postReview(session, body));
+    }
   }));
 
-  router.post(['/github/create-review', '/github/pull-comments'], handle((_scoped, _req, res) => {
-    fail(res, 501, 'Posting to GitHub is not available on the hosted server yet');
+  router.post('/github/pull-comments', handle(async ({ session }, req, res) => {
+    const body = parsed(res, parsePullCommentsRequest(req.body));
+    if (body && sessionMatches(res, session, body.sessionId)) {
+      res.json(await service.pullComments(session));
+    }
   }));
 
   router.use((_req: Request, res: Response) => fail(res, 404, 'Not found'));

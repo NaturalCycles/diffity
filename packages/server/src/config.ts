@@ -17,6 +17,23 @@ export interface Config {
   allowedEmails: string[];
   devGitHubToken: string | null;
   githubApiUrl: string;
+  /** Where users authorize the GitHub App and trade codes for tokens. */
+  githubUrl: string;
+  githubApp: GitHubAppConfig | null;
+  /** Postgres; without it the database is PGlite under the data directory. */
+  databaseUrl: string | null;
+  pgCa: string | null;
+  /** The IAP backend service's audience; when set, every page request must carry IAP's signed header. */
+  iapAudience: string | null;
+  /** Express's `trust proxy`: how many proxies stand between the client and this process. */
+  trustProxy: boolean | number | string;
+}
+
+export interface GitHubAppConfig {
+  clientId: string;
+  clientSecret: string;
+  /** For the install link; the app's name in its github.com URL. */
+  slug: string | null;
 }
 
 export class ConfigError extends Error {}
@@ -82,6 +99,29 @@ function parseEmails(raw: string | undefined): string[] {
     .filter(Boolean);
 }
 
+function parseTrustProxy(raw: string | undefined): boolean | number | string {
+  const text = raw?.trim();
+  if (!text || text === 'false' || text === '0') {
+    return false;
+  }
+  if (text === 'true') {
+    return true;
+  }
+  return /^\d+$/.test(text) ? Number(text) : text;
+}
+
+function parseGitHubApp(env: NodeJS.ProcessEnv): GitHubAppConfig | null {
+  const clientId = env.DIFFITY_GITHUB_APP_CLIENT_ID?.trim();
+  const clientSecret = env.DIFFITY_GITHUB_APP_CLIENT_SECRET?.trim();
+  if (!clientId && !clientSecret) {
+    return null;
+  }
+  if (!clientId || !clientSecret) {
+    throw new ConfigError('DIFFITY_GITHUB_APP_CLIENT_ID and DIFFITY_GITHUB_APP_CLIENT_SECRET go together');
+  }
+  return { clientId, clientSecret, slug: env.DIFFITY_GITHUB_APP_SLUG?.trim() || null };
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const publicUrl = parsePublicUrl(env.DIFFITY_PUBLIC_URL);
   const dataDir = env.DIFFITY_DATA_DIR?.trim();
@@ -99,11 +139,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new ConfigError('DIFFITY_DEV_GITHUB_TOKEN is only allowed when DIFFITY_PUBLIC_URL is localhost');
   }
   const { key, generated } = parseSecretKey(env.DIFFITY_SECRET_KEY, publicUrl);
+  const iapAudience = env.DIFFITY_IAP_AUDIENCE?.trim() || null;
+  if (iapAudience && devLogin) {
+    throw new ConfigError('DIFFITY_IAP_AUDIENCE and DIFFITY_DEV_LOGIN are two sign-in methods; set one');
+  }
+  // Cloud Run sends traffic to the container's own interface, never to loopback.
+  const defaultBind = env.K_SERVICE || !isLoopbackUrl(publicUrl) ? '0.0.0.0' : '127.0.0.1';
 
   return {
     publicUrl,
     port: parsePort(env.PORT),
-    bindHost: env.DIFFITY_BIND?.trim() || (isLoopbackUrl(publicUrl) ? '127.0.0.1' : '0.0.0.0'),
+    bindHost: env.DIFFITY_BIND?.trim() || defaultBind,
     dataDir,
     secretKey: key,
     secretKeyGenerated: generated,
@@ -112,6 +158,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     allowedEmails: parseEmails(env.DIFFITY_ALLOWED_EMAILS),
     devGitHubToken,
     githubApiUrl: (env.GITHUB_API_URL?.trim() || 'https://api.github.com').replace(/\/+$/, ''),
+    githubUrl: (env.GITHUB_URL?.trim() || 'https://github.com').replace(/\/+$/, ''),
+    githubApp: parseGitHubApp(env),
+    databaseUrl: env.DATABASE_URL?.trim() || null,
+    pgCa: env.DIFFITY_PG_CA?.trim() || null,
+    iapAudience,
+    trustProxy: parseTrustProxy(env.DIFFITY_TRUST_PROXY),
   };
 }
 

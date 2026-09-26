@@ -39,16 +39,16 @@ describe('the API client', () => {
     const fetchMock = vi.fn(async () => new Response('[]', { status: 200, headers: { 'Content-Type': 'application/json' } }));
     vi.stubGlobal('fetch', fetchMock);
     const api = await import('../src/lib/api');
-    await api.fetchRepoInfo('work');
+    await api.fetchRepoInfo();
     await api.fetchThreads('sid');
     await api.fetchGitHubDetails();
     await api.updateThreadStatus('t1', 'resolved');
     return fetchMock.mock.calls.map(call => String((call as unknown[])[0]));
   }
 
-  it('asks the server at the root when the page has no base, as the CLI serves it', async () => {
+  it('asks the server at the root when the page has no base', async () => {
     expect(await requestedUrls(undefined)).toEqual([
-      '/api/info?ref=work',
+      '/api/info',
       '/api/threads?session=sid',
       '/api/github/details',
       '/api/threads/t1/status',
@@ -57,7 +57,7 @@ describe('the API client', () => {
 
   it('asks under the base the hosted server injected', async () => {
     expect(await requestedUrls('/s/abc')).toEqual([
-      '/s/abc/api/info?ref=work',
+      '/s/abc/api/info',
       '/s/abc/api/threads?session=sid',
       '/s/abc/api/github/details',
       '/s/abc/api/threads/t1/status',

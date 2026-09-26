@@ -1,5 +1,6 @@
+import { readFileSync } from 'node:fs';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { CallToolResult, GetPromptResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { GENERAL_THREAD_FILE_PATH, THREAD_STATUSES, type CommentAuthor, type CommentThread } from '@diffity/api';
 import { AmbiguousIdError, type ReviewSessionRecord } from './reviews.js';
@@ -40,6 +41,25 @@ function guarded<A>(work: (args: A) => Promise<CallToolResult>): (args: A) => Pr
   };
 }
 
+let reviewMethod: string | undefined;
+
+/** Beside the module: the build copies it into dist. */
+function reviewPromptText(repo: string, pr?: string): string {
+  reviewMethod ??= readFileSync(new URL('./review-prompt.md', import.meta.url), 'utf-8');
+  const number = pr?.trim().replace(/^#/, '');
+  const target = number
+    ? `Review pull request #${number} of ${repo}: \`create_session { repo: "${repo}", pr: ${number} }\`.`
+    : `Review a change in ${repo}.`;
+  return `${target}\n\n${reviewMethod}`;
+}
+
+function reviewPrompt(input: { repo: string; pr?: string }): GetPromptResult {
+  return {
+    description: 'Review a change on this diffity server',
+    messages: [{ role: 'user', content: { type: 'text', text: reviewPromptText(input.repo, input.pr) } }],
+  };
+}
+
 const sessionArg = z.string().min(1).describe('Session id (full or its first 8 characters)');
 const line = z.number().int().min(1);
 const body = z.string().min(1);
@@ -68,21 +88,21 @@ export function createMcpServer(ctx: McpContext): McpServer {
   const agent: CommentAuthor = { name: ctx.agentName, type: 'agent' };
   const server = new McpServer({ name: 'diffity', version: ctx.version });
 
-  const session = (id: string): ReviewSessionRecord => service.requireSession(userId, id);
+  const session = (id: string): Promise<ReviewSessionRecord> => service.requireSession(userId, id);
 
-  const thread = (id: string, sessionId?: string): CommentThread => {
-    const found = reviews.getThread(userId, id);
+  const thread = async (id: string, sessionId?: string): Promise<CommentThread> => {
+    const found = await reviews.getThread(userId, id);
     if (!found) {
       throw new ServiceError(`No thread matches ${id}`);
     }
-    if (sessionId !== undefined && found.sessionId !== session(sessionId).id) {
+    if (sessionId !== undefined && found.sessionId !== (await session(sessionId)).id) {
       throw new ServiceError(`Thread ${id} belongs to another session`);
     }
     return found;
   };
 
-  const tour = (id: string) => {
-    const found = reviews.getTour(userId, id);
+  const tour = async (id: string) => {
+    const found = await reviews.getTour(userId, id);
     if (!found) {
       throw new ServiceError(`No walkthrough matches ${id}`);
     }
@@ -108,7 +128,8 @@ export function createMcpServer(ctx: McpContext): McpServer {
       description:
         'Open a review session on pushed code. Give the repository and exactly one of: `pr` (a pull request number); '
         + '`base` and `head` (full commit shas); or `base` and `patch` (a unified diff applied to base, for work that is not pushed). '
-        + 'Returns the session id, the URL the user opens to read the review, and the changed files.',
+        + 'Returns the session id, the URL the user opens to read the review, and the changed files. '
+        + 'The `review` prompt of this server holds the method for reviewing through these tools.',
       inputSchema: {
         repo: z.string().describe('"owner/name" on GitHub'),
         pr: z.number().int().positive().optional(),
@@ -141,7 +162,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
     },
     guarded(async ({ repo }) => {
       const [owner, name] = repo?.split('/') ?? [];
-      return json(reviews.listSessions(userId, { owner, repo: name }).map(describe));
+      return json((await reviews.listSessions(userId, { owner, repo: name })).map(describe));
     }),
   );
 
@@ -153,7 +174,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
       annotations: { readOnlyHint: true },
     },
     guarded(async args => {
-      const raw = await service.diffText(session(args.session), { path: args.file });
+      const raw = await service.diffText(await session(args.session), { path: args.file });
       return text(raw.trim() ? raw : 'No changes.');
     }),
   );
@@ -166,7 +187,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
       annotations: { readOnlyHint: true },
     },
     guarded(async args => {
-      const content = await service.readFile(session(args.session), args.side, args.path);
+      const content = await service.readFile(await session(args.session), args.side, args.path);
       if (content === null) {
         throw new ServiceError(`${args.path} does not exist on the ${args.side} side`);
       }
@@ -181,7 +202,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
       inputSchema: { session: sessionArg },
       annotations: { readOnlyHint: true },
     },
-    guarded(async args => json(await service.standards(session(args.session)))),
+    guarded(async args => json(await service.standards(await session(args.session)))),
   );
 
   server.registerTool(
@@ -191,7 +212,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
       inputSchema: { session: sessionArg, note: z.string().optional() },
     },
     guarded(async args => {
-      reviews.startReview(userId, session(args.session).id, args.note ?? '');
+      await reviews.startReview(userId, (await session(args.session)).id, args.note ?? '');
       return text('Review marked as in progress');
     }),
   );
@@ -203,7 +224,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
       inputSchema: { session: sessionArg },
     },
     guarded(async args => {
-      reviews.finishReview(userId, session(args.session).id);
+      await reviews.finishReview(userId, (await session(args.session)).id);
       return text('Review marked as finished');
     }),
   );
@@ -226,7 +247,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
       if (args.endLine !== undefined && args.endLine < args.line) {
         throw new ServiceError('endLine must not be before line');
       }
-      const record = session(args.session);
+      const record = await session(args.session);
       await service.assertInDiff(record, args.file, args.side);
       const content = await service.readFile(record, args.side, args.file);
       const requestedEnd = args.endLine ?? args.line;
@@ -235,7 +256,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
         args.line,
         requestedEnd,
       );
-      const created = reviews.createThread({
+      const created = await reviews.createThread({
         userId,
         sessionId: record.id,
         filePath: args.file,
@@ -265,9 +286,9 @@ export function createMcpServer(ctx: McpContext): McpServer {
       inputSchema: { session: sessionArg, body },
     },
     guarded(async args => {
-      const created = reviews.createThread({
+      const created = await reviews.createThread({
         userId,
-        sessionId: session(args.session).id,
+        sessionId: (await session(args.session)).id,
         filePath: GENERAL_THREAD_FILE_PATH,
         side: 'new',
         startLine: 0,
@@ -291,8 +312,8 @@ export function createMcpServer(ctx: McpContext): McpServer {
       },
     },
     guarded(async args => {
-      const found = thread(args.id, args.session);
-      const reply = reviews.addReply(userId, found.id, args.body, agent, args.aside ? 'aside' : 'review');
+      const found = await thread(args.id, args.session);
+      const reply = await reviews.addReply(userId, found.id, args.body, agent, args.aside ? 'aside' : 'review');
       return json({ thread: found.id, comment: reply.id });
     }),
   );
@@ -304,15 +325,15 @@ export function createMcpServer(ctx: McpContext): McpServer {
       inputSchema: { id: z.string().min(1), body, session: sessionArg.optional() },
     },
     guarded(async args => {
-      const scoped = args.session === undefined ? undefined : session(args.session).id;
-      const comment = reviews.findComment(userId, args.id);
+      const scoped = args.session === undefined ? undefined : (await session(args.session)).id;
+      const comment = await reviews.findComment(userId, args.id);
       let commentId: string;
       let sessionId: string;
       if (comment) {
         commentId = comment.comment.id;
         sessionId = comment.sessionId;
       } else {
-        const found = reviews.getThread(userId, args.id);
+        const found = await reviews.getThread(userId, args.id);
         if (!found || found.comments.length === 0) {
           throw new ServiceError(`No comment or thread matches ${args.id}`);
         }
@@ -322,7 +343,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
       if (scoped !== undefined && sessionId !== scoped) {
         throw new ServiceError(`${args.id} belongs to another session`);
       }
-      reviews.editComment(userId, commentId, args.body);
+      await reviews.editComment(userId, commentId, args.body);
       return json({ comment: commentId });
     }),
   );
@@ -334,8 +355,8 @@ export function createMcpServer(ctx: McpContext): McpServer {
       inputSchema: { id: z.string().min(1), summary: z.string().optional(), session: sessionArg.optional() },
     },
     guarded(async args => {
-      const found = thread(args.id, args.session);
-      reviews.updateThreadStatus(userId, found.id, 'resolved', args.summary, args.summary ? agent : undefined);
+      const found = await thread(args.id, args.session);
+      await reviews.updateThreadStatus(userId, found.id, 'resolved', args.summary, args.summary ? agent : undefined);
       return text(`Resolved thread ${found.id.slice(0, 8)}`);
     }),
   );
@@ -347,8 +368,8 @@ export function createMcpServer(ctx: McpContext): McpServer {
       inputSchema: { id: z.string().min(1), reason: z.string().optional(), session: sessionArg.optional() },
     },
     guarded(async args => {
-      const found = thread(args.id, args.session);
-      reviews.updateThreadStatus(userId, found.id, 'dismissed', args.reason, args.reason ? agent : undefined);
+      const found = await thread(args.id, args.session);
+      await reviews.updateThreadStatus(userId, found.id, 'dismissed', args.reason, args.reason ? agent : undefined);
       return text(`Dismissed thread ${found.id.slice(0, 8)}`);
     }),
   );
@@ -361,7 +382,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
       annotations: { readOnlyHint: true },
     },
     guarded(async args =>
-      json(reviews.threadsForSession(userId, session(args.session).id, args.status).map(summariseThread)),
+      json((await reviews.threadsForSession(userId, (await session(args.session)).id, args.status)).map(summariseThread)),
     ),
   );
 
@@ -372,7 +393,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
       inputSchema: { session: sessionArg, topic: z.string().min(1), body: z.string().optional() },
     },
     guarded(async args => {
-      const created = reviews.createTour(userId, session(args.session).id, args.topic, args.body ?? '');
+      const created = await reviews.createTour(userId, (await session(args.session)).id, args.topic, args.body ?? '');
       return json({ tour: created.id });
     }),
   );
@@ -395,12 +416,12 @@ export function createMcpServer(ctx: McpContext): McpServer {
       if (args.endLine !== undefined && args.endLine < args.line) {
         throw new ServiceError('endLine must not be before line');
       }
-      const found = tour(args.tour);
-      const record = session(found.sessionId);
+      const found = await tour(args.tour);
+      const record = await session(found.sessionId);
       if ((await service.readFile(record, 'new', args.file)) === null) {
         throw new ServiceError(`${args.file} does not exist at the session's head`);
       }
-      const step = reviews.addTourStep(userId, found.id, {
+      const step = await reviews.addTourStep(userId, found.id, {
         filePath: args.file,
         startLine: args.line,
         endLine: args.endLine ?? args.line,
@@ -418,8 +439,8 @@ export function createMcpServer(ctx: McpContext): McpServer {
       inputSchema: { tour: z.string().min(1) },
     },
     guarded(async args => {
-      const found = tour(args.tour);
-      reviews.updateTourStatus(userId, found.id, 'ready');
+      const found = await tour(args.tour);
+      await reviews.updateTourStatus(userId, found.id, 'ready');
       return text('Walkthrough marked as ready');
     }),
   );
@@ -431,10 +452,23 @@ export function createMcpServer(ctx: McpContext): McpServer {
       inputSchema: { tour: z.string().min(1) },
     },
     guarded(async args => {
-      const found = tour(args.tour);
-      reviews.deleteTour(userId, found.id);
+      const found = await tour(args.tour);
+      await reviews.deleteTour(userId, found.id);
       return text(`Removed walkthrough ${found.id.slice(0, 8)}`);
     }),
+  );
+
+  server.registerPrompt(
+    'review',
+    {
+      title: 'Review a change',
+      description: 'How to review a pull request, commit range or patch through these tools, ending with the review URL for the user.',
+      argsSchema: {
+        repo: z.string().describe('"owner/name" on GitHub'),
+        pr: z.string().optional().describe('Pull request number'),
+      },
+    },
+    args => reviewPrompt(args),
   );
 
   return server;

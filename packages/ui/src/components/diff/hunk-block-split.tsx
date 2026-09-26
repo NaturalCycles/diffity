@@ -1,7 +1,7 @@
-import { useState, useMemo } from 'react';
+import { useState } from 'react';
 import type { DiffHunk, DiffLine as DiffLineType } from '@diffity/parser';
 import { cn } from '../../lib/cn';
-import { getLineBg, getChangeGroups } from '../../lib/diff-utils';
+import { getLineBg } from '../../lib/diff-utils';
 import { renderContent } from '../../lib/render-content';
 import type { SyntaxToken } from '../../lib/syntax-token';
 import type { CommentThread as CommentThreadType, CommentAuthor, CommentSide, LineSelection, LineRenderProps } from '../comments/types';
@@ -11,7 +11,6 @@ import type { TourMark } from '../../lib/tour-marks';
 import { TourMarkLamp } from './tour-mark-lamp';
 import { CommentThread } from '../comments/comment-thread';
 import { CommentFormRow } from '../comments/comment-form-row';
-import { UndoIcon } from '../icons/undo-icon';
 
 interface HunkBlockSplitProps {
   hunk: DiffHunk;
@@ -40,13 +39,7 @@ interface HunkBlockSplitProps {
   onDeleteThread?: (threadId: string) => void;
   onCancelPending?: () => void;
   filePath?: string;
-  onRevertChange?: (hunk: DiffHunk, startIndex: number, endIndex: number) => void;
   getOriginalCode?: (side: CommentSide, startLine: number, endLine: number) => string;
-  onAskThread?: (filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor) => void;
-  onAskReply?: (threadId: string, body: string, author: CommentAuthor) => void;
-  onActThread?: (filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor) => void;
-  onActReply?: (threadId: string, body: string, author: CommentAuthor) => void;
-  askIsHeard?: boolean;
   tourMarks?: TourMark[];
   activeStepIndex?: number;
   onTourMarkClick?: (stepIndex: number) => void;
@@ -240,9 +233,6 @@ export function renderSplitRows(
             key={`thread-${thread.id}`}
             thread={thread}
             onReply={props.onReply!}
-            onAskReply={props.onAskReply}
-            onActReply={props.onActReply}
-            askIsHeard={props.askIsHeard}
             onResolve={props.onResolve!}
             onUnresolve={props.onUnresolve!}
             onEditComment={props.onEditComment!}
@@ -266,9 +256,6 @@ export function renderSplitRows(
             key={`thread-${thread.id}`}
             thread={thread}
             onReply={props.onReply!}
-            onAskReply={props.onAskReply}
-            onActReply={props.onActReply}
-            askIsHeard={props.askIsHeard}
             onResolve={props.onResolve!}
             onUnresolve={props.onUnresolve!}
             onEditComment={props.onEditComment!}
@@ -298,9 +285,6 @@ export function renderSplitRows(
             endLine={props.pendingSelection.endLine}
             currentAuthor={props.currentAuthor}
             onSubmit={props.onAddThread}
-            onAsk={props.onAskThread}
-            onAct={props.onActThread}
-            askIsHeard={props.askIsHeard}
             onCancel={props.onCancelPending}
             viewMode="split"
           />
@@ -322,8 +306,7 @@ export function HunkBlockSplit(props: HunkBlockSplitProps) {
     threads, pendingSelection, currentAuthor, isLineSelected,
     onLineMouseDown, onLineMouseEnter, onCommentClick,
     onAddThread, onReply, onResolve, onUnresolve, onEditComment, onDeleteComment, onDeleteThread,
-    onCancelPending, filePath, onRevertChange, getOriginalCode,
-    onAskThread, onAskReply, onActThread, onActReply, askIsHeard,
+    onCancelPending, filePath, getOriginalCode,
     tourMarks, activeStepIndex, onTourMarkClick,
   } = props;
 
@@ -332,41 +315,8 @@ export function HunkBlockSplit(props: HunkBlockSplitProps) {
     threads, pendingSelection, currentAuthor,
     onAddThread, onReply, onResolve, onUnresolve, onEditComment, onDeleteComment, onDeleteThread,
     onCancelPending, filePath, getOriginalCode,
-    onAskThread, onAskReply, onActThread, onActReply, askIsHeard,
     tourMarks, activeStepIndex, onTourMarkClick,
   };
-
-  const changeGroups = useMemo(() => {
-    if (!onRevertChange) {
-      return [];
-    }
-    return getChangeGroups(hunk.lines);
-  }, [hunk.lines, onRevertChange]);
-
-  const splitRows = useMemo(() => buildSplitRows(hunk.lines), [hunk.lines]);
-
-  const splitRowToChangeGroup = useMemo(() => {
-    if (changeGroups.length === 0) {
-      return new Map<number, number>();
-    }
-    const lineToGroup = new Map<DiffLineType, number>();
-    for (let g = 0; g < changeGroups.length; g++) {
-      for (let i = changeGroups[g].startIndex; i <= changeGroups[g].endIndex; i++) {
-        lineToGroup.set(hunk.lines[i], g);
-      }
-    }
-    const map = new Map<number, number>();
-    for (let ri = 0; ri < splitRows.length; ri++) {
-      const row = splitRows[ri];
-      const leftGroup = row.left ? lineToGroup.get(row.left) : undefined;
-      const rightGroup = row.right ? lineToGroup.get(row.right) : undefined;
-      const groupIdx = leftGroup ?? rightGroup;
-      if (groupIdx !== undefined) {
-        map.set(ri, groupIdx);
-      }
-    }
-    return map;
-  }, [hunk.lines, splitRows, changeGroups]);
 
   const expansionRows: React.ReactNode[] = [];
 
@@ -380,87 +330,6 @@ export function HunkBlockSplit(props: HunkBlockSplitProps) {
 
   const allRows = renderSplitRows(hunk.lines, false, syntaxMap, 'hunk', commentProps);
 
-  const sections: React.ReactNode[] = [];
-  let currentGroupIndex = -1;
-  let currentRows: React.ReactNode[] = [];
-  let allRowIdx = 0;
-
-  const flushRows = (isChangeGroup: boolean, groupIdx: number) => {
-    if (currentRows.length === 0) {
-      return;
-    }
-    if (isChangeGroup && onRevertChange) {
-      const group = changeGroups[groupIdx];
-      sections.push(
-        <tbody key={`change-${groupIdx}`} className={`group/undo ${attentionClass}`} title={attentionTitle}>
-          {currentRows}
-          <tr className="relative z-10">
-            <td colSpan={4} className="relative h-0">
-              <div className="absolute right-3 bottom-0 z-10 flex items-center gap-1.5 opacity-0 group-hover/undo:opacity-100 pointer-events-none group-hover/undo:pointer-events-auto">
-                <button
-                  onClick={() => onRevertChange(hunk, group.startIndex, group.endIndex)}
-                  className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border border-deleted/40 bg-bg text-deleted hover:bg-deleted hover:text-white transition-colors cursor-pointer shadow-md"
-                  title="Undo this change"
-                >
-                  <UndoIcon className="w-3 h-3" />
-                  Undo
-                </button>
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      );
-    } else {
-      sections.push(
-        <tbody key={`context-${sections.length}`} className={attentionClass} title={attentionTitle}>
-          {currentRows}
-        </tbody>
-      );
-    }
-    currentRows = [];
-  };
-
-  for (let ri = 0; ri < splitRows.length; ri++) {
-    const groupIdx = splitRowToChangeGroup.get(ri) ?? -1;
-    const isChange = groupIdx !== -1;
-
-    if (isChange && currentGroupIndex === -1) {
-      flushRows(false, -1);
-      currentGroupIndex = groupIdx;
-    } else if (!isChange && currentGroupIndex !== -1) {
-      flushRows(true, currentGroupIndex);
-      currentGroupIndex = -1;
-    }
-
-    // Each split row may produce multiple React nodes (row + thread rows)
-    // Find nodes for this split row
-    const rowKey = `hunk-${ri}`;
-    while (allRowIdx < allRows.length) {
-      const node = allRows[allRowIdx] as React.ReactElement;
-      currentRows.push(node);
-      allRowIdx++;
-      if (node.key === rowKey) {
-        // Collect any thread/comment rows that follow
-        while (allRowIdx < allRows.length) {
-          const next = allRows[allRowIdx] as React.ReactElement;
-          const nextKey = typeof next.key === 'string' ? next.key : '';
-          if (nextKey.startsWith('hunk-') && !nextKey.startsWith('thread-') && !nextKey.startsWith('pending-')) {
-            break;
-          }
-          currentRows.push(next);
-          allRowIdx++;
-        }
-        break;
-      }
-    }
-  }
-
-  if (currentGroupIndex !== -1) {
-    flushRows(true, currentGroupIndex);
-  } else {
-    flushRows(false, -1);
-  }
-
   const tbodyClass = expandControls?.wasExpanded && expandControls.remainingLines <= 0 ? '' : 'border-t border-border-muted';
 
   return (
@@ -469,7 +338,11 @@ export function HunkBlockSplit(props: HunkBlockSplitProps) {
         <HunkHeader hunk={hunk} expandControls={expandControls} />
         {expansionRows}
       </tbody>
-      {sections}
+      {allRows.length > 0 && (
+        <tbody className={attentionClass} title={attentionTitle}>
+          {allRows}
+        </tbody>
+      )}
     </>
   );
 }

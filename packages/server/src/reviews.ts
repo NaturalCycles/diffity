@@ -16,7 +16,7 @@ import {
   type TourStatus,
   type TourStep,
 } from '@diffity/api';
-import type { Store } from './db.js';
+import type { Db, Queryable } from './db.js';
 
 export type SessionKind = 'pr' | 'shas' | 'patch';
 
@@ -152,10 +152,6 @@ function rowToComment(row: CommentRow): Comment {
     body: row.body,
     kind: isCommentKind(row.kind) ? row.kind : 'review',
     createdAt: row.created_at,
-    liveRequestedAt: null,
-    liveIntent: null,
-    liveClaimedAt: null,
-    liveAnsweredAt: null,
   };
 }
 
@@ -194,10 +190,6 @@ function rowToStep(row: TourStepRow): TourStep {
   };
 }
 
-function placeholders(values: unknown[]): string {
-  return values.map(() => '?').join(', ');
-}
-
 /** `%` and `_` in a prefix would otherwise widen the match. */
 function likePrefix(prefix: string): string {
   return prefix.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_') + '%';
@@ -208,21 +200,20 @@ function likePrefix(prefix: string): string {
  * treated exactly like one that does not exist.
  */
 export class Reviews {
-  constructor(private readonly store: Store) {}
+  constructor(private readonly db: Db) {}
 
   /** A full id, or the 8-character prefix the CLI's ids accept, among this user's rows only. */
-  private resolveId(table: 'sessions' | 'threads' | 'comments' | 'tours', userId: string, idOrPrefix: string): string | null {
-    const exact = this.store.get<{ id: string }>(`SELECT id FROM ${table} WHERE id = ? AND user_id = ?`, idOrPrefix, userId);
+  private async resolveId(table: 'sessions' | 'threads' | 'comments' | 'tours', userId: string, idOrPrefix: string): Promise<string | null> {
+    const exact = await this.db.one<{ id: string }>(`SELECT id FROM ${table} WHERE id = $1 AND user_id = $2`, [idOrPrefix, userId]);
     if (exact) {
       return exact.id;
     }
     if (idOrPrefix.length < 8) {
       return null;
     }
-    const matches = this.store.all<{ id: string }>(
-      `SELECT id FROM ${table} WHERE user_id = ? AND id LIKE ? ESCAPE '\\' LIMIT 2`,
-      userId,
-      likePrefix(idOrPrefix),
+    const matches = await this.db.query<{ id: string }>(
+      `SELECT id FROM ${table} WHERE user_id = $1 AND id LIKE $2 ESCAPE '\\' LIMIT 2`,
+      [userId, likePrefix(idOrPrefix)],
     );
     if (matches.length > 1) {
       throw new AmbiguousIdError(`${idOrPrefix} matches more than one ${table.replace(/s$/, '')}; give more of the id`);
@@ -230,12 +221,12 @@ export class Reviews {
     return matches[0]?.id ?? null;
   }
 
-  repoId(owner: string, name: string): number {
-    this.store.run('INSERT INTO repos (owner, name) VALUES (?, ?) ON CONFLICT (owner, name) DO NOTHING', owner, name);
-    return this.store.get<{ id: number }>('SELECT id FROM repos WHERE owner = ? AND name = ?', owner, name)!.id;
+  async repoId(owner: string, name: string): Promise<number> {
+    await this.db.query('INSERT INTO repos (owner, name) VALUES ($1, $2) ON CONFLICT (owner, name) DO NOTHING', [owner, name]);
+    return (await this.db.one<{ id: number }>('SELECT id FROM repos WHERE owner = $1 AND name = $2', [owner, name]))!.id;
   }
 
-  findOrCreateSession(input: {
+  async findOrCreateSession(input: {
     userId: string;
     owner: string;
     repo: string;
@@ -244,127 +235,108 @@ export class Reviews {
     prMeta: PrMeta | null;
     baseSha: string;
     headSha: string;
-  }): { session: ReviewSessionRecord; created: boolean } {
-    const repoId = this.repoId(input.owner, input.repo);
-    const existing = this.store.get<{ id: string }>(
-      'SELECT id FROM sessions WHERE user_id = ? AND repo_id = ? AND base_sha = ? AND head_sha = ?',
-      input.userId,
-      repoId,
-      input.baseSha,
-      input.headSha,
-    );
-    if (existing) {
-      if (input.prMeta) {
-        this.store.run(
-          'UPDATE sessions SET pr_meta = ?, pr_number = COALESCE(pr_number, ?) WHERE id = ?',
-          JSON.stringify(input.prMeta),
-          input.prNumber,
-          existing.id,
-        );
-      }
-      return { session: this.getSession(input.userId, existing.id)!, created: false };
-    }
-    const id = randomUUID();
-    this.store.run(
+  }): Promise<{ session: ReviewSessionRecord; created: boolean }> {
+    const repoId = await this.repoId(input.owner, input.repo);
+    const inserted = await this.db.one<{ id: string }>(
       `INSERT INTO sessions (id, user_id, repo_id, kind, pr_number, pr_meta, base_sha, head_sha, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      id,
-      input.userId,
-      repoId,
-      input.kind,
-      input.prNumber,
-      input.prMeta ? JSON.stringify(input.prMeta) : null,
-      input.baseSha,
-      input.headSha,
-      new Date().toISOString(),
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       ON CONFLICT (user_id, repo_id, base_sha, head_sha) DO NOTHING RETURNING id`,
+      [
+        randomUUID(),
+        input.userId,
+        repoId,
+        input.kind,
+        input.prNumber,
+        input.prMeta ? JSON.stringify(input.prMeta) : null,
+        input.baseSha,
+        input.headSha,
+        new Date().toISOString(),
+      ],
     );
-    return { session: this.getSession(input.userId, id)!, created: true };
+    if (inserted) {
+      return { session: (await this.getSession(input.userId, inserted.id))!, created: true };
+    }
+    const existing = (await this.db.one<{ id: string }>(
+      'SELECT id FROM sessions WHERE user_id = $1 AND repo_id = $2 AND base_sha = $3 AND head_sha = $4',
+      [input.userId, repoId, input.baseSha, input.headSha],
+    ))!;
+    if (input.prMeta) {
+      await this.db.query('UPDATE sessions SET pr_meta = $1, pr_number = COALESCE(pr_number, $2) WHERE id = $3', [
+        JSON.stringify(input.prMeta),
+        input.prNumber,
+        existing.id,
+      ]);
+    }
+    return { session: (await this.getSession(input.userId, existing.id))!, created: false };
   }
 
-  getSession(userId: string, idOrPrefix: string): ReviewSessionRecord | null {
-    const id = this.resolveId('sessions', userId, idOrPrefix);
+  async getSession(userId: string, idOrPrefix: string): Promise<ReviewSessionRecord | null> {
+    const id = await this.resolveId('sessions', userId, idOrPrefix);
     if (!id) {
       return null;
     }
-    const row = this.store.get<SessionRow>(`${SESSION_SELECT} WHERE s.id = ? AND s.user_id = ?`, id, userId);
+    const row = await this.db.one<SessionRow>(`${SESSION_SELECT} WHERE s.id = $1 AND s.user_id = $2`, [id, userId]);
     return row ? rowToSession(row) : null;
   }
 
-  listSessions(userId: string, filter: { owner?: string; repo?: string; limit?: number } = {}): ReviewSessionRecord[] {
-    const clauses = ['s.user_id = ?'];
-    const params: (string | number)[] = [userId];
-    if (filter.owner && filter.repo) {
-      clauses.push('lower(r.owner) = lower(?) AND lower(r.name) = lower(?)');
-      params.push(filter.owner, filter.repo);
-    }
-    params.push(filter.limit ?? 100);
-    return this.store
-      .all<SessionRow>(
-        `${SESSION_SELECT} WHERE ${clauses.join(' AND ')} ORDER BY s.created_at DESC, s.rowid DESC LIMIT ?`,
-        ...params,
-      )
-      .map(rowToSession);
+  async listSessions(userId: string, filter: { owner?: string; repo?: string; limit?: number } = {}): Promise<ReviewSessionRecord[]> {
+    const byRepo = filter.owner && filter.repo;
+    const rows = await this.db.query<SessionRow>(
+      `${SESSION_SELECT} WHERE s.user_id = $1
+       ${byRepo ? 'AND lower(r.owner) = lower($3) AND lower(r.name) = lower($4)' : ''}
+       ORDER BY s.created_at DESC, s.seq DESC LIMIT $2`,
+      byRepo ? [userId, filter.limit ?? 100, filter.owner, filter.repo] : [userId, filter.limit ?? 100],
+    );
+    return rows.map(rowToSession);
   }
 
   /** Earlier sessions of the same pull request, newest first — where carried work comes from. */
-  priorPrSessions(userId: string, repoId: number, prNumber: number, excludeId: string): ReviewSessionRecord[] {
-    return this.store
-      .all<SessionRow>(
-        `${SESSION_SELECT} WHERE s.user_id = ? AND s.repo_id = ? AND s.pr_number = ? AND s.id != ?
-         ORDER BY s.created_at DESC, s.rowid DESC`,
-        userId,
-        repoId,
-        prNumber,
-        excludeId,
-      )
-      .map(rowToSession);
+  async priorPrSessions(userId: string, repoId: number, prNumber: number, excludeId: string): Promise<ReviewSessionRecord[]> {
+    const rows = await this.db.query<SessionRow>(
+      `${SESSION_SELECT} WHERE s.user_id = $1 AND s.repo_id = $2 AND s.pr_number = $3 AND s.id != $4
+       ORDER BY s.created_at DESC, s.seq DESC`,
+      [userId, repoId, prNumber, excludeId],
+    );
+    return rows.map(rowToSession);
   }
 
   /**
    * Moves rather than copies, so ids stay stable. Resolved and dismissed threads stay with the
    * commit where they were dealt with.
    */
-  moveOpenWork(userId: string, fromSessionIds: string[], toSessionId: string): number {
+  async moveOpenWork(userId: string, fromSessionIds: string[], toSessionId: string): Promise<number> {
     if (fromSessionIds.length === 0) {
       return 0;
     }
-    return this.store.transaction(() => {
-      const moved = this.store.run(
-        `UPDATE threads SET session_id = ? WHERE user_id = ? AND status = 'open' AND session_id IN (${placeholders(fromSessionIds)})`,
-        toSessionId,
-        userId,
-        ...fromSessionIds,
-      ).changes;
-      this.store.run(
-        `UPDATE tours SET session_id = ? WHERE user_id = ? AND session_id IN (${placeholders(fromSessionIds)})`,
-        toSessionId,
-        userId,
-        ...fromSessionIds,
+    return this.db.transaction(async tx => {
+      const moved = await tx.query(
+        `UPDATE threads SET session_id = $1 WHERE user_id = $2 AND status = 'open' AND session_id = ANY($3) RETURNING id`,
+        [toSessionId, userId, fromSessionIds],
       );
-      return moved;
+      await tx.query('UPDATE tours SET session_id = $1 WHERE user_id = $2 AND session_id = ANY($3)', [
+        toSessionId,
+        userId,
+        fromSessionIds,
+      ]);
+      return moved.length;
     });
   }
 
-  startReview(userId: string, sessionId: string, note: string): void {
-    this.store.run(
-      'UPDATE sessions SET review_started_at = ?, review_finished_at = NULL, review_note = ? WHERE id = ? AND user_id = ?',
-      new Date().toISOString(),
-      note,
-      sessionId,
-      userId,
+  async startReview(userId: string, sessionId: string, note: string): Promise<void> {
+    await this.db.query(
+      'UPDATE sessions SET review_started_at = $1, review_finished_at = NULL, review_note = $2 WHERE id = $3 AND user_id = $4',
+      [new Date().toISOString(), note, sessionId, userId],
     );
   }
 
-  finishReview(userId: string, sessionId: string): void {
-    this.store.run(
-      'UPDATE sessions SET review_finished_at = ? WHERE id = ? AND user_id = ? AND review_started_at IS NOT NULL',
-      new Date().toISOString(),
-      sessionId,
-      userId,
+  async finishReview(userId: string, sessionId: string): Promise<void> {
+    await this.db.query(
+      'UPDATE sessions SET review_finished_at = $1 WHERE id = $2 AND user_id = $3 AND review_started_at IS NOT NULL',
+      [new Date().toISOString(), sessionId, userId],
     );
   }
 
-  createThread(input: {
+  async createThread(input: {
     userId: string;
     sessionId: string;
     filePath: string;
@@ -375,62 +347,38 @@ export class Reviews {
     author: CommentAuthor;
     anchorContent?: string | null;
     kind?: CommentKind;
-  }): CommentThread {
+    githubCommentId?: number | null;
+  }): Promise<CommentThread> {
     const threadId = randomUUID();
-    const commentId = randomUUID();
     const now = new Date().toISOString();
-    this.store.transaction(() => {
-      this.store.run(
-        `INSERT INTO threads (id, user_id, session_id, file_path, side, start_line, end_line, anchor_content, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        threadId,
-        input.userId,
-        input.sessionId,
-        input.filePath,
-        input.side,
-        input.startLine,
-        input.endLine,
-        input.anchorContent ?? null,
-        now,
-        now,
+    await this.db.transaction(async tx => {
+      await tx.query(
+        `INSERT INTO threads (id, user_id, session_id, file_path, side, start_line, end_line, anchor_content, github_comment_id, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)`,
+        [
+          threadId,
+          input.userId,
+          input.sessionId,
+          input.filePath,
+          input.side,
+          input.startLine,
+          input.endLine,
+          input.anchorContent ?? null,
+          input.githubCommentId ?? null,
+          now,
+        ],
       );
-      this.insertComment(input.userId, commentId, threadId, input.author, input.body, input.kind ?? 'review', now);
+      await insertComment(tx, input.userId, threadId, input.author, input.body, input.kind ?? 'review', now);
     });
-    return this.getThread(input.userId, threadId)!;
+    return (await this.getThread(input.userId, threadId))!;
   }
 
-  private insertComment(
-    userId: string,
-    id: string,
-    threadId: string,
-    author: CommentAuthor,
-    body: string,
-    kind: CommentKind,
-    createdAt: string,
-  ): void {
-    this.store.run(
-      `INSERT INTO comments (id, user_id, thread_id, author_name, author_type, body, kind, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      id,
-      userId,
-      threadId,
-      author.name,
-      author.type,
-      body,
-      kind,
-      createdAt,
-    );
-  }
-
-  private commentsFor(threadIds: string[]): Map<string, Comment[]> {
+  private async commentsFor(threadIds: string[]): Promise<Map<string, Comment[]>> {
     const map = new Map<string, Comment[]>();
     if (threadIds.length === 0) {
       return map;
     }
-    const rows = this.store.all<CommentRow>(
-      `SELECT * FROM comments WHERE thread_id IN (${placeholders(threadIds)}) ORDER BY created_at ASC, rowid ASC`,
-      ...threadIds,
-    );
+    const rows = await this.db.query<CommentRow>('SELECT * FROM comments WHERE thread_id = ANY($1) ORDER BY seq ASC', [threadIds]);
     for (const row of rows) {
       const list = map.get(row.thread_id) ?? [];
       list.push(rowToComment(row));
@@ -439,194 +387,244 @@ export class Reviews {
     return map;
   }
 
-  getThread(userId: string, idOrPrefix: string): CommentThread | null {
-    const id = this.resolveId('threads', userId, idOrPrefix);
+  async getThread(userId: string, idOrPrefix: string): Promise<CommentThread | null> {
+    const id = await this.resolveId('threads', userId, idOrPrefix);
     if (!id) {
       return null;
     }
-    const row = this.store.get<ThreadRow>('SELECT * FROM threads WHERE id = ? AND user_id = ?', id, userId);
+    const row = await this.db.one<ThreadRow>('SELECT * FROM threads WHERE id = $1 AND user_id = $2', [id, userId]);
     if (!row) {
       return null;
     }
-    return rowToThread(row, this.commentsFor([row.id]).get(row.id) ?? []);
+    return rowToThread(row, (await this.commentsFor([row.id])).get(row.id) ?? []);
   }
 
-  threadsForSession(userId: string, sessionId: string, status?: ThreadStatus): CommentThread[] {
+  async threadsForSession(userId: string, sessionId: string, status?: ThreadStatus): Promise<CommentThread[]> {
     const rows = status
-      ? this.store.all<ThreadRow>(
-          'SELECT * FROM threads WHERE user_id = ? AND session_id = ? AND status = ? ORDER BY created_at ASC, rowid ASC',
-          userId,
-          sessionId,
-          status,
+      ? await this.db.query<ThreadRow>(
+          'SELECT * FROM threads WHERE user_id = $1 AND session_id = $2 AND status = $3 ORDER BY seq ASC',
+          [userId, sessionId, status],
         )
-      : this.store.all<ThreadRow>(
-          'SELECT * FROM threads WHERE user_id = ? AND session_id = ? ORDER BY created_at ASC, rowid ASC',
+      : await this.db.query<ThreadRow>('SELECT * FROM threads WHERE user_id = $1 AND session_id = $2 ORDER BY seq ASC', [
           userId,
           sessionId,
-        );
-    const comments = this.commentsFor(rows.map(row => row.id));
+        ]);
+    const comments = await this.commentsFor(rows.map(row => row.id));
     return rows.map(row => rowToThread(row, comments.get(row.id) ?? []));
   }
 
-  addReply(userId: string, threadId: string, body: string, author: CommentAuthor, kind: CommentKind = 'review'): Comment {
-    const id = randomUUID();
+  async addReply(userId: string, threadId: string, body: string, author: CommentAuthor, kind: CommentKind = 'review'): Promise<Comment> {
     const now = new Date().toISOString();
-    this.store.transaction(() => {
-      this.insertComment(userId, id, threadId, author, body, kind, now);
+    const id = await this.db.transaction(async tx => {
+      const commentId = await insertComment(tx, userId, threadId, author, body, kind, now);
       // A person answering a finding reopens it; an agent's note on it does not.
-      if (author.type === 'user') {
-        this.store.run("UPDATE threads SET status = 'open', updated_at = ? WHERE id = ? AND user_id = ?", now, threadId, userId);
-      } else {
-        this.store.run('UPDATE threads SET updated_at = ? WHERE id = ? AND user_id = ?', now, threadId, userId);
-      }
+      await tx.query(
+        `UPDATE threads SET updated_at = $1${author.type === 'user' ? ", status = 'open'" : ''} WHERE id = $2 AND user_id = $3`,
+        [now, threadId, userId],
+      );
+      return commentId;
     });
-    return rowToComment(this.store.get<CommentRow>('SELECT * FROM comments WHERE id = ?', id)!);
+    return rowToComment((await this.db.one<CommentRow>('SELECT * FROM comments WHERE id = $1', [id]))!);
   }
 
-  updateThreadStatus(userId: string, threadId: string, status: ThreadStatus, summary?: string, summaryAuthor?: CommentAuthor): void {
+  async updateThreadStatus(
+    userId: string,
+    threadId: string,
+    status: ThreadStatus,
+    summary?: string,
+    summaryAuthor?: CommentAuthor,
+  ): Promise<void> {
     const now = new Date().toISOString();
-    this.store.transaction(() => {
-      this.store.run('UPDATE threads SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?', status, now, threadId, userId);
-      if (summary && summaryAuthor) {
-        this.insertComment(userId, randomUUID(), threadId, summaryAuthor, summary, 'review', now);
+    await this.db.transaction(async tx => {
+      const updated = await tx.one('UPDATE threads SET status = $1, updated_at = $2 WHERE id = $3 AND user_id = $4 RETURNING id', [
+        status,
+        now,
+        threadId,
+        userId,
+      ]);
+      if (updated && summary && summaryAuthor) {
+        await insertComment(tx, userId, threadId, summaryAuthor, summary, 'review', now);
       }
     });
   }
 
-  updateThreadLines(userId: string, threadId: string, startLine: number, endLine: number): void {
-    this.store.run('UPDATE threads SET start_line = ?, end_line = ? WHERE id = ? AND user_id = ?', startLine, endLine, threadId, userId);
+  async updateThreadLines(userId: string, threadId: string, startLine: number, endLine: number): Promise<void> {
+    await this.db.query('UPDATE threads SET start_line = $1, end_line = $2 WHERE id = $3 AND user_id = $4', [
+      startLine,
+      endLine,
+      threadId,
+      userId,
+    ]);
   }
 
-  updateThreadPath(userId: string, threadId: string, filePath: string): void {
-    this.store.run('UPDATE threads SET file_path = ? WHERE id = ? AND user_id = ?', filePath, threadId, userId);
+  async updateThreadPath(userId: string, threadId: string, filePath: string): Promise<void> {
+    await this.db.query('UPDATE threads SET file_path = $1 WHERE id = $2 AND user_id = $3', [filePath, threadId, userId]);
   }
 
-  deleteThread(userId: string, threadId: string): void {
-    this.store.run('DELETE FROM threads WHERE id = ? AND user_id = ?', threadId, userId);
+  /** The ids among these whose findings are already on the pull request. */
+  async threadsOnTheForge(userId: string, threadIds: string[]): Promise<Set<string>> {
+    if (threadIds.length === 0) {
+      return new Set();
+    }
+    const rows = await this.db.query<{ id: string }>(
+      `SELECT id FROM threads WHERE user_id = $1 AND id = ANY($2)
+         AND (submitted_at IS NOT NULL OR github_comment_id IS NOT NULL)`,
+      [userId, threadIds],
+    );
+    return new Set(rows.map(row => row.id));
   }
 
-  deleteThreadsForSession(userId: string, sessionId: string): void {
-    this.store.run('DELETE FROM threads WHERE session_id = ? AND user_id = ?', sessionId, userId);
+  async markThreadsSubmitted(
+    userId: string,
+    sent: { threadId: string; body?: string; githubCommentId?: number }[],
+    submittedIn: { reviewUrl: string | null; headSha: string },
+  ): Promise<void> {
+    const now = new Date().toISOString();
+    for (const entry of sent) {
+      await this.db.query(
+        `UPDATE threads SET submitted_at = $1, submitted_review_url = $2, submitted_head_sha = $3,
+           submitted_body = COALESCE($4, submitted_body), github_comment_id = COALESCE($5, github_comment_id)
+         WHERE id = $6 AND user_id = $7`,
+        [now, submittedIn.reviewUrl, submittedIn.headSha, entry.body ?? null, entry.githubCommentId ?? null, entry.threadId, userId],
+      );
+    }
+  }
+
+  async setThreadForgeComment(userId: string, threadId: string, githubCommentId: number): Promise<void> {
+    await this.db.query('UPDATE threads SET github_comment_id = $1 WHERE id = $2 AND user_id = $3', [githubCommentId, threadId, userId]);
+  }
+
+  async deleteThread(userId: string, threadId: string): Promise<void> {
+    await this.db.query('DELETE FROM threads WHERE id = $1 AND user_id = $2', [threadId, userId]);
+  }
+
+  async deleteThreadsForSession(userId: string, sessionId: string): Promise<void> {
+    await this.db.query('DELETE FROM threads WHERE session_id = $1 AND user_id = $2', [sessionId, userId]);
   }
 
   /** The comment, with the thread and session it sits in, if it is this user's. */
-  findComment(userId: string, idOrPrefix: string): { comment: Comment; threadId: string; sessionId: string } | null {
-    const id = this.resolveId('comments', userId, idOrPrefix);
+  async findComment(userId: string, idOrPrefix: string): Promise<{ comment: Comment; threadId: string; sessionId: string } | null> {
+    const id = await this.resolveId('comments', userId, idOrPrefix);
     if (!id) {
       return null;
     }
-    const row = this.store.get<CommentRow & { session_id: string }>(
+    const row = await this.db.one<CommentRow & { session_id: string }>(
       `SELECT c.*, t.session_id FROM comments c JOIN threads t ON t.id = c.thread_id
-        WHERE c.id = ? AND c.user_id = ?`,
-      id,
-      userId,
+        WHERE c.id = $1 AND c.user_id = $2`,
+      [id, userId],
     );
     return row ? { comment: rowToComment(row), threadId: row.thread_id, sessionId: row.session_id } : null;
   }
 
-  editComment(userId: string, commentId: string, body: string): void {
-    this.store.run('UPDATE comments SET body = ? WHERE id = ? AND user_id = ?', body, commentId, userId);
+  async editComment(userId: string, commentId: string, body: string): Promise<void> {
+    await this.db.query('UPDATE comments SET body = $1 WHERE id = $2 AND user_id = $3', [body, commentId, userId]);
   }
 
   /** The last comment of a thread takes the thread with it: an empty thread renders as nothing. */
-  deleteComment(userId: string, commentId: string): void {
-    const row = this.store.get<{ thread_id: string }>('SELECT thread_id FROM comments WHERE id = ? AND user_id = ?', commentId, userId);
-    if (!row) {
-      return;
-    }
-    this.store.transaction(() => {
-      this.store.run('DELETE FROM comments WHERE id = ? AND user_id = ?', commentId, userId);
-      const remaining = this.store.get<{ n: number }>('SELECT COUNT(*) AS n FROM comments WHERE thread_id = ?', row.thread_id);
-      if (remaining?.n === 0) {
-        this.store.run('DELETE FROM threads WHERE id = ? AND user_id = ?', row.thread_id, userId);
+  async deleteComment(userId: string, commentId: string): Promise<void> {
+    await this.db.transaction(async tx => {
+      const deleted = await tx.one<{ thread_id: string }>(
+        'DELETE FROM comments WHERE id = $1 AND user_id = $2 RETURNING thread_id',
+        [commentId, userId],
+      );
+      if (deleted) {
+        await tx.query(
+          'DELETE FROM threads WHERE id = $1 AND user_id = $2 AND NOT EXISTS (SELECT 1 FROM comments WHERE thread_id = $1)',
+          [deleted.thread_id, userId],
+        );
       }
     });
   }
 
-  createTour(userId: string, sessionId: string, topic: string, body: string): Tour {
+  async createTour(userId: string, sessionId: string, topic: string, body: string): Promise<Tour> {
     const id = randomUUID();
-    this.store.run(
-      'INSERT INTO tours (id, user_id, session_id, topic, body, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    await this.db.query('INSERT INTO tours (id, user_id, session_id, topic, body, created_at) VALUES ($1, $2, $3, $4, $5, $6)', [
       id,
       userId,
       sessionId,
       topic,
       body,
       new Date().toISOString(),
-    );
-    return this.getTour(userId, id)!;
+    ]);
+    return (await this.getTour(userId, id))!;
   }
 
-  getTour(userId: string, idOrPrefix: string): Tour | null {
-    const id = this.resolveId('tours', userId, idOrPrefix);
+  async getTour(userId: string, idOrPrefix: string): Promise<Tour | null> {
+    const id = await this.resolveId('tours', userId, idOrPrefix);
     if (!id) {
       return null;
     }
-    const row = this.store.get<TourRow>('SELECT * FROM tours WHERE id = ? AND user_id = ?', id, userId);
+    const row = await this.db.one<TourRow>('SELECT * FROM tours WHERE id = $1 AND user_id = $2', [id, userId]);
     if (!row) {
       return null;
     }
-    const steps = this.store.all<TourStepRow>('SELECT * FROM tour_steps WHERE tour_id = ? ORDER BY sort_order ASC', row.id);
-    return this.rowToTour(row, steps.map(rowToStep));
+    const steps = await this.db.query<TourStepRow>('SELECT * FROM tour_steps WHERE tour_id = $1 ORDER BY sort_order ASC', [row.id]);
+    return rowToTour(row, steps.map(rowToStep));
   }
 
-  private rowToTour(row: TourRow, steps: TourStep[]): Tour {
-    return {
-      id: row.id,
-      sessionId: row.session_id,
-      topic: row.topic,
-      body: row.body,
-      status: isTourStatus(row.status) ? row.status : 'ready',
-      createdAt: row.created_at,
-      steps,
-    };
-  }
-
-  toursForSession(userId: string, sessionId: string): Tour[] {
-    const rows = this.store.all<TourRow>(
-      'SELECT * FROM tours WHERE user_id = ? AND session_id = ? ORDER BY created_at ASC, rowid ASC',
+  async toursForSession(userId: string, sessionId: string): Promise<Tour[]> {
+    const rows = await this.db.query<TourRow>('SELECT * FROM tours WHERE user_id = $1 AND session_id = $2 ORDER BY seq ASC', [
       userId,
       sessionId,
-    );
+    ]);
     if (rows.length === 0) {
       return [];
     }
-    const steps = this.store.all<TourStepRow>(
-      `SELECT * FROM tour_steps WHERE tour_id IN (${placeholders(rows)}) ORDER BY sort_order ASC`,
-      ...rows.map(row => row.id),
-    );
-    return rows.map(row => this.rowToTour(row, steps.filter(step => step.tour_id === row.id).map(rowToStep)));
+    const steps = await this.db.query<TourStepRow>('SELECT * FROM tour_steps WHERE tour_id = ANY($1) ORDER BY sort_order ASC', [
+      rows.map(row => row.id),
+    ]);
+    return rows.map(row => rowToTour(row, steps.filter(step => step.tour_id === row.id).map(rowToStep)));
   }
 
-  addTourStep(
+  async addTourStep(
     userId: string,
     tourId: string,
     step: { filePath: string; startLine: number; endLine: number; body: string; annotation: string },
-  ): TourStep {
-    const id = randomUUID();
-    const max = this.store.get<{ n: number }>('SELECT COALESCE(MAX(sort_order), 0) AS n FROM tour_steps WHERE tour_id = ?', tourId);
-    this.store.run(
+  ): Promise<TourStep> {
+    const row = await this.db.one<TourStepRow>(
       `INSERT INTO tour_steps (id, user_id, tour_id, sort_order, file_path, start_line, end_line, body, annotation, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      id,
-      userId,
-      tourId,
-      (max?.n ?? 0) + 1,
-      step.filePath,
-      step.startLine,
-      step.endLine,
-      step.body,
-      step.annotation,
-      new Date().toISOString(),
+       VALUES ($1, $2, $3, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM tour_steps WHERE tour_id = $3), $4, $5, $6, $7, $8, $9)
+       RETURNING *`,
+      [randomUUID(), userId, tourId, step.filePath, step.startLine, step.endLine, step.body, step.annotation, new Date().toISOString()],
     );
-    return rowToStep(this.store.get<TourStepRow>('SELECT * FROM tour_steps WHERE id = ?', id)!);
+    return rowToStep(row!);
   }
 
-  updateTourStatus(userId: string, tourId: string, status: TourStatus): void {
-    this.store.run('UPDATE tours SET status = ? WHERE id = ? AND user_id = ?', status, tourId, userId);
+  async updateTourStatus(userId: string, tourId: string, status: TourStatus): Promise<void> {
+    await this.db.query('UPDATE tours SET status = $1 WHERE id = $2 AND user_id = $3', [status, tourId, userId]);
   }
 
-  deleteTour(userId: string, tourId: string): void {
-    this.store.run('DELETE FROM tours WHERE id = ? AND user_id = ?', tourId, userId);
+  async deleteTour(userId: string, tourId: string): Promise<void> {
+    await this.db.query('DELETE FROM tours WHERE id = $1 AND user_id = $2', [tourId, userId]);
   }
+}
+
+async function insertComment(
+  tx: Queryable,
+  userId: string,
+  threadId: string,
+  author: CommentAuthor,
+  body: string,
+  kind: CommentKind,
+  createdAt: string,
+): Promise<string> {
+  const id = randomUUID();
+  await tx.query(
+    `INSERT INTO comments (id, user_id, thread_id, author_name, author_type, body, kind, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [id, userId, threadId, author.name, author.type, body, kind, createdAt],
+  );
+  return id;
+}
+
+function rowToTour(row: TourRow, steps: TourStep[]): Tour {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    topic: row.topic,
+    body: row.body,
+    status: isTourStatus(row.status) ? row.status : 'ready',
+    createdAt: row.created_at,
+    steps,
+  };
 }

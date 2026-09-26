@@ -9,7 +9,7 @@ import { useHighlighter } from '../../hooks/use-highlighter';
 import { type ViewMode, getFilePath } from '../../lib/diff-utils';
 import type { TourFocusRange, TourMark } from '../../lib/tour-marks';
 import { isScrolledPastFileTop } from '../../lib/collapse-anchor';
-import type { CommentAuthor, CommentSide, CommentThread, LineSelection } from '../comments/types';
+import type { CommentThread, LineSelection } from '../comments/types';
 import type { CommentActions } from '../../hooks/use-comment-actions';
 
 function flashThreadElement(element: Element) {
@@ -46,9 +46,6 @@ interface DiffViewProps {
   onActiveFileChange?: (path: string) => void;
   scrollRef?: React.RefCallback<HTMLElement>;
   handle?: React.Ref<DiffViewHandle>;
-  baseRef?: string;
-  canRevert?: boolean;
-  onRevert?: () => void;
   threads: CommentThread[];
   commentsEnabled: boolean;
   commentActions: CommentActions;
@@ -60,14 +57,6 @@ interface DiffViewProps {
   tourMarksByFile?: Map<string, TourMark[]>;
   activeStepIndex?: number;
   onTourMarkClick?: (stepIndex: number) => void;
-  /** Files that have moved since the diff was loaded, so each can offer to reload itself. */
-  staleFiles?: string[];
-  onRefreshFile?: (path: string) => void;
-  onAskThread?: (filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor) => void;
-  onAskReply?: (threadId: string, body: string, author: CommentAuthor) => void;
-  onActThread?: (filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor) => void;
-  onActReply?: (threadId: string, body: string, author: CommentAuthor) => void;
-  askIsHeard?: boolean;
 }
 
 function estimateFileHeight(file: { hunks: { lines: { length: number } }[]; isBinary: boolean }, collapsed: boolean): number {
@@ -91,20 +80,13 @@ export function DiffView(props: DiffViewProps) {
   const {
     diff, viewMode, theme, collapsedFiles, onToggleCollapse,
     reviewedFiles, onReviewedChange, onActiveFileChange, scrollRef,
-    handle, baseRef, canRevert, onRevert,
+    handle,
     threads, commentsEnabled, commentActions, onAddThread,
     pendingSelection, onPendingSelectionChange,
     focusRangesByFile,
     tourMarksByFile,
     activeStepIndex,
     onTourMarkClick,
-    staleFiles,
-    onRefreshFile,
-    onAskThread,
-    onAskReply,
-    onActThread,
-    onActReply,
-    askIsHeard,
   } = props;
   const { highlight } = useHighlighter();
   const scrollElementRef = useRef<HTMLElement>(null);
@@ -340,11 +322,6 @@ export function DiffView(props: DiffViewProps) {
         <GeneralComments
           threads={threads}
           commentActions={commentActions}
-          onAskReply={onAskReply}
-          onActReply={onActReply}
-          onAskThread={onAskThread}
-          onActThread={onActThread}
-          askIsHeard={askIsHeard}
         />
       )}
       {commentsEnabled && lostThreads.length > 0 && (
@@ -367,13 +344,6 @@ export function DiffView(props: DiffViewProps) {
             >
               <FileBlock
                 focusRanges={focusRangesByFile?.get(filePath)}
-                isStale={staleFiles?.includes(filePath)}
-                onRefreshFile={onRefreshFile}
-                onAskThread={onAskThread}
-                onAskReply={onAskReply}
-                onActThread={onActThread}
-                onActReply={onActReply}
-                askIsHeard={askIsHeard}
                 tourMarks={tourMarksByFile?.get(filePath)}
                 activeStepIndex={activeStepIndex}
                 onTourMarkClick={onTourMarkClick}
@@ -390,9 +360,6 @@ export function DiffView(props: DiffViewProps) {
                 reviewed={reviewedFiles.has(filePath)}
                 onReviewedChange={onReviewedChange}
                 highlightLine={highlighters.get(filePath)}
-                baseRef={baseRef}
-                canRevert={canRevert}
-                onRevert={onRevert}
                 threads={threads}
                 commentsEnabled={commentsEnabled}
                 commentActions={commentActions}

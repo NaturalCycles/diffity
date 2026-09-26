@@ -1,6 +1,19 @@
-import { chmodSync, mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
-import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import pg, { type PoolConfig } from 'pg';
+import { PGlite, types as pgliteTypes } from '@electric-sql/pglite';
+
+export interface Queryable {
+  query<T>(sql: string, params?: unknown[]): Promise<T[]>;
+  one<T>(sql: string, params?: unknown[]): Promise<T | undefined>;
+  /** Several statements, no parameters: migrations. */
+  exec(sql: string): Promise<void>;
+}
+
+export interface Db extends Queryable {
+  transaction<T>(work: (tx: Queryable) => Promise<T>): Promise<T>;
+  close(): Promise<void>;
+}
 
 export interface Migration {
   version: number;
@@ -18,6 +31,11 @@ export const MIGRATIONS: Migration[] = [
         name TEXT NOT NULL,
         settings TEXT NOT NULL DEFAULT '{"shareReviews":"private"}',
         github_token TEXT,
+        github_login TEXT,
+        github_access_token TEXT,
+        github_access_expires_at BIGINT,
+        github_refresh_token TEXT,
+        github_refresh_expires_at BIGINT,
         created_at TEXT NOT NULL
       );
 
@@ -25,7 +43,13 @@ export const MIGRATIONS: Migration[] = [
         id_hash TEXT PRIMARY KEY,
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         created_at TEXT NOT NULL,
-        expires_at INTEGER NOT NULL
+        expires_at BIGINT NOT NULL
+      );
+
+      CREATE TABLE github_oauth_states (
+        state_hash TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        expires_at BIGINT NOT NULL
       );
 
       CREATE TABLE oauth_clients (
@@ -43,7 +67,7 @@ export const MIGRATIONS: Migration[] = [
         redirect_uri TEXT NOT NULL,
         scopes TEXT NOT NULL,
         resource TEXT,
-        expires_at INTEGER NOT NULL
+        expires_at BIGINT NOT NULL
       );
 
       CREATE TABLE oauth_tokens (
@@ -53,13 +77,13 @@ export const MIGRATIONS: Migration[] = [
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         scopes TEXT NOT NULL,
         resource TEXT,
-        expires_at INTEGER NOT NULL,
+        expires_at BIGINT NOT NULL,
         created_at TEXT NOT NULL
       );
       CREATE INDEX idx_oauth_tokens_user ON oauth_tokens(user_id);
 
       CREATE TABLE repos (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
         owner TEXT NOT NULL,
         name TEXT NOT NULL,
         UNIQUE (owner, name)
@@ -67,6 +91,7 @@ export const MIGRATIONS: Migration[] = [
 
       CREATE TABLE sessions (
         id TEXT PRIMARY KEY,
+        seq BIGINT GENERATED ALWAYS AS IDENTITY,
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         repo_id INTEGER NOT NULL REFERENCES repos(id),
         kind TEXT NOT NULL CHECK (kind IN ('pr', 'shas', 'patch')),
@@ -84,6 +109,7 @@ export const MIGRATIONS: Migration[] = [
 
       CREATE TABLE threads (
         id TEXT PRIMARY KEY,
+        seq BIGINT GENERATED ALWAYS AS IDENTITY,
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
         file_path TEXT NOT NULL,
@@ -96,7 +122,7 @@ export const MIGRATIONS: Migration[] = [
         submitted_review_url TEXT,
         submitted_head_sha TEXT,
         submitted_body TEXT,
-        github_comment_id INTEGER,
+        github_comment_id BIGINT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -104,6 +130,7 @@ export const MIGRATIONS: Migration[] = [
 
       CREATE TABLE comments (
         id TEXT PRIMARY KEY,
+        seq BIGINT GENERATED ALWAYS AS IDENTITY,
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
         author_name TEXT NOT NULL,
@@ -116,6 +143,7 @@ export const MIGRATIONS: Migration[] = [
 
       CREATE TABLE tours (
         id TEXT PRIMARY KEY,
+        seq BIGINT GENERATED ALWAYS AS IDENTITY,
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
         topic TEXT NOT NULL,
@@ -142,85 +170,125 @@ export const MIGRATIONS: Migration[] = [
   },
 ];
 
-/**
- * node:sqlite types every row as `Record<string, SQLOutputValue>`, so the shape a query returns
- * has to be asserted; these keep the assertion in one place.
- */
-export class Store {
-  readonly db: DatabaseSync;
+/** Any constant; two instances starting together take turns migrating. */
+const MIGRATION_LOCK = 5390;
 
-  constructor(path: string, migrations: Migration[] = MIGRATIONS) {
-    mkdirSync(dirname(path), { recursive: true });
-    this.db = new DatabaseSync(path);
-    // Anchor content is source code and the tables hold token hashes; neither is for other users.
-    for (const file of [path, `${path}-wal`, `${path}-shm`]) {
-      try {
-        chmodSync(file, 0o600);
-      } catch {
-        // The WAL siblings appear only once something has been written.
+/** Every expiry is epoch milliseconds, past what int4 holds, and exact in a JS number. */
+const INT8 = 20;
+
+export async function migrate(db: Db, migrations: Migration[] = MIGRATIONS): Promise<void> {
+  await db.transaction(async tx => {
+    await tx.query('SELECT pg_advisory_xact_lock($1)', [MIGRATION_LOCK]);
+    await tx.exec('CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)');
+    const applied = new Set((await tx.query<{ version: number }>('SELECT version FROM schema_version')).map(row => row.version));
+    for (const migration of [...migrations].sort((a, b) => a.version - b.version)) {
+      if (applied.has(migration.version)) {
+        continue;
       }
-    }
-    this.db.exec('PRAGMA journal_mode = WAL');
-    this.db.exec('PRAGMA foreign_keys = ON');
-    this.db.exec('PRAGMA busy_timeout = 5000');
-    migrate(this.db, migrations);
-  }
-
-  all<T>(sql: string, ...params: SQLInputValue[]): T[] {
-    return this.db.prepare(sql).all(...params) as T[];
-  }
-
-  get<T>(sql: string, ...params: SQLInputValue[]): T | undefined {
-    return this.db.prepare(sql).get(...params) as T | undefined;
-  }
-
-  run(sql: string, ...params: SQLInputValue[]): { changes: number } {
-    const result = this.db.prepare(sql).run(...params);
-    return { changes: Number(result.changes) };
-  }
-
-  transaction<T>(work: () => T): T {
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      const result = work();
-      this.db.exec('COMMIT');
-      return result;
-    } catch (err) {
-      this.db.exec('ROLLBACK');
-      throw err;
-    }
-  }
-
-  schemaVersion(): number {
-    return this.get<{ version: number }>('SELECT MAX(version) AS version FROM schema_version')?.version ?? 0;
-  }
-
-  close(): void {
-    this.db.close();
-  }
-}
-
-function migrate(db: DatabaseSync, migrations: Migration[]): void {
-  db.exec('CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)');
-  const applied = new Set(
-    (db.prepare('SELECT version FROM schema_version').all() as { version: number }[]).map(row => row.version),
-  );
-  const ordered = [...migrations].sort((a, b) => a.version - b.version);
-  for (const migration of ordered) {
-    if (applied.has(migration.version)) {
-      continue;
-    }
-    db.exec('BEGIN IMMEDIATE');
-    try {
-      db.exec(migration.sql);
-      db.prepare('INSERT INTO schema_version (version, applied_at) VALUES (?, ?)').run(
+      try {
+        await tx.exec(migration.sql);
+      } catch (err) {
+        throw new Error(`Migration ${migration.version} failed: ${err instanceof Error ? err.message : err}`);
+      }
+      await tx.query('INSERT INTO schema_version (version, applied_at) VALUES ($1, $2)', [
         migration.version,
         new Date().toISOString(),
-      );
-      db.exec('COMMIT');
-    } catch (err) {
-      db.exec('ROLLBACK');
-      throw new Error(`Migration ${migration.version} failed: ${err instanceof Error ? err.message : err}`);
+      ]);
     }
+  });
+}
+
+export async function schemaVersion(db: Queryable): Promise<number> {
+  return (await db.one<{ version: number | null }>('SELECT MAX(version) AS version FROM schema_version'))?.version ?? 0;
+}
+
+type PgClient = pg.Pool | pg.PoolClient;
+
+function pgQueryable(client: PgClient): Queryable {
+  return {
+    query: async <T>(sql: string, params: unknown[] = []) => (await client.query(sql, params)).rows as T[],
+    one: async <T>(sql: string, params: unknown[] = []) => (await client.query(sql, params)).rows[0] as T | undefined,
+    exec: async (sql: string) => {
+      await client.query(sql);
+    },
+  };
+}
+
+/**
+ * Cloud SQL's server certificate names the instance, not the private IP it is reached on, so the
+ * chain is verified against the CA and the host name is not: libpq's `verify-ca`. The CA comes as
+ * a secret's content, so the file-based URL parameters are dropped.
+ */
+export function pgPoolConfig(databaseUrl: string, ca: string | null): PoolConfig {
+  if (!ca) {
+    return { connectionString: databaseUrl };
   }
+  const url = new URL(databaseUrl);
+  url.searchParams.delete('sslmode');
+  url.searchParams.delete('sslrootcert');
+  return { connectionString: url.href, ssl: { ca, rejectUnauthorized: true, checkServerIdentity: () => undefined } };
+}
+
+export function openPostgres(config: PoolConfig): Db {
+  const pool = new pg.Pool({
+    ...config,
+    types: { getTypeParser: ((oid: number, format?: 'text' | 'binary') =>
+      oid === INT8 ? Number : pg.types.getTypeParser(oid, format)) as typeof pg.types.getTypeParser },
+  });
+  return {
+    ...pgQueryable(pool),
+    transaction: async work => {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const result = await work(pgQueryable(client));
+        await client.query('COMMIT');
+        return result;
+      } catch (err) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw err;
+      } finally {
+        client.release();
+      }
+    },
+    close: () => pool.end(),
+  };
+}
+
+type PgliteLike = Pick<PGlite, 'query' | 'exec'>;
+
+function pgliteQueryable(client: PgliteLike): Queryable {
+  return {
+    query: async <T>(sql: string, params: unknown[] = []) => (await client.query<T>(sql, params)).rows,
+    one: async <T>(sql: string, params: unknown[] = []) => (await client.query<T>(sql, params)).rows[0],
+    exec: async (sql: string) => {
+      await client.exec(sql);
+    },
+  };
+}
+
+/** In memory without a directory. */
+export async function openPglite(dataDir?: string): Promise<Db> {
+  if (dataDir) {
+    mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+  }
+  const db = await PGlite.create(dataDir, { parsers: { [pgliteTypes.INT8]: (value: string) => Number(value) } });
+  return {
+    ...pgliteQueryable(db),
+    transaction: work => db.transaction(tx => work(pgliteQueryable(tx))),
+    close: () => db.close(),
+  };
+}
+
+export async function openDb(options: { databaseUrl: string | null; pgCa: string | null; dataDir: string }): Promise<Db> {
+  const db = options.databaseUrl
+    ? openPostgres(pgPoolConfig(options.databaseUrl, options.pgCa))
+    : await openPglite(join(options.dataDir, 'pg'));
+  try {
+    await migrate(db);
+  } catch (err) {
+    await db.close();
+    throw err;
+  }
+  return db;
 }

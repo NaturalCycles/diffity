@@ -17,6 +17,12 @@ describe('loadConfig', () => {
     expect(config.devLogin).toBe(false);
     expect(config.devGitHubToken).toBeNull();
     expect(config.githubApiUrl).toBe('https://api.github.com');
+    expect(config.githubUrl).toBe('https://github.com');
+    expect(config.githubApp).toBeNull();
+    expect(config.databaseUrl).toBeNull();
+    expect(config.pgCa).toBeNull();
+    expect(config.iapAudience).toBeNull();
+    expect(config.trustProxy).toBe(false);
     expect(config.secretKeyGenerated).toBe(true);
     expect(config.secretKey).toHaveLength(32);
   });
@@ -32,6 +38,13 @@ describe('loadConfig', () => {
       DIFFITY_ALLOWED_EMAILS: ' A@x.io, b@y.io ,',
       DIFFITY_DEV_GITHUB_TOKEN: 'ghp_x',
       GITHUB_API_URL: 'http://127.0.0.1:1/',
+      GITHUB_URL: 'http://127.0.0.1:2/',
+      DIFFITY_GITHUB_APP_CLIENT_ID: 'Iv1.x',
+      DIFFITY_GITHUB_APP_CLIENT_SECRET: 's3cret',
+      DIFFITY_GITHUB_APP_SLUG: 'diffity-nc',
+      DATABASE_URL: 'postgresql://u:p@10.0.0.3/diffity',
+      DIFFITY_PG_CA: '-----BEGIN CERTIFICATE-----',
+      DIFFITY_TRUST_PROXY: '1',
     });
     expect(config.port).toBe(8080);
     expect(config.bindHost).toBe('127.0.0.1');
@@ -42,12 +55,33 @@ describe('loadConfig', () => {
     expect(config.allowedEmails).toEqual(['a@x.io', 'b@y.io']);
     expect(config.devGitHubToken).toBe('ghp_x');
     expect(config.githubApiUrl).toBe('http://127.0.0.1:1');
+    expect(config.githubUrl).toBe('http://127.0.0.1:2');
+    expect(config.githubApp).toEqual({ clientId: 'Iv1.x', clientSecret: 's3cret', slug: 'diffity-nc' });
+    expect(config.databaseUrl).toBe('postgresql://u:p@10.0.0.3/diffity');
+    expect(config.pgCa).toBe('-----BEGIN CERTIFICATE-----');
+    expect(config.trustProxy).toBe(1);
+  });
+
+  it('reads the IAP audience and every form of trust proxy', () => {
+    const behindIap = loadConfig({
+      DIFFITY_DATA_DIR: '/d', DIFFITY_PUBLIC_URL: 'https://d.example.com', DIFFITY_SECRET_KEY: key,
+      DIFFITY_IAP_AUDIENCE: '/projects/1/global/backendServices/2',
+    });
+    expect(behindIap.iapAudience).toBe('/projects/1/global/backendServices/2');
+    expect(behindIap.githubApp).toBeNull();
+    const proxy = (value: string) => loadConfig({ DIFFITY_DATA_DIR: '/d', DIFFITY_TRUST_PROXY: value }).trustProxy;
+    expect(proxy('true')).toBe(true);
+    expect(proxy('false')).toBe(false);
+    expect(proxy('0')).toBe(false);
+    expect(proxy('2')).toBe(2);
+    expect(proxy('loopback, 10.0.0.0/8')).toBe('loopback, 10.0.0.0/8');
   });
 
   it('binds every interface for a public URL, or where told to', () => {
     expect(loadConfig({ DIFFITY_DATA_DIR: '/d', DIFFITY_PUBLIC_URL: 'https://d.example.com', DIFFITY_SECRET_KEY: key }).bindHost)
       .toBe('0.0.0.0');
     expect(loadConfig({ DIFFITY_DATA_DIR: '/d', DIFFITY_BIND: '0.0.0.0' }).bindHost).toBe('0.0.0.0');
+    expect(loadConfig({ DIFFITY_DATA_DIR: '/d', K_SERVICE: 'diffity' }).bindHost).toBe('0.0.0.0');
   });
 
   it.each([
@@ -66,6 +100,9 @@ describe('loadConfig', () => {
       { DIFFITY_DATA_DIR: '/d', DIFFITY_PUBLIC_URL: 'https://diffity.example.com', DIFFITY_SECRET_KEY: key, DIFFITY_DEV_GITHUB_TOKEN: 't' },
       'DIFFITY_DEV_GITHUB_TOKEN is only allowed',
     ],
+    [{ DIFFITY_DATA_DIR: '/d', DIFFITY_GITHUB_APP_CLIENT_ID: 'Iv1.x' }, 'go together'],
+    [{ DIFFITY_DATA_DIR: '/d', DIFFITY_GITHUB_APP_CLIENT_SECRET: 's' }, 'go together'],
+    [{ DIFFITY_DATA_DIR: '/d', DIFFITY_DEV_LOGIN: '1', DIFFITY_IAP_AUDIENCE: '/projects/1/global/backendServices/2' }, 'set one'],
   ])('rejects %j', (env, message) => {
     expect(() => loadConfig(env)).toThrow(ConfigError);
     expect(() => loadConfig(env)).toThrow(message);

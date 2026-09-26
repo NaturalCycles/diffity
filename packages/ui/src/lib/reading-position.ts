@@ -1,6 +1,6 @@
 /**
  * The file the reader was last looking at, so a page rebuilt underneath them — a server restart, a
- * failed poll — puts them back rather than at the top of the diff. Kept per checkout and diff,
+ * failed poll — puts them back rather than at the top of the diff. Kept per repository and branch,
  * because a position from one diff means nothing in another.
  */
 function key(repoRoot: string, ref: string): string {

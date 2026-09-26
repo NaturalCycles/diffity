@@ -71,8 +71,8 @@ beforeAll(async () => {
   server = await startTestServer(dataDir, github.url, { remoteUrl: fixture.remoteUrl, uiDir: fakeUiDir(dataDir) });
   aliceCookie = await login(server.base, 'alice@example.com');
   bobCookie = await login(server.base, 'bob@example.com');
-  aliceId = server.users.findOrCreate('alice@example.com').id;
-  bobId = server.users.findOrCreate('bob@example.com').id;
+  aliceId = (await server.users.findOrCreate('alice@example.com')).id;
+  bobId = (await server.users.findOrCreate('bob@example.com')).id;
   session = (await server.service.createSession(aliceId, { repo: 'acme/widgets', base: fixture.base, head: fixture.head2 })).session;
   prSession = (await server.service.createSession(aliceId, { repo: 'acme/widgets', pr: 1 })).session;
   bobSession = (await server.service.createSession(bobId, { repo: 'acme/widgets', base: fixture.base, head: fixture.head1 })).session;
@@ -133,8 +133,8 @@ describe('web pages', () => {
       body: 'token=ghp_pasted',
     });
     expect(save.status).toBe(303);
-    expect(server.users.gitHubToken(aliceId)).toBe('ghp_pasted');
-    expect(JSON.stringify(server.store.all('SELECT github_token FROM users'))).not.toContain('ghp_pasted');
+    expect(await server.users.gitHubToken(aliceId)).toBe('ghp_pasted');
+    expect(JSON.stringify(await server.db.query('SELECT github_token FROM users'))).not.toContain('ghp_pasted');
     expect((await api('/settings', { cookie: aliceCookie })).body).toContain('Your own token is set');
     await api('/settings/github-token', {
       method: 'POST',
@@ -142,7 +142,7 @@ describe('web pages', () => {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: 'clear=1',
     });
-    expect(server.users.gitHubToken(aliceId)).toBeNull();
+    expect(await server.users.gitHubToken(aliceId)).toBeNull();
   });
 
   it('signs out', async () => {
@@ -190,10 +190,7 @@ describe('the UI API', () => {
     expect(info).toMatchObject({
       name: 'acme/widgets',
       sessionId: session.id,
-      capabilities: { reviews: true, revert: false, staleness: false },
       github: null,
-      editor: null,
-      hosted: true,
     });
     const pr = (await api(`/s/${prSession.id}/api/info`, { cookie: aliceCookie })).body as RepoInfoResponse;
     expect(pr).toMatchObject({ github: { owner: 'acme', repo: 'widgets' }, branch: 'feature', description: '#1 Change line ten' });
@@ -236,7 +233,6 @@ describe('the UI API', () => {
     expect(created.status).toBe(200);
     const thread = created.body as CommentThread;
     expect(thread.comments[0].author).toEqual({ name: 'alice', type: 'user' });
-    expect(thread.comments[0].liveRequestedAt).toBeNull();
 
     const reply = await api(`${base()}/threads/${thread.id}/reply`, {
       method: 'POST', cookie: aliceCookie, json: { body: 'More', author: { name: 'x', type: 'user' }, kind: 'aside' },
@@ -290,11 +286,11 @@ describe('the UI API', () => {
   });
 
   it('keeps a thread, comment or tour of one session out of another’s URL', async () => {
-    const thread = server.service.reviews.createThread({
+    const thread = await server.service.reviews.createThread({
       userId: aliceId, sessionId: prSession.id, filePath: 'src.ts', side: 'new', startLine: 1, endLine: 1,
       body: 'In the PR session', author: { name: 'a', type: 'agent' },
     });
-    const tour = server.service.reviews.createTour(aliceId, prSession.id, 'Order', '');
+    const tour = await server.service.reviews.createTour(aliceId, prSession.id, 'Order', '');
     expect((await api(`${base()}/threads/${thread.id}/reply`, {
       method: 'POST', cookie: aliceCookie, json: { body: 'x', author: { name: 'a', type: 'user' } },
     })).status).toBe(404);
@@ -307,27 +303,27 @@ describe('the UI API', () => {
     const bobBase = `/s/${bobSession.id}/api`;
     expect((await api(`${bobBase}/threads/${thread.id}`, { method: 'DELETE', cookie: bobCookie })).status).toBe(404);
     expect((await api(`${bobBase}/tours/${tour.id}`, { cookie: bobCookie })).status).toBe(404);
-    expect(server.service.reviews.getThread(aliceId, thread.id)?.status).toBe('open');
+    expect((await server.service.reviews.getThread(aliceId, thread.id))?.status).toBe('open');
   });
 
   it('lists tours and serves one', async () => {
-    const tour = server.service.reviews.createTour(aliceId, session.id, 'Reading order', 'why');
-    server.service.reviews.addTourStep(aliceId, tour.id, { filePath: 'src.ts', startLine: 10, endLine: 10, body: 'b', annotation: 'a' });
+    const tour = await server.service.reviews.createTour(aliceId, session.id, 'Reading order', 'why');
+    await server.service.reviews.addTourStep(aliceId, tour.id, { filePath: 'src.ts', startLine: 10, endLine: 10, body: 'b', annotation: 'a' });
     const listed = (await api(`${base()}/tours?session=${session.id}`, { cookie: aliceCookie })).body as Tour[];
     expect(listed.map(t => t.topic)).toEqual(['Reading order']);
     expect(((await api(`${base()}/tours/${tour.id}`, { cookie: aliceCookie })).body as Tour).steps).toHaveLength(1);
   });
 
-  it('answers the live, presence and GitHub routes the page polls', async () => {
-    expect((await api(`${base()}/live/status?ref=work`, { cookie: aliceCookie })).body).toMatchObject({ enabled: false, listening: false });
-    expect((await api(`${base()}/viewer`, { method: 'POST', cookie: aliceCookie })).body).toEqual({ ok: true });
-    expect((await api(`${base()}/viewer/gone`, { method: 'POST', cookie: aliceCookie })).body).toEqual({ ok: true });
+  it('answers the GitHub details of a pull request session only, and nothing for removed features', async () => {
     expect((await api(`${base()}/github/details`, { cookie: aliceCookie })).body).toBeNull();
     expect((await api(`/s/${prSession.id}/api/github/details`, { cookie: aliceCookie })).body).toMatchObject({
       prNumber: 1, prTitle: 'Change line ten', headSha: fixture.head1,
     });
-    expect((await api(`${base()}/github/create-review`, { method: 'POST', cookie: aliceCookie, json: {} })).status).toBe(501);
-    expect((await api(`${base()}/revert-file`, { method: 'POST', cookie: aliceCookie, json: {} })).status).toBe(404);
+    expect((await api(`${base()}/github/create-review`, { method: 'POST', cookie: aliceCookie, json: { event: 'COMMENT', body: 'x' } })).status)
+      .toBe(400);
+    for (const path of ['/live/status', '/viewer', '/revert-file']) {
+      expect((await api(`${base()}${path}`, { method: 'POST', cookie: aliceCookie, json: {} })).status).toBe(404);
+    }
   });
 
   it('refuses a write from another site', async () => {

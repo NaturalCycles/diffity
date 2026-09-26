@@ -8,7 +8,7 @@ import type {
   OAuthTokens,
 } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { InvalidGrantError, InvalidTargetError, InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
-import type { Store } from './db.js';
+import type { Db } from './db.js';
 import { randomToken, sha256 } from './crypto.js';
 
 export type AuthorizeHandler = (
@@ -67,10 +67,10 @@ function sameResource(a: string, b: string): boolean {
  * same secret, and a presented hash is hashed again and matches nothing.
  */
 export class DbClientsStore implements OAuthRegisteredClientsStore {
-  constructor(private readonly store: Store) {}
+  constructor(private readonly db: Db) {}
 
-  getClient(clientId: string): OAuthClientInformationFull | undefined {
-    const row = this.store.get<ClientRow>('SELECT * FROM oauth_clients WHERE client_id = ?', clientId);
+  async getClient(clientId: string): Promise<OAuthClientInformationFull | undefined> {
+    const row = await this.db.one<ClientRow>('SELECT * FROM oauth_clients WHERE client_id = $1', [clientId]);
     if (!row) {
       return undefined;
     }
@@ -78,21 +78,18 @@ export class DbClientsStore implements OAuthRegisteredClientsStore {
     return row.client_secret_hash ? { ...metadata, client_secret: row.client_secret_hash } : metadata;
   }
 
-  registerClient(client: Omit<OAuthClientInformationFull, 'client_id' | 'client_id_issued_at'>): OAuthClientInformationFull {
+  async registerClient(client: Omit<OAuthClientInformationFull, 'client_id' | 'client_id_issued_at'>): Promise<OAuthClientInformationFull> {
     const full = client as OAuthClientInformationFull;
     const { client_secret: secret, ...metadata } = full;
-    this.store.run(
-      'INSERT INTO oauth_clients (client_id, client_secret_hash, metadata, created_at) VALUES (?, ?, ?, ?)',
-      full.client_id,
-      secret ? sha256(secret) : null,
-      JSON.stringify(metadata),
-      new Date().toISOString(),
+    await this.db.query(
+      'INSERT INTO oauth_clients (client_id, client_secret_hash, metadata, created_at) VALUES ($1, $2, $3, $4)',
+      [full.client_id, secret ? sha256(secret) : null, JSON.stringify(metadata), new Date().toISOString()],
     );
     return full;
   }
 
-  clientName(clientId: string): string | null {
-    const row = this.store.get<ClientRow>('SELECT metadata FROM oauth_clients WHERE client_id = ?', clientId);
+  async clientName(clientId: string): Promise<string | null> {
+    const row = await this.db.one<ClientRow>('SELECT metadata FROM oauth_clients WHERE client_id = $1', [clientId]);
     if (!row) {
       return null;
     }
@@ -124,8 +121,8 @@ export class OAuthProvider implements OAuthServerProvider {
     throw new Error('No authorization handler is installed');
   };
 
-  constructor(private readonly store: Store, private readonly options: OAuthOptions) {
-    this.clientsStore = new DbClientsStore(store);
+  constructor(private readonly db: Db, private readonly options: OAuthOptions) {
+    this.clientsStore = new DbClientsStore(db);
     this.accessTtl = options.accessTtlSeconds ?? 60 * 60;
     this.refreshTtl = options.refreshTtlSeconds ?? 30 * 24 * 60 * 60;
     this.codeTtl = options.codeTtlSeconds ?? 10 * 60;
@@ -140,25 +137,27 @@ export class OAuthProvider implements OAuthServerProvider {
   }
 
   /** Called once the signed-in user has agreed; the plaintext code goes to the client's redirect. */
-  issueCode(clientId: string, userId: string, params: AuthorizationParams): string {
+  async issueCode(clientId: string, userId: string, params: AuthorizationParams): Promise<string> {
     const code = randomToken();
-    this.store.run(
+    await this.db.query(
       `INSERT INTO oauth_codes (code_hash, client_id, user_id, code_challenge, redirect_uri, scopes, resource, expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      sha256(code),
-      clientId,
-      userId,
-      params.codeChallenge,
-      params.redirectUri,
-      (params.scopes ?? []).join(' '),
-      params.resource?.href ?? null,
-      this.now() + this.codeTtl,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [
+        sha256(code),
+        clientId,
+        userId,
+        params.codeChallenge,
+        params.redirectUri,
+        (params.scopes ?? []).join(' '),
+        params.resource?.href ?? null,
+        this.now() + this.codeTtl,
+      ],
     );
     return code;
   }
 
-  private liveCode(client: OAuthClientInformationFull, code: string): CodeRow {
-    const row = this.store.get<CodeRow>('SELECT * FROM oauth_codes WHERE code_hash = ?', sha256(code));
+  private async liveCode(client: OAuthClientInformationFull, code: string): Promise<CodeRow> {
+    const row = await this.db.one<CodeRow>('SELECT * FROM oauth_codes WHERE code_hash = $1', [sha256(code)]);
     if (!row || row.client_id !== client.client_id || row.expires_at < this.now()) {
       throw new InvalidGrantError('Invalid or expired authorization code');
     }
@@ -166,7 +165,7 @@ export class OAuthProvider implements OAuthServerProvider {
   }
 
   async challengeForAuthorizationCode(client: OAuthClientInformationFull, authorizationCode: string): Promise<string> {
-    return this.liveCode(client, authorizationCode).code_challenge;
+    return (await this.liveCode(client, authorizationCode)).code_challenge;
   }
 
   async exchangeAuthorizationCode(
@@ -176,10 +175,10 @@ export class OAuthProvider implements OAuthServerProvider {
     redirectUri?: string,
     resource?: URL,
   ): Promise<OAuthTokens> {
-    const row = this.liveCode(client, authorizationCode);
+    const row = await this.liveCode(client, authorizationCode);
     // Single use: whoever consumes the row first gets the tokens, and a replay finds nothing.
-    const consumed = this.store.run('DELETE FROM oauth_codes WHERE code_hash = ?', sha256(authorizationCode)).changes;
-    if (consumed === 0) {
+    const consumed = await this.db.one('DELETE FROM oauth_codes WHERE code_hash = $1 RETURNING code_hash', [sha256(authorizationCode)]);
+    if (!consumed) {
       throw new InvalidGrantError('Invalid or expired authorization code');
     }
     if (redirectUri !== undefined && redirectUri !== row.redirect_uri) {
@@ -198,7 +197,7 @@ export class OAuthProvider implements OAuthServerProvider {
     resource?: URL,
   ): Promise<OAuthTokens> {
     const hash = sha256(refreshToken);
-    const row = this.store.get<TokenRow>("SELECT * FROM oauth_tokens WHERE token_hash = ? AND kind = 'refresh'", hash);
+    const row = await this.db.one<TokenRow>("SELECT * FROM oauth_tokens WHERE token_hash = $1 AND kind = 'refresh'", [hash]);
     if (!row || row.client_id !== client.client_id || row.expires_at < this.now()) {
       throw new InvalidGrantError('Invalid or expired refresh token');
     }
@@ -211,31 +210,22 @@ export class OAuthProvider implements OAuthServerProvider {
     }
     // Rotated: a public client's refresh token is a bearer secret, and one that is replayed after
     // being used is one that leaked.
-    if (this.store.run('DELETE FROM oauth_tokens WHERE token_hash = ?', hash).changes === 0) {
+    if (!(await this.db.one('DELETE FROM oauth_tokens WHERE token_hash = $1 RETURNING token_hash', [hash]))) {
       throw new InvalidGrantError('Invalid or expired refresh token');
     }
     return this.issueTokens(row.client_id, row.user_id, scopes ? scopes.join(' ') : row.scopes, row.resource);
   }
 
-  private issueTokens(clientId: string, userId: string, scopes: string, resource: string | null): OAuthTokens {
+  private async issueTokens(clientId: string, userId: string, scopes: string, resource: string | null): Promise<OAuthTokens> {
     const accessToken = randomToken();
     const refreshToken = randomToken();
     const now = this.now();
-    const insert = (token: string, kind: 'access' | 'refresh', ttl: number) =>
-      this.store.run(
-        `INSERT INTO oauth_tokens (token_hash, kind, client_id, user_id, scopes, resource, expires_at, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        sha256(token),
-        kind,
-        clientId,
-        userId,
-        scopes,
-        resource,
-        now + ttl,
-        new Date(now * 1000).toISOString(),
-      );
-    insert(accessToken, 'access', this.accessTtl);
-    insert(refreshToken, 'refresh', this.refreshTtl);
+    const createdAt = new Date(now * 1000).toISOString();
+    await this.db.query(
+      `INSERT INTO oauth_tokens (token_hash, kind, client_id, user_id, scopes, resource, expires_at, created_at)
+       VALUES ($1, 'access', $3, $4, $5, $6, $7, $9), ($2, 'refresh', $3, $4, $5, $6, $8, $9)`,
+      [sha256(accessToken), sha256(refreshToken), clientId, userId, scopes, resource, now + this.accessTtl, now + this.refreshTtl, createdAt],
+    );
     return {
       access_token: accessToken,
       token_type: 'bearer',
@@ -246,7 +236,7 @@ export class OAuthProvider implements OAuthServerProvider {
   }
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {
-    const row = this.store.get<TokenRow>("SELECT * FROM oauth_tokens WHERE token_hash = ? AND kind = 'access'", sha256(token));
+    const row = await this.db.one<TokenRow>("SELECT * FROM oauth_tokens WHERE token_hash = $1 AND kind = 'access'", [sha256(token)]);
     if (!row || row.expires_at < this.now()) {
       throw new InvalidTokenError('Invalid or expired access token');
     }
@@ -261,13 +251,13 @@ export class OAuthProvider implements OAuthServerProvider {
   }
 
   async revokeToken(client: OAuthClientInformationFull, request: OAuthTokenRevocationRequest): Promise<void> {
-    this.store.run('DELETE FROM oauth_tokens WHERE token_hash = ? AND client_id = ?', sha256(request.token), client.client_id);
+    await this.db.query('DELETE FROM oauth_tokens WHERE token_hash = $1 AND client_id = $2', [sha256(request.token), client.client_id]);
   }
 
   /** Expired rows are dead weight; nothing reads them. */
-  purgeExpired(): void {
+  async purgeExpired(): Promise<void> {
     const now = this.now();
-    this.store.run('DELETE FROM oauth_codes WHERE expires_at < ?', now);
-    this.store.run('DELETE FROM oauth_tokens WHERE expires_at < ?', now);
+    await this.db.query('DELETE FROM oauth_codes WHERE expires_at < $1', [now]);
+    await this.db.query('DELETE FROM oauth_tokens WHERE expires_at < $1', [now]);
   }
 }

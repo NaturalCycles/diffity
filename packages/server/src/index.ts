@@ -1,17 +1,17 @@
 import { existsSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ConfigError, loadConfig } from './config.js';
 import { startServer } from './server.js';
 
-const require = createRequire(import.meta.url);
-const here = dirname(fileURLToPath(import.meta.url));
-const pkg = require('../package.json') as { version: string };
+declare const __DIFFITY_VERSION__: string | undefined;
 
-/** The build copies the UI next to the server; running from source uses the CLI's build of it. */
+const here = dirname(fileURLToPath(import.meta.url));
+const version = typeof __DIFFITY_VERSION__ === 'string' ? __DIFFITY_VERSION__ : 'dev';
+
+/** The UI builds into the server's dist, which is next to this module or, from source, beside src. */
 function findUiDir(): string | null {
-  const candidates = [join(here, 'ui'), join(here, '../../cli/dist/ui/client')];
+  const candidates = [join(here, 'ui/client'), join(here, '../dist/ui/client')];
   return candidates.find(dir => existsSync(join(dir, 'index.html'))) ?? null;
 }
 
@@ -30,16 +30,16 @@ async function main(): Promise<void> {
   if (config.secretKeyGenerated) {
     console.warn('Warning: DIFFITY_SECRET_KEY is not set; using a key for this run only. Saved GitHub tokens will not survive a restart.');
   }
-  if (!config.devLogin) {
-    console.warn('Warning: no sign-in method is enabled (set DIFFITY_DEV_LOGIN=1 on localhost).');
+  if (!config.devLogin && !config.iapAudience) {
+    console.warn('Warning: no sign-in method is enabled (DIFFITY_IAP_AUDIENCE behind IAP, or DIFFITY_DEV_LOGIN=1 on localhost).');
   }
   const uiDir = findUiDir();
   if (!uiDir) {
     console.warn('Warning: the review UI is not built; run `npm run build` at the repository root.');
   }
 
-  const running = await startServer(config, { uiDir, version: pkg.version });
-  console.log(`diffity-server ${pkg.version} listening on port ${running.port}, public URL ${config.publicUrl.href}`);
+  const running = await startServer(config, { uiDir, version });
+  console.log(`diffity-server ${version} listening on port ${running.port}, public URL ${config.publicUrl.href}`);
   console.log(`MCP endpoint: ${new URL('/mcp', config.publicUrl).href}`);
 
   const stop = () => {

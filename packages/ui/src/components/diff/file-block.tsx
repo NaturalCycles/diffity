@@ -4,12 +4,10 @@ import type { DiffHunk } from '@diffity/parser';
 import type { DiffFile, DiffLine as DiffLineType } from '@diffity/parser';
 import type { SyntaxToken } from '../../lib/syntax-token';
 import type { HighlightedTokens } from '../../hooks/use-highlighter';
-import type { CommentAuthor, CommentSide, LineSelection } from '../comments/types';
-import { type ViewMode, getFilePath, buildChangeGroupPatch, extractLinesFromDiff, extractLinesFromExpandedLines } from '../../lib/diff-utils';
+import type { CommentSide, LineSelection } from '../comments/types';
+import { type ViewMode, getFilePath, extractLinesFromDiff, extractLinesFromExpandedLines } from '../../lib/diff-utils';
 import { classifyHunk, rangesIntersectingHunk, MECHANICAL_LABELS } from '../../lib/hunk-attention';
 import { anchorLineInHunks, type TourFocusRange, type TourMark } from '../../lib/tour-marks';
-import { revertHunk as apiRevertHunk } from '../../lib/api';
-import { ConfirmDialog } from '../ui/confirm-dialog';
 import { computeGaps, createContextLines, getExpandRange, gapForLine, canAutoExpand, type ExpandableGap } from '../../lib/context-expansion';
 import { fileContentOptions } from '../../queries/file';
 import type { CommentActions } from '../../hooks/use-comment-actions';
@@ -49,9 +47,6 @@ interface FileBlockProps {
   reviewed: boolean;
   onReviewedChange: (path: string, reviewed: boolean) => void;
   highlightLine?: (code: string) => HighlightedTokens[] | null;
-  baseRef?: string;
-  canRevert?: boolean;
-  onRevert?: () => void;
   threads: CommentThread[];
   commentsEnabled: boolean;
   commentActions: CommentActions;
@@ -67,14 +62,6 @@ interface FileBlockProps {
   /** Which stop the header is showing, so the others are not dressed up as current. */
   activeStepIndex?: number;
   onTourMarkClick?: (stepIndex: number) => void;
-  /** This file has moved since the diff was loaded. */
-  isStale?: boolean;
-  onRefreshFile?: (path: string) => void;
-  onAskThread?: (filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor) => void;
-  onAskReply?: (threadId: string, body: string, author: CommentAuthor) => void;
-  onActThread?: (filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor) => void;
-  onActReply?: (threadId: string, body: string, author: CommentAuthor) => void;
-  askIsHeard?: boolean;
 }
 
 interface GapExpansion {
@@ -86,10 +73,8 @@ interface GapExpansion {
 
 export function FileBlock(props: FileBlockProps) {
   const {
-    file, viewMode, collapsed, onToggleCollapse, reviewed, onReviewedChange, highlightLine, baseRef, canRevert, onRevert, focusRanges,
+    file, viewMode, collapsed, onToggleCollapse, reviewed, onReviewedChange, highlightLine, focusRanges,
     tourMarks, activeStepIndex, onTourMarkClick,
-    isStale, onRefreshFile,
-    onAskThread, onAskReply, onActThread, onActReply, askIsHeard,
     threads: allThreads, commentsEnabled, commentActions, onAddThread: rawAddThread, pendingSelection, onPendingSelectionChange,
     highlighted, onHighlightEnd,
   } = props;
@@ -110,16 +95,6 @@ export function FileBlock(props: FileBlockProps) {
   const fileLineCount = file.oldFileLineCount ?? null;
 
   const { copied: pathCopied, copy: copyPath } = useCopy();
-
-  const [confirmRevertChange, setConfirmRevertChange] = useState<{ hunk: DiffHunk; startIndex: number; endIndex: number } | null>(null);
-
-  const handleRevertChange = useCallback(async (info: { hunk: DiffHunk; startIndex: number; endIndex: number }) => {
-    setConfirmRevertChange(null);
-    const patch = buildChangeGroupPatch(file, info.hunk, info.startIndex, info.endIndex);
-    await apiRevertHunk(patch);
-    onRevert?.();
-  }, [file, onRevert]);
-
 
   const { addReply, resolveThread, unresolveThread, dismissThread, editComment, deleteComment, deleteThread } = commentActions;
 
@@ -318,7 +293,7 @@ export function FileBlock(props: FileBlockProps) {
     setLoadingGap({ id: gap.id, direction });
 
     const lines = await queryClient.ensureQueryData(
-      fileContentOptions(fileContentPath, true, baseRef)
+      fileContentOptions(fileContentPath, true)
     );
 
     setExpansions(prev => {
@@ -360,7 +335,7 @@ export function FileBlock(props: FileBlockProps) {
     });
 
     setLoadingGap(null);
-  }, [fileContentPath, queryClient, baseRef]);
+  }, [fileContentPath, queryClient]);
 
   // A walkthrough stop can point at unchanged code, which the diff does not show. Expanding to it
   // is what the reader would do by hand; the alternative is a stop with no visible line at all.
@@ -499,18 +474,6 @@ export function FileBlock(props: FileBlockProps) {
               ))}
             </div>
           </div>
-          {isStale && onRefreshFile && (
-            <button
-              onClick={(event) => {
-                event.stopPropagation();
-                onRefreshFile(filePath);
-              }}
-              title="This file changed after the diff was loaded. Reload just this one."
-              className="flex items-center gap-1 px-1.5 py-0.5 text-[11px] rounded-md bg-accent/10 text-accent hover:bg-accent/20 transition-colors cursor-pointer"
-            >
-              Changed — reload
-            </button>
-          )}
           <label className="flex items-center gap-1.5 text-[11px] text-text-muted cursor-pointer select-none hover:text-text transition-colors">
             <input
               type="checkbox"
@@ -591,11 +554,6 @@ export function FileBlock(props: FileBlockProps) {
                     hunk={hunk}
                     attentionClass={attentionClass}
                     attentionTitle={attentionTitle}
-                    onAskThread={onAskThread}
-                    onAskReply={onAskReply}
-                    onActThread={onActThread}
-                    onActReply={onActReply}
-                    askIsHeard={askIsHeard}
                     tourMarks={tourMarks}
                     activeStepIndex={activeStepIndex}
                     onTourMarkClick={onTourMarkClick}
@@ -622,7 +580,6 @@ export function FileBlock(props: FileBlockProps) {
                     onDeleteThread={deleteThread}
                     onCancelPending={handleCancelPending}
                     filePath={filePath}
-                    onRevertChange={canRevert ? (h: DiffHunk, startIndex: number, endIndex: number) => setConfirmRevertChange({ hunk: h, startIndex, endIndex }) : undefined}
                     getOriginalCode={getOriginalCode}
                   />
                 );
@@ -662,14 +619,6 @@ export function FileBlock(props: FileBlockProps) {
             </>
           )}
         </div>
-      )}
-      {confirmRevertChange && (
-        <ConfirmDialog
-          title="Undo change"
-          message="This will undo the selected change. This cannot be undone."
-          onConfirm={() => handleRevertChange(confirmRevertChange)}
-          onCancel={() => setConfirmRevertChange(null)}
-        />
       )}
     </div>
   );

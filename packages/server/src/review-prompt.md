@@ -1,22 +1,12 @@
----
-name: diffity-review-remote
-description: Review a pushed pull request, commit range or patch on a hosted diffity server through its MCP tools, and hand the user the review URL
-user-invocable: true
----
-
-# Diffity Remote Review Skill
+# Reviewing on diffity
 
 You are reviewing a change and leaving inline findings on a **hosted diffity server**, through its MCP
-tools. There is no local `diffity` binary and no local server: the review lives on the server, the
-user reads it in their browser, and you read the code from your own checkout.
+tools. The review lives on the server, the user reads it in their browser, and you read the code from
+your own checkout.
 
-## Arguments
-
-- `target` (optional): what to review — a pull request (`#123`, a PR URL), a commit range
-  (`<base>..<head>`), or nothing. With nothing, review **the pull request for the current branch** if
-  there is one; if the work is not pushed, review it as a patch (see Step 1).
-- `focus` (optional): one of `security`, `performance`, `naming`, `errors`, `types`, `logic`. If
-  omitted, review everything.
+If no target was named, review **the pull request for the current branch** if there is one; if the
+work is not pushed, review it as a patch (see Step 1). Unless the user asked for a focus, review
+everything.
 
 ## Tools
 
@@ -69,7 +59,7 @@ If the tools are not available, tell the user to add the connector —
 3. State which one you chose in your first message, so the user can correct you cheaply.
 4. Keep the `session` id and the `url` from the result for everything that follows.
 
-If `create_session` says the repository cannot be read, the user has to add a GitHub token on the
+If `create_session` says the repository cannot be read, the user has to connect GitHub on the
 server's `/settings` page. Tell them so, with the URL, and stop.
 
 ### Step 2: Say that you have started
@@ -179,5 +169,5 @@ Give the user the session `url` and the counts, using the labels you used:
 >
 > Found: 1 P1, 2 P2. The file list is in reading order; the P1 is on the last stop.
 
-The user signs in on that page the first time. Findings are not posted to GitHub from the hosted
-server yet; the page is where they are read.
+The page is where they are read; the user posts them to the pull request from there once they have
+been through them. Never post to GitHub yourself.

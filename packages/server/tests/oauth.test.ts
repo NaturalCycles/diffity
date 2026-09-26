@@ -1,12 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { join } from 'node:path';
-import { Store } from '../src/db.js';
 import { OAuthProvider, hashPresentedClientSecret } from '../src/oauth.js';
 import { sha256 } from '../src/crypto.js';
 import { Users } from '../src/users.js';
 import {
   connectAgent,
   login,
+  memoryDb,
   pkcePair,
   removeDir,
   startFakeGitHub,
@@ -147,7 +146,7 @@ describe('authorization code with PKCE', () => {
     expect(replay.json.error).toBe('invalid_grant');
 
     const auth = await server.oauth.verifyAccessToken(ok.json.access_token as string);
-    const alice = server.users.findOrCreate('alice@example.com');
+    const alice = await server.users.findOrCreate('alice@example.com');
     expect(auth.extra?.userId).toBe(alice.id);
     expect(auth.clientId).toBe(client.client_id);
   });
@@ -229,7 +228,7 @@ describe('confidential clients', () => {
   it('stores only the secret’s hash, and accepts the secret but not the hash', async () => {
     const client = await register({ token_endpoint_auth_method: 'client_secret_post' });
     expect(client.client_secret).toBeTruthy();
-    const row = server.store.get<{ client_secret_hash: string }>('SELECT client_secret_hash FROM oauth_clients WHERE client_id = ?', client.client_id)!;
+    const row = (await server.db.one<{ client_secret_hash: string }>('SELECT client_secret_hash FROM oauth_clients WHERE client_id = $1', [client.client_id]))!;
     expect(row.client_secret_hash).toBe(sha256(client.client_secret!));
 
     const { verifier, challenge } = pkcePair();
@@ -256,8 +255,8 @@ describe('storage', () => {
   it('never holds a code or token in plaintext', async () => {
     const agent = await connectAgent(server.base, aliceCookie);
     const dump = JSON.stringify([
-      server.store.all('SELECT * FROM oauth_codes'),
-      server.store.all('SELECT * FROM oauth_tokens'),
+      await server.db.query('SELECT * FROM oauth_codes'),
+      await server.db.query('SELECT * FROM oauth_tokens'),
     ]);
     expect(dump).not.toContain(agent.accessToken);
     expect(dump).not.toContain(agent.refreshToken);
@@ -267,21 +266,20 @@ describe('storage', () => {
 
 describe('expiry', () => {
   it('refuses expired codes, access tokens and refresh tokens, and purges them', async () => {
-    const dir = tempDir('oauth-expiry');
-    const store = new Store(join(dir, 'diffity.db'));
+    const db = await memoryDb();
     let now = 1_000_000;
-    const provider = new OAuthProvider(store, { resourceUrl: new URL('http://localhost/mcp'), now: () => now });
-    const user = new Users(store, randomBytes(32)).findOrCreate('a@example.com');
-    const client = provider.clientsStore.registerClient({
+    const provider = new OAuthProvider(db, { resourceUrl: new URL('http://localhost/mcp'), now: () => now });
+    const user = await new Users(db, randomBytes(32)).findOrCreate('a@example.com');
+    const client = await provider.clientsStore.registerClient({
       client_id: 'c1', redirect_uris: [redirectUri], token_endpoint_auth_method: 'none',
     } as never);
     const params = { codeChallenge: 'x', redirectUri, scopes: [] };
 
-    const code = provider.issueCode(client.client_id, user.id, params);
+    const code = await provider.issueCode(client.client_id, user.id, params);
     now += 601;
     await expect(provider.challengeForAuthorizationCode(client, code)).rejects.toThrow('expired');
 
-    const fresh = provider.issueCode(client.client_id, user.id, params);
+    const fresh = await provider.issueCode(client.client_id, user.id, params);
     const tokens = await provider.exchangeAuthorizationCode(client, fresh);
     now += 3601;
     await expect(provider.verifyAccessToken(tokens.access_token)).rejects.toThrow('expired');
@@ -289,12 +287,11 @@ describe('expiry', () => {
     now += 30 * 24 * 3600;
     await expect(provider.exchangeRefreshToken(client, tokens.refresh_token!)).rejects.toThrow('expired');
 
-    provider.purgeExpired();
-    expect(store.all('SELECT * FROM oauth_tokens')).toEqual([]);
-    expect(store.all('SELECT * FROM oauth_codes')).toEqual([]);
-    expect(provider.clientsStore.clientName('c1')).toBeNull();
-    expect(provider.clientsStore.clientName('missing')).toBeNull();
-    store.close();
-    removeDir(dir);
+    await provider.purgeExpired();
+    expect(await db.query('SELECT * FROM oauth_tokens')).toEqual([]);
+    expect(await db.query('SELECT * FROM oauth_codes')).toEqual([]);
+    expect(await provider.clientsStore.clientName('c1')).toBeNull();
+    expect(await provider.clientsStore.clientName('missing')).toBeNull();
+    await db.close();
   });
 });

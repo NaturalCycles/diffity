@@ -6,7 +6,6 @@ import { parseDiff } from '@diffity/parser';
 import type {
   CommentThread,
   DiffResponse,
-  LiveStatusResponse,
   RepoInfoResponse,
   Tour,
 } from '@diffity/api';
@@ -36,23 +35,12 @@ const info: RepoInfoResponse = {
   branch: 'main',
   root: '/tmp/repo',
   description: 'Unstaged changes',
-  capabilities: { reviews: true, revert: false, staleness: false },
   sessionId: 's1',
   review: null,
   github: null,
-  editor: null,
 };
 
 const diff: DiffResponse = { ...parseDiff(RAW_DIFF), suppressed: null };
-
-const liveStatus: LiveStatusResponse = {
-  enabled: false,
-  listening: false,
-  working: false,
-  waiting: 0,
-  mayChangeCode: false,
-  viewerPresent: true,
-};
 
 const threads: CommentThread[] = [makeThread({
   sessionId: 's1',
@@ -73,9 +61,7 @@ function stubbedFetch(input: RequestInfo | URL): Promise<Response> {
     '/api/info': info,
     '/api/diff': diff,
     '/api/threads': threads,
-    '/api/live/status': liveStatus,
     '/api/tours': tours,
-    '/api/viewer': { ok: true },
   };
   // Unknown paths fail loudly with their name: a surface added later must extend the fixture,
   // not pass on an accidental {}.

@@ -1,14 +1,11 @@
-import { useMemo } from 'react';
 import type { DiffHunk, DiffLine as DiffLineType } from '@diffity/parser';
 import type { SyntaxToken } from '../../lib/syntax-token';
 import type { CommentThread as CommentThreadType, CommentAuthor, CommentSide, LineSelection, LineRenderProps } from '../comments/types';
 import type { TourMark } from '../../lib/tour-marks';
-import { getChangeGroups } from '../../lib/diff-utils';
 import { DiffLine } from './diff-line';
 import { HunkHeader, type ExpandControls } from './hunk-header';
 import { CommentThread } from '../comments/comment-thread';
 import { CommentFormRow } from '../comments/comment-form-row';
-import { UndoIcon } from '../icons/undo-icon';
 
 interface HunkBlockProps {
   hunk: DiffHunk;
@@ -37,13 +34,7 @@ interface HunkBlockProps {
   onDeleteThread?: (threadId: string) => void;
   onCancelPending?: () => void;
   filePath?: string;
-  onRevertChange?: (hunk: DiffHunk, startIndex: number, endIndex: number) => void;
   getOriginalCode?: (side: CommentSide, startLine: number, endLine: number) => string;
-  onAskThread?: (filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor) => void;
-  onAskReply?: (threadId: string, body: string, author: CommentAuthor) => void;
-  onActThread?: (filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor) => void;
-  onActReply?: (threadId: string, body: string, author: CommentAuthor) => void;
-  askIsHeard?: boolean;
   tourMarks?: TourMark[];
   activeStepIndex?: number;
   onTourMarkClick?: (stepIndex: number) => void;
@@ -89,9 +80,6 @@ export function renderLineWithComments(
           key={`thread-${thread.id}`}
           thread={thread}
           onReply={props.onReply!}
-            onAskReply={props.onAskReply}
-            onActReply={props.onActReply}
-            askIsHeard={props.askIsHeard}
           onResolve={props.onResolve!}
           onUnresolve={props.onUnresolve!}
           onEditComment={props.onEditComment!}
@@ -130,8 +118,7 @@ export function HunkBlock(props: HunkBlockProps) {
     threads, pendingSelection, currentAuthor, isLineSelected,
     onLineMouseDown, onLineMouseEnter, onCommentClick,
     onAddThread, onReply, onResolve, onUnresolve, onDeleteComment, onDeleteThread,
-    onCancelPending, filePath, onRevertChange, getOriginalCode,
-    onAskThread, onAskReply, onActThread, onActReply, askIsHeard,
+    onCancelPending, filePath, getOriginalCode,
     tourMarks, activeStepIndex, onTourMarkClick,
   } = props;
 
@@ -140,26 +127,8 @@ export function HunkBlock(props: HunkBlockProps) {
     threads, pendingSelection, currentAuthor,
     onAddThread, onReply, onResolve, onUnresolve, onDeleteComment, onDeleteThread,
     onCancelPending, filePath, getOriginalCode,
-    onAskThread, onAskReply, onActThread, onActReply, askIsHeard,
     tourMarks, activeStepIndex, onTourMarkClick,
   };
-
-  const changeGroups = useMemo(() => {
-    if (!onRevertChange) {
-      return [];
-    }
-    return getChangeGroups(hunk.lines);
-  }, [hunk.lines, onRevertChange]);
-
-  const changeGroupForLine = useMemo(() => {
-    const map = new Map<number, number>();
-    for (let g = 0; g < changeGroups.length; g++) {
-      for (let i = changeGroups[g].startIndex; i <= changeGroups[g].endIndex; i++) {
-        map.set(i, g);
-      }
-    }
-    return map;
-  }, [changeGroups]);
 
   const expansionRows: React.ReactNode[] = [];
 
@@ -175,64 +144,9 @@ export function HunkBlock(props: HunkBlockProps) {
     }
   }
 
-  const sections: React.ReactNode[] = [];
-  let currentGroupIndex = -1;
-  let currentRows: React.ReactNode[] = [];
-
-  const flushRows = (isChangeGroup: boolean, groupIdx: number) => {
-    if (currentRows.length === 0) {
-      return;
-    }
-    if (isChangeGroup && onRevertChange) {
-      const group = changeGroups[groupIdx];
-      sections.push(
-        <tbody key={`change-${groupIdx}`} className={`group/undo ${attentionClass}`} title={attentionTitle}>
-          {currentRows}
-          <tr className="relative z-10">
-            <td colSpan={4} className="relative h-0">
-              <div className="absolute right-3 bottom-0 z-10 flex items-center gap-1.5 opacity-0 group-hover/undo:opacity-100 pointer-events-none group-hover/undo:pointer-events-auto">
-                <button
-                  onClick={() => onRevertChange(hunk, group.startIndex, group.endIndex)}
-                  className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border border-deleted/40 bg-bg text-deleted hover:bg-deleted hover:text-white transition-colors cursor-pointer shadow-md"
-                  title="Undo this change"
-                >
-                  <UndoIcon className="w-3 h-3" />
-                  Undo
-                </button>
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      );
-    } else {
-      sections.push(
-        <tbody key={`context-${sections.length}`} className={attentionClass} title={attentionTitle}>
-          {currentRows}
-        </tbody>
-      );
-    }
-    currentRows = [];
-  };
-
+  const rows: React.ReactNode[] = [];
   for (let i = 0; i < hunk.lines.length; i++) {
-    const groupIdx = changeGroupForLine.get(i) ?? -1;
-    const isChange = groupIdx !== -1;
-
-    if (isChange && currentGroupIndex === -1) {
-      flushRows(false, -1);
-      currentGroupIndex = groupIdx;
-    } else if (!isChange && currentGroupIndex !== -1) {
-      flushRows(true, currentGroupIndex);
-      currentGroupIndex = -1;
-    }
-
-    currentRows.push(...renderLineWithComments(hunk.lines[i], i, false, syntaxMap, commentProps));
-  }
-
-  if (currentGroupIndex !== -1) {
-    flushRows(true, currentGroupIndex);
-  } else {
-    flushRows(false, -1);
+    rows.push(...renderLineWithComments(hunk.lines[i], i, false, syntaxMap, commentProps));
   }
 
   const tbodyClass = expandControls?.wasExpanded && expandControls.remainingLines <= 0 ? '' : 'border-t border-border-muted';
@@ -243,7 +157,11 @@ export function HunkBlock(props: HunkBlockProps) {
         <HunkHeader hunk={hunk} expandControls={expandControls} />
         {expansionRows}
       </tbody>
-      {sections}
+      {rows.length > 0 && (
+        <tbody className={attentionClass} title={attentionTitle}>
+          {rows}
+        </tbody>
+      )}
     </>
   );
 }

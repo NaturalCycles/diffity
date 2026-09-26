@@ -1,10 +1,10 @@
 import { queryOptions } from '@tanstack/react-query';
 import { fetchFileContent } from '../lib/api';
 
-export function fileContentOptions(filePath: string, enabled: boolean, ref?: string) {
+export function fileContentOptions(filePath: string, enabled: boolean) {
   return queryOptions({
-    queryKey: ['file-content', filePath, ref],
-    queryFn: () => fetchFileContent(filePath, ref),
+    queryKey: ['file-content', filePath],
+    queryFn: () => fetchFileContent(filePath),
     enabled,
   });
 }

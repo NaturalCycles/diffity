@@ -3,8 +3,6 @@ import type {
   CommentAuthor,
   CommentThread,
   CreateThreadRequest,
-  DiffFileResponse,
-  DiffFingerprint,
   DiffResponse,
   FileContentResponse,
   GitHubDetails,
@@ -15,11 +13,7 @@ import type {
   ReviewSubmission,
   ThreadStatus,
   Tour,
-  TreeEntriesResponse,
-  TreeFingerprintResponse,
-  TreePathsResponse,
 } from '@diffity/api';
-import type { DiffFile } from '@diffity/parser';
 import { apiPath } from './base';
 
 export type {
@@ -35,10 +29,9 @@ export type {
   Suppressed,
   Tour,
   TourStep,
-  TreeEntry,
 } from '@diffity/api';
 
-export async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
+async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(apiPath(url), init);
   if (!res.ok) {
     throw new Error(await errorMessage(res));
@@ -72,42 +65,13 @@ function buildUrl(path: string, params?: Record<string, string | undefined>): st
   return query ? `${path}?${query}` : path;
 }
 
-export function fetchDiff(hideWhitespace: boolean, ref?: string): Promise<DiffResponse> {
-  return apiFetch(buildUrl('/api/diff', {
-    whitespace: hideWhitespace ? 'hide' : undefined,
-    ref,
-  }));
+export function fetchDiff(hideWhitespace: boolean): Promise<DiffResponse> {
+  return apiFetch(buildUrl('/api/diff', { whitespace: hideWhitespace ? 'hide' : undefined }));
 }
 
-export async function fetchDiffFile(
-  path: string,
-  hideWhitespace: boolean,
-  ref?: string,
-): Promise<DiffFile | null> {
-  const json = await apiFetch<DiffFileResponse>(
-    buildUrl('/api/diff/file', { path, ref, whitespace: hideWhitespace ? 'hide' : undefined }),
-  );
-  return json.file;
+export function fetchRepoInfo(): Promise<RepoInfoResponse> {
+  return apiFetch('/api/info');
 }
-
-export async function fetchDiffFingerprint(ref?: string): Promise<DiffFingerprint> {
-  const json = await apiFetch<DiffFingerprint>(buildUrl('/api/diff-fingerprint', { ref }));
-  return { fingerprint: json.fingerprint, files: json.files ?? {} };
-}
-
-export function fetchRepoInfo(ref?: string): Promise<RepoInfoResponse> {
-  return apiFetch(buildUrl('/api/info', { ref }));
-}
-
-export function openInEditor(filePath: string, line?: number): Promise<{ ok: boolean }> {
-  return apiFetch('/api/open-in-editor', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ filePath, line }),
-  });
-}
-
-
 
 export async function fetchThreads(sessionId: string, status?: ThreadStatus): Promise<CommentThread[]> {
   const res = await fetch(apiPath(buildUrl('/api/threads', { session: sessionId, status })));
@@ -127,28 +91,8 @@ export function createThread(data: CreateThreadRequest): Promise<CommentThread> 
   });
 }
 
-export interface ReplyOptions {
-  /** An aside stays on this machine. Only an aside can ask the agent for anything. */
-  aside?: boolean;
-  /** Ask the agent to answer, amend or act on it. */
-  live?: boolean;
-  /** A question, or a request for a change. Absent is a question. */
-  intent?: 'ask' | 'act';
-}
-
-export function replyToThread(
-  threadId: string,
-  body: string,
-  author: CommentAuthor,
-  options: ReplyOptions = {},
-): Promise<Comment> {
-  const request: ReplyRequest = {
-    body,
-    author,
-    kind: options.aside ? 'aside' : 'review',
-    live: options.live === true,
-    intent: options.intent ?? 'ask',
-  };
+export function replyToThread(threadId: string, body: string, author: CommentAuthor): Promise<Comment> {
+  const request: ReplyRequest = { body, author };
   return apiFetch(`/api/threads/${threadId}/reply`, {
     method: 'POST',
     headers: JSON_HEADERS,
@@ -188,26 +132,8 @@ export function deleteComment(commentId: string): Promise<void> {
   return apiVoid(`/api/comments/${commentId}`, { method: 'DELETE' });
 }
 
-export function revertFile(filePath: string, isUntracked: boolean): Promise<void> {
-  return apiVoid('/api/revert-file', {
-    method: 'POST',
-    headers: JSON_HEADERS,
-    body: JSON.stringify({ filePath, isUntracked }),
-  });
-}
-
-export function revertHunk(patch: string): Promise<void> {
-  return apiVoid('/api/revert-hunk', {
-    method: 'POST',
-    headers: JSON_HEADERS,
-    body: JSON.stringify({ patch }),
-  });
-}
-
-export async function fetchFileContent(filePath: string, ref?: string): Promise<string[]> {
-  const json = await apiFetch<FileContentResponse>(
-    buildUrl(`/api/file/${encodeURIComponent(filePath)}`, { ref }),
-  );
+export async function fetchFileContent(filePath: string): Promise<string[]> {
+  const json = await apiFetch<FileContentResponse>(`/api/file/${encodeURIComponent(filePath)}`);
   return json.content;
 }
 
@@ -235,34 +161,6 @@ export function pullCommentsFromGitHub(sessionId: string): Promise<PullCommentsR
   });
 }
 
-export function fetchTour(tourId: string): Promise<Tour> {
-  return apiFetch(`/api/tours/${tourId}`);
-}
-
 export function fetchTours(sessionId: string): Promise<Tour[]> {
   return apiFetch(`/api/tours?session=${encodeURIComponent(sessionId)}`);
-}
-
-export function fetchTreePaths(): Promise<TreePathsResponse> {
-  return apiFetch('/api/tree');
-}
-
-export function fetchTreeEntries(dirPath?: string): Promise<TreeEntriesResponse> {
-  return apiFetch(buildUrl('/api/tree/entries', { path: dirPath }));
-}
-
-export function fetchTreeInfo(): Promise<RepoInfoResponse> {
-  return apiFetch('/api/tree/info');
-}
-
-export async function fetchTreeFingerprint(): Promise<string> {
-  const json = await apiFetch<TreeFingerprintResponse>('/api/tree/fingerprint');
-  return json.fingerprint;
-}
-
-export async function fetchTreeFileContent(filePath: string): Promise<string[]> {
-  const json = await apiFetch<FileContentResponse>(
-    `/api/tree/file/${encodeURIComponent(filePath)}`,
-  );
-  return json.content;
 }

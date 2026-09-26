@@ -13,9 +13,6 @@ import type { GitHubDetails } from '../../lib/api';
 import { DiffStats } from '../diff/diff-stats';
 import { GitHubDialog } from './github-dialog';
 import { CommentToolbarActions } from '../comments/comment-toolbar-actions';
-import { LiveIndicator } from './live-indicator';
-import { NotificationBell } from './notification-bell';
-import type { AnswerAlert } from '../../lib/answer-alerts';
 import { OptionsMenu, menuItemClass } from './options-menu';
 import { GENERAL_THREAD_FILE_PATH } from '../comments/types';
 import type { ViewMode } from '../../lib/diff-utils';
@@ -24,9 +21,6 @@ import { isThreadResolved } from '../comments/types';
 
 interface ToolbarProps {
   reviewInProgress?: boolean;
-  live?: { enabled: boolean; listening: boolean; working: boolean; waiting: number };
-  unreadAnswers?: AnswerAlert[];
-  onGoToAnswer?: (threadId: string) => void;
   viewMode: ViewMode;
   onViewModeChange: (mode: ViewMode) => void;
   hideWhitespace: boolean;
@@ -37,7 +31,6 @@ interface ToolbarProps {
   onToggleWrapLines: () => void;
   onShowHelp: () => void;
   diff?: ParsedDiff;
-  diffRef?: string;
   threads: CommentThread[];
   onDeleteAllComments: () => void;
   onScrollToThread: (threadId: string, filePath: string) => void;
@@ -47,8 +40,6 @@ interface ToolbarProps {
   githubDetails?: GitHubDetails | null;
   sessionId?: string | null;
   onGitHubPulled?: () => void;
-  /** False on the hosted server, which does not post to the forge from the page yet. */
-  postingAvailable?: boolean;
 }
 
 function extractCodeContext(diff: ParsedDiff | undefined, filePath: string, side: 'old' | 'new', startLine: number, endLine: number): string[] {
@@ -75,18 +66,13 @@ function extractCodeContext(diff: ParsedDiff | undefined, filePath: string, side
   return lines;
 }
 
-function formatThreadsForCopy(threads: CommentThread[], diff?: ParsedDiff, diffRef?: string): string {
+function formatThreadsForCopy(threads: CommentThread[], diff?: ParsedDiff): string {
   const unresolvedThreads = threads.filter(t => !isThreadResolved(t));
   if (unresolvedThreads.length === 0) {
     return '';
   }
 
   const parts: string[] = [];
-
-  if (diffRef) {
-    parts.push(`Diff ref: ${diffRef}`);
-    parts.push('');
-  }
 
   for (const thread of unresolvedThreads) {
     if (thread.filePath === GENERAL_THREAD_FILE_PATH) {
@@ -135,7 +121,6 @@ export function Toolbar(props: ToolbarProps) {
     onToggleWrapLines,
     onShowHelp,
     diff,
-    diffRef,
     threads,
     onDeleteAllComments,
     onScrollToThread,
@@ -144,18 +129,14 @@ export function Toolbar(props: ToolbarProps) {
     description,
     githubDetails,
     reviewInProgress,
-    live,
-    unreadAnswers,
-    onGoToAnswer,
     sessionId,
     onGitHubPulled,
-    postingAvailable,
   } = props;
   const [showGitHub, setShowGitHub] = useState(false);
 
   const formatForCopy = useCallback(() => {
-    return formatThreadsForCopy(threads, diff, diffRef);
-  }, [threads, diff, diffRef]);
+    return formatThreadsForCopy(threads, diff);
+  }, [threads, diff]);
 
   const viewModeOptions = useMemo(() => [
     { value: 'unified' as ViewMode, label: 'Unified', icon: <UnifiedViewIcon className="w-3.5 h-3.5" /> },
@@ -195,17 +176,6 @@ export function Toolbar(props: ToolbarProps) {
         )}
       </div>
       <div className="flex items-center gap-2 ml-auto shrink-0">
-        {onGoToAnswer && (
-          <NotificationBell alerts={unreadAnswers ?? []} onGo={onGoToAnswer} />
-        )}
-        {live && (
-          <LiveIndicator
-            enabled={live.enabled}
-            listening={live.listening}
-            working={live.working}
-            waiting={live.waiting}
-          />
-        )}
         <SegmentedToggle options={viewModeOptions} value={viewMode} onChange={onViewModeChange} />
         <CommentToolbarActions
           threads={threads}
@@ -250,7 +220,6 @@ export function Toolbar(props: ToolbarProps) {
         <GitHubDialog
           details={githubDetails}
           reviewInProgress={reviewInProgress}
-          postingAvailable={postingAvailable}
           threads={threads}
           sessionId={sessionId ?? null}
           onPulled={() => onGitHubPulled?.()}

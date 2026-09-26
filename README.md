@@ -2,502 +2,137 @@
 
 # diffity
 
-[![npm version](https://img.shields.io/npm/v/@naturalcycles/diffity)](https://www.npmjs.com/package/@naturalcycles/diffity)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+A hosted, multi-user code review page for agents' findings. An agent reads a change from its own
+checkout and writes findings through diffity's MCP endpoint; the user opens the session's link, reads
+the findings on a GitHub-style diff, discusses them, and posts them to the pull request as one
+review. The server runs no model and has no working tree; it keeps a blob-less mirror of each GitHub
+repository it has been asked about.
 
-Diffity is an agent-agnostic, GitHub-style diff viewer and code review tool — with a live loop
-where the reader asks questions or requests changes on any line and a parked agent answers.
+Grown from Kamran Ahmed's [nilbuild/diffity](https://github.com/nilbuild/diffity).
 
-This is [Natural Cycles](https://github.com/NaturalCycles)' fork of
-[nilbuild/diffity](https://github.com/nilbuild/diffity) by Kamran Ahmed. The review loop, the live
-agent protocol, session carry-forward and the idle lifecycle are this fork's own; the viewer it
-grew from is upstream's.
+## Using it
 
-```bash
-npm install -g @naturalcycles/diffity
-diffity skills install
-```
-
-The binary is `diffity`. `skills install` puts the agent skills into `~/.claude/skills` — run it
-again after an update (`diffity update` says when the skills changed). Any skill directory named
-`diffity-*` is treated as diffity's and may be replaced or removed there; `diffity-dev-*` and
-everything else is never touched. Had upstream's `diffity` installed? `npm uninstall -g diffity`
-first, or npm refuses the colliding binary. It works with Claude Code, Cursor, Codex, and any AI
-coding agent.
-
-| What can you do? | Description |
-|---|---|
-| [See your diffs](#see-your-diffs) | View changes in working area, across commits, branches, tags, etc  |
-| [AI code review](#ai-code-review) | Let your agent review code and leave comments on the diff |
-| [Browse project files](#browse-project-files) | Explore your repo and comment on any file for AI to resolve |
-| [Guided code tours](#guided-code-tours) | Walk through your codebase step by step with highlighted code |
-| [Learn any topic](#learn-any-topic) | Project-driven learning for programming languages, tools, and frameworks |
-| [GitHub PRs](#github-prs) | Pull down a PR, review it locally, submit one review back |
-| [Reading order](#reading-a-diff-in-the-order-it-makes-sense) | Read a diff in the order it makes sense, not alphabetically |
-| [Attention](#what-gets-your-attention) | Highlight what matters, dim what a rule can prove is mechanical |
-| [Review state](#while-a-review-is-running) | See when a review is still running, and what has already been sent |
-| [Multiple projects](#multiple-projects) | Run it in multiple repos at once, each gets its own port |
-
-## See your diffs
-
-Run `diffity` inside any git repo — your browser opens with a GitHub-style, syntax-highlighted diff.
+Add the connector to Claude Code (or any MCP client that does OAuth):
 
 ```bash
-# everyday use
-diffity                                    # review all uncommitted changes
-diffity HEAD~1                             # review your last commit
-diffity HEAD~3                             # review your last 3 commits
-
-# branch workflows
-diffity main                               # compare current branch against main
-diffity main..feature                      # compare feature branch against main
-diffity main feature                       # same as above, shorthand syntax
-diffity --base main --compare feature      # same as above, explicit flags
-
-# releases and tags
-diffity v1.0.0 v2.0.0                     # compare two releases
-diffity v1.0.0                             # what changed since v1.0.0
-
-# specific commits
-diffity abc1234                            # changes since a specific commit
-diffity abc1234..def5678                   # changes between two commits
-
-# filter by change type
-diffity work                               # all changes (staged + unstaged + untracked)
-diffity staged                             # only staged changes (git add'd)
-diffity unstaged                           # only unstaged modifications
+claude mcp add --transport http diffity https://diffity.prod.naturalcycles.net/mcp
 ```
 
-The `--base`/`--compare` flags use the same terminology as GitHub PRs — base is what you're comparing against, compare is the branch with changes. You can also use range syntax (`main..feature`) or just pass two positional args (`diffity main feature`).
-
-You can leave comments on any diff — working tree changes, branch comparisons, commit ranges. Your agent can also review and leave its own comments. Either way, run `/diffity-resolve` and your agent reads all open comments (yours or its own) and makes the code changes for you.
-
-## AI code review
-
-Install the skills for your coding agent (`diffity skills install`), then use the slash commands:
-
-### `/diffity-diff`
-
-Opens the diff viewer in your browser. Accepts the same refs as the CLI, plus natural language:
-
-```
-/diffity-diff                          # working tree changes
-/diffity-diff main                     # current branch against main
-/diffity-diff main..feature            # branch diff
-/diffity-diff HEAD~1                   # last commit
-/diffity-diff last 3 commits           # natural language works too
-```
-
-Leave comments on any line — when you're done, run `/diffity-resolve` to have your agent fix them.
-
-### `/diffity-review`
-
-Your agent reviews the diff and leaves inline comments in the viewer, prefixed with severities so you can triage by importance — `P1`/`P2`/`P3` by default, or whatever the project configures (see [Review standards](#review-standards)). It reads the project's own standards first, records a reading order for the diff, and announces itself as running so you do not approve while findings are still arriving. Supports refs, focus areas, and natural language:
-
-```
-/diffity-review                             # the branch's pull request, or the working tree
-/diffity-review main                        # review what you're merging into main
-/diffity-review main..feature               # review what you're merging into main
-/diffity-review identify security issues    # focus on security issues
-/diffity-review performance in src/lib      # focus on performance in specific dir
-/diffity-review last 3 commits              # natural language works too
-```
-
-### `/diffity-resolve`
-
-Reads all open comments and makes the requested code changes. Works with both your comments and AI review comments:
-
-```
-/diffity-resolve                       # resolve all open comments
-/diffity-resolve abc123                # resolve a specific thread by ID
-```
-
-A typical workflow: run `/diffity-review` to get AI feedback, check the comments in the browser, then run `/diffity-resolve` to apply the fixes.
-
-## A live agent on the diff
-
-Every comment box carries **Ask** and **Act** next to the plain reply. Ask hands the agent a
-question — it answers in the thread, or amends the finding the question was about. Act hands it a
-change request — it edits the code and replies with what it did. A question never turns into an
-edit, and on somebody else's pull request the agent is told not to touch code.
-
-The agent parks on the review with `diffity agent await` (the `diffity-live` skill drives the
-loop): it sleeps until you press one of the buttons, acts, and re-arms. The page shows whether an
-agent is listening, working, or absent — a request made with nobody listening says so, and is
-picked up when an agent next arms. When the review page closes, the parked agent is told and stops
-rather than waiting on a window nobody has open; the server itself stops a few minutes after its
-reader leaves, and everything is in SQLite, so running `diffity` again picks the review back up.
-
-## Browse project files
-
-Run `diffity tree` to open a full file tree browser — no diff required. Browse your repo, read files with syntax highlighting, and leave comments on any file or folder.
-
-```bash
-diffity tree
-```
-
-The tree view supports the same commenting and resolve workflow as the diff viewer. Leave comments on specific lines, files, or folders, then have your agent resolve them.
-
-### `/diffity-tree`
-
-Opens the file tree browser:
-
-```
-/diffity-tree
-```
-
-### `/diffity-resolve-tree`
-
-Reads open comments from the tree browser and makes the requested code changes:
-
-```
-/diffity-resolve-tree                  # resolve all open comments
-/diffity-resolve-tree abc123           # resolve a specific thread by ID
-```
-
-## Guided code tours
-
-Create narrated, step-by-step walkthroughs of your codebase. Tours open in the browser with a sidebar showing the narrative and highlighted code sections.
-
-### `/diffity-tour`
-
-Your agent researches the codebase, then builds a tour with highlighted code regions and rich markdown explanations:
-
-```
-/diffity-tour how does authentication work?
-/diffity-tour explain the request lifecycle
-/diffity-tour how are comments stored and retrieved?
-/diffity-tour closures
-/diffity-tour async/await patterns
-/diffity-tour walk me through this branch before I merge
-/diffity-tour https://github.com/owner/repo/pull/123
-```
-
-Works for features ("how does auth work?"), concepts ("closures", "generics"), and pre-merge reviews. For concepts, the agent finds real examples in your codebase and teaches the concept progressively from simple to complex. For reviews, it walks the user-facing flows end-to-end and ends with a "things to flag in the PR conversation" list — you can pass a branch, a ref range, or a GitHub PR URL.
-
-Each tour has an intro (step 0) with an architectural overview, followed by numbered steps that highlight specific code regions and explain them in detail. The agent follows the actual execution path, not file order — foundations (schemas, config, helpers) are introduced just-in-time when the flow first touches them.
-
-Tour steps can include **sub-highlights** — clickable focus links in the narrative that narrow the highlight to a specific sub-range within the step. Useful for walking through large functions section by section.
-
-## Learn any topic
-
-Start a project-driven learning journey for any programming language, tool, or framework. Your agent becomes a tutor — it builds teaching projects that open as guided tours in the browser, gives you challenges to complete, reviews your code with inline feedback, and adapts to your pace.
-
-### `/diffity-learn`
-
-Kick off a learning journey. Run it in an empty directory where you want to keep your learning files — the agent creates a `learn-<topic>/` folder with lessons, projects, and progress tracking.
-
-```bash
-mkdir ~/learning && cd ~/learning
-```
-
-Then start learning:
-
-```
-/diffity-learn Rust
-/diffity-learn Go
-/diffity-learn Docker
-/diffity-learn SQL
-/diffity-learn TypeScript
-/diffity-learn Kubernetes
-```
-
-Each lesson follows a loop: your agent builds a small project and opens it as a Diffity tour explaining the concepts, then gives you a challenge to build yourself. When you're done, it reviews your code with inline Diffity comments and decides what to teach next.
-
-Progress is saved to `learn.json` — come back anytime and pick up where you left off. The agent tracks what you've mastered, what you're struggling with, and adjusts the curriculum accordingly.
-
-## GitHub PRs
-
-Pass a GitHub PR URL to view and review pull requests locally:
-
-```bash
-diffity https://github.com/owner/repo/pull/123
-```
-
-This checks out the PR and opens the diff against **the commit the pull request is based on**, so the file and line counts match what the forge shows rather than drifting with your local base branch. A merged pull request works too: its branch is usually deleted, so the head is fetched from `refs/pull/<n>/head`. Requires the [`gh` CLI](https://cli.github.com/) installed and authenticated (`gh auth login`), and the current repo must match the PR's repository.
-
-Above the diff you get the pull request's description and every review already on it, so you are not re-deriving intent from the code or repeating a point someone else has made.
-
-When the checkout cannot name its pull request — a detached worktree at the PR head, which is what the review inbox prepares — pass the number and the commit the pull request is based on:
-
-```bash
-diffity --pr 123 <base-sha>
-```
-
-The diff is pinned to that base, and the description, the reviews and the submit dialog appear as they do for a URL.
-
-### Submitting a review
-
-The forge dialog is a composer, not a push button:
-
-- a checkbox per finding, so you send the ones you agree with. Everything open starts selected; deselecting is remembered, so a finding your agent writes while the dialog is open cannot slip into a set you have already curated
-- replies on a finding are folded into the one comment the forge will hold
-- general comments seed the summary, which you can edit
-- **Comment**, **Approve** or **Request changes** — and an approval needs nothing attached, since a verdict stands on its own. Approve and Request changes are disabled on your own pull request, which the forge refuses anyway
-- everything goes as **one review**: one notification for the author, a summary that has somewhere to live, and no half-posted review if something fails
-
-A comment on a line the pull request does not touch is caught before anything is sent, because the whole review is a single request and one unpostable line would reject all of it. Findings already sent are marked *already on the pull request* and left unselected. A finding that has been sent once is not sent again, however it has been reworded since, because the forge cannot update the comment already there — but a new finding on a line that already carries someone's comment does go out, since the line says nothing about which finding is on it.
-
-Existing inline comments can be pulled into the viewer from the same dialog.
-
-The skills work with PR URLs too:
-
-```
-/diffity-diff https://github.com/owner/repo/pull/123
-/diffity-review https://github.com/owner/repo/pull/123
-/diffity-tour https://github.com/owner/repo/pull/123
-```
-
-Passing a PR URL to `/diffity-tour` locks it to review mode — the agent reads the PR's description, commits, and diff to build a guided walkthrough that you can use before approving or merging.
-
-## Reading a diff in the order it makes sense
-
-A diff arrives alphabetically, which is rarely the order it should be read in. When a walkthrough
-exists for the change, the file list is **reordered** to follow it: the file that explains the rest
-first, the mechanical ones last, everything the walkthrough does not mention below a divider. Each
-file carries the walkthrough's one-line note on why it is read at that point, a stepper walks the
-stops, and `A-Z` in the sidebar header returns to the alphabetical tree.
-
-A walkthrough is recorded by an agent (`/diffity-review` does it as its last step, and
-`/diffity-tour` builds one on request), so this costs you nothing to use.
-
-## What gets your attention
-
-Two mechanisms, with the decider deliberately different for each.
-
-**Highlighted** — the lines a walkthrough points at are tinted. An agent can only ever *add*
-attention this way, never take it away.
-
-**Dimmed** — decided by rules, never by a model, because dimming asserts that something needs
-*less* attention. A hunk recedes when every line it touches is an import, when its added and
-removed lines are the same lines with different whitespace, or when the file is generated. It comes
-back on hover, stays selectable and commentable, and carries the reason, so you can always find out
-why rather than having to trust it.
-
-Files where indentation is syntax — `.py`, `.yml`, `.yaml`, `.md`, `Makefile` and friends — are
-never whitespace-dimmed, because a reindent there can change behaviour.
-
-Whitespace hiding is **on by default** and remembered: it is the formatter's business, not yours.
-Because a filtered diff shows fewer lines than the forge does, the header says so and names the
-amount — `whitespace hidden (2 files, 18 lines suppressed)`.
-
-## Commenting
-
-Click a line to comment on it. **Shift-click** a second line to extend the comment across the span,
-the way the forge does it — within one file and one side, since a range spanning both sides of a
-diff is not something that can be commented on. Dragging down the gutter also selects a range.
-
-## While a review is running
-
-An agent announces a review before it starts writing and again when it finishes. While one is open
-the page carries a banner with the count of findings so far, and **submitting is blocked** — the
-difference between "nothing found" and "not finished looking" is the difference between approving a
-change and approving it too early.
-
-A finding survives the commits you make in response to it: when HEAD moves, open findings and the
-walkthrough follow into the new session, and a finding whose code merely *moved* is re-anchored to
-it. A finding whose code was **edited** keeps its old position rather than being guessed onto
-something it was not written about.
-
-## The agent CLI
-
-Skills drive these; they are listed because they are the whole interface an agent needs.
-
-```
-diffity agent standards [--json]        # the project's severities and standards document
-diffity agent diff                      # the unified diff for this session
-diffity agent list [--status open|resolved|dismissed] [--json]
-diffity agent review-start [--note <text>]
-diffity agent review-done
-diffity agent comment --file <path> --line <n> [--end-line <n>] [--side new|old] --body <text>
-diffity agent general-comment --body <text>
-diffity agent reply <id> --body <text>
-diffity agent resolve <id> [--summary <text>]
-diffity agent dismiss <id> [--reason <text>]
-diffity agent tour-start --topic <text> [--body <text>] [--json]
-diffity agent tour-step --tour <id> --file <path> --line <n> [--end-line <n>] --body <text> [--annotation <text>]
-diffity agent tour-done --tour <id>
-diffity agent tour-delete <id>          # correct a walkthrough instead of adding another
-diffity agent tour-delete --all         # or clear the session's finished ones
-```
-
-Every `--body` also takes `--body-file <path>`, and `--body-file -` reads stdin — a quoted
-heredoc needs no escaping, and the text lands exactly as typed.
-
-Every command follows the running server's own session. `diffity agent --session <id> <command>`
-(canonically between `agent` and the command) addresses another session by id or 8-char prefix.
-
-A comment's line range is trimmed to the file's length, and you are told when that happens: a range
-running past the end would otherwise be counted and highlighted with nothing to show.
-
-## The review inbox
-
-`diffity inbox` watches the pull requests awaiting your review and prepares each one ahead of time, so the review is ready the moment you look. It polls GitHub (`gh search prs --review-requested=@me`), and for each pull request worth your attention it cuts a worktree at the PR head, runs a diffity session over the diff, has an agent prepare a review with a walkthrough, and saves the result as a bundle. New commits redo a stale review; a merged, closed, or no-longer-requested PR is retired. The daemon prepares up to `maxPrepared` of them from the queue on its own — the rest wait, smallest first — and a prepared review leaves the Ready list once you have posted it (GitHub withdraws the request, and the pull request moves to Handled, below) or dismissed it from the page — a dismissal holds until the pull request gets new commits, and dismissed pull requests stay listed at the bottom so one can be brought back. A queued, skipped, failed or dismissed pull request has a ↑ button — and so does a prepared review you have just posted from, which reads as Handled from the moment the review lands rather than from the next poll: prepare this one now — at once and in parallel with whatever the daemon is preparing, past the auto-prepare count, with the filter, the title patterns and the CI hold set aside. Each bump is its own agent run, and the row says `preparing` while it runs. Each prepared review shows its findings by severity ("1 P1 · 2 P2"), and the page can notify you when one is ready — click "Turn on notifications" once to allow it, and ⟳ in the header polls GitHub now instead of at the next interval; `localhost` counts as a secure context, so this works from the pinned tab with nothing else set up.
-
-Every review you post from diffity is noted against its pull request, with the commit it was posted against, and the pull request then stays under **Handled** instead of vanishing when GitHub withdraws the review request. The card links to the pull request itself — the worktree is reclaimed once the review is out — and says what you said: "you approved", "you requested changes", "you commented", and when. When the author pushes after your review, the card moves to the top of the list, reads "new commits since you approved" and is badged `updated`, so a pull request that has come back to you is not something you have to remember; ↑ prepares a fresh review of the current head, re-request or not, and × sets the row aside until the next push. A pull request leaves the list when the author asks for a new review — the search lists it again and it goes back in the queue like anything else — or when it is merged or closed. This counts reviews posted from any diffity, so one you posted from your own clone brings its pull request into the list at the next poll, at the cost of one `gh pr view`. A review you post from a checkout the pull request has moved past still goes out: the findings were written about the commit you read, so diffity posts against that commit, taking the lines a comment may land on from its own diff against the base branch, and says so — GitHub marks whatever the author has changed since as outdated, which is the right outcome. Pulling comments into such a checkout works too, and any remote comment whose line this checkout does not have is counted and reported rather than anchored somewhere it was never about. A local head that is no commit of the pull request at all is still refused: that is a different branch, not an earlier state of this one. `diffity inbox status` prints the same list.
-
-The preparing agent gets more than the diff. The pull request's description travels in its prompt, and the discussion so far — comments on the pull request, submitted reviews, and the inline review comments those reviews left — is written as `pr-context.json` in the pull request's own diffity data directory for the agent to read, never into the worktree, where an untracked file would turn up in the review's own diff. Both are framed as text written by the author and other commenters: information about the change, never instructions. The daemon fetches them with its own `gh`, because the agent runs with your credentials stripped; when the forge cannot be read, the review is prepared without them and the reason is logged. The agent that answers your questions in an opened review is given both as well, read back from that same file.
-
-The daemon never posts your prepared reviews to GitHub unless you turn `postAlerts` on — they are local drafts you open and submit yourself. With it on, the only thing that goes out is the findings the agent named as the reason for an alert: one `COMMENT` review in your name, never an approval or a request for changes, every comment opening with `postPrefix` so nobody reads it as your verdict, and at most once per head. `postFooter` ends the review's own body under a blank line, which is where a team mention or an "automated triage, not a review" line belongs: the inline comments never carry it, so it fires once for the review rather than once per finding. Those findings stay in the prepared review marked as already sent, so your own submit does not send them twice, and the pull request stays listed as awaiting you even though a submitted review withdraws the request — the daemon's post is what consumed it — until you review it yourself, dismiss it, or it is merged or closed. Only the findings whose severity `postSeverities` names go out — `P1` and `must-fix` by default — and the ones the severity rule left behind are said in the log; a head you have reviewed yourself is never posted to, whatever the agent raised, because your own word on that exact code is already there. A reason that claims a severity none of the open findings carries — "and a new P1" over a review of P2s — is not posted either: that claim would go out publicly in your name, so it stops the post and stays a local alert for you to judge. The same reading is applied to the whole prepared review: when the general summary or the walkthrough asserts a severity no finding carries, the card says so ("1 P2 · unbacked P1") rather than letting the prose mislead you. The post is the daemon's own call to `gh`, made after the agent has finished: the review agent still runs with your GitHub credentials stripped from its environment, and its own git calls run with hooks disabled, so a checkout's hook scripts — the author's code — never run with your credentials. That said, the agent executes the pull request's own repository code (see the warning below), so treat all of this as the daemon's design, not a sandbox.
-
-Name repositories in `triage.repos` and the inbox watches every open, non-draft pull request of them, not only the ones that ask for you. A watched pull request costs nothing until something flags it. `triage.bodyPatterns` are regular expressions against the description, which travels in the search itself, so they are free — they are what a generated risk block is for (`^\* (platform|algo-data) - risk level: high$` against NCBackend3's "Impacted code areas"). `alertPaths` needs the changed files, so it costs one `gh pr view`. Only when those miss, and only when `triage.model` names one, is a model spent: one short run with no tools, given the description, the changed paths and the diff (cut at `triage.maxDiffKb`), answering `TRIAGE: <reason>` or `TRIAGE: none`. A run that times out, hits its budget or answers with nothing usable queues no review — a cheap first pass must not queue one nobody asked for — but nor does it pass for a decision: it is kept as a look that reached no verdict, said in the log, and tried again an hour later. While your Claude session limit is on, no triage model runs at all and nothing is recorded for the pull requests the rules missed, so the pass after the pause is the one that decides them. Every other decision is kept against the pull request's own last-updated stamp, so a pull request nothing has changed about costs nothing at the next poll, and a comment alone does not spend another run. Your own pull requests, bots' and titles matching `skipTitles` are set aside without a call.
-
-A flagged pull request is taken into the inbox and prepared next — after anything you bumped, before the ordinary queue, and past `maxPrepared`: it was never asked of you, so the auto-prepare count, which paces the reviews you did ask for, is not what should hold it back. (A pull request already in your inbox that the rules flag jumps the queue but still waits its turn for the pile to clear.) Its card and its queue row say `flagged` with the reason, the preparing agent is told what flagged it ("that is already a reason for ALERT"), so it lands under **Alerted** and, with `postAlerts` on, posts even when the review found no inline finding to add. Nothing is posted at triage time. From there it behaves like any other row: it stays yours while it is open though no search ever listed it, a push re-prepares it, × holds it at its head, your own review moves it to Handled, and a merge retires it. Pull requests already in the inbox are never triaged — the requested loop owns them — but they get the free rules too: a body-pattern or `alertPaths` hit on one waiting for preparation flags it and moves it to the front. Such a row is still one you were asked for, so it retires when the request goes, like any other; only a pull request the triage itself took in stays listed without one. The footer says how the last pass went, "12 watched · 11 quiet".
-
-```bash
-diffity inbox              # run the watcher and a small status server
-diffity inbox --once       # run a single poll-and-prepare pass, then exit
-diffity inbox status       # print the current inbox without starting the daemon
-diffity inbox status --json
-diffity inbox runs         # every agent run of the last 7 days, and what it spent
-diffity inbox runs --since 30 --json
-```
-
-On first run it writes `~/.diffity/inbox/config.json`:
-
-| Key | Meaning |
-|-----|---------|
-| `pollMinutes` | How often GitHub is polled (default 5). Editable from the page's Settings panel, like every key below marked so. |
-| `port` | The status server's port (default 5390). |
-| `reposDir` | Where your base clones live, one directory per repository name. |
-| `worktreesDir` | Where each pull request gets its worktree. |
-| `skipTitles` | Regular expressions matched against the title, one per line in the page — `\(payments\)`, `Release$`. A match skips the pull request before any agent runs, and ↑ overrides it; the match is re-decided at every poll, so a retitle brings the pull request back to the queue. For what a regex cannot express, `filter`. Editable from the page's Settings panel. |
-| `filter` | Your own words on what does and doesn't need your attention, handed to the agent — it answers with a skip instead of reviewing when a PR matches (e.g. "Skip payments-focused PRs"). The agent has to load the skill and read the diff to decide, so every skip costs an agent run; `skipTitles` above costs nothing. Editable from the page's Settings panel. |
-| `alertWhen` | Your own words on what needs you *now*. The agent judges each prepared review against them and flags the ones that match, naming the findings behind the flag; the flagged ones are listed under **Alerted**, above Ready, and the page notifies for those only — empty means every prepared review. Editable from the page's Settings panel. |
-| `alertPaths` | Globs against the pull request's changed paths, one per line in the page — `packages/shared/src/model/**`, `**/dbref/**`. A changed file matching one marks the review as needing you now, whatever the agent made of `alertWhen`. Editable from the page's Settings panel. |
-| `postAlerts` | Whether the daemon posts the findings behind an `alertWhen` alert to the pull request itself, as a `COMMENT` review in your name at most once per head (default false). An alert raised by `alertPaths` posts nothing — that is your own rule about the paths, with nothing in it to tell the author. Editable from the page's Settings panel. |
-| `postPrefix` | What every posted comment opens with, so nobody reads one as a verdict you have stood behind (default `[Automated AI pre-review, not yet checked by human]`). Must not be empty while `postAlerts` is on. Editable from the page's Settings panel. |
-| `postSeverities` | The severity labels a named finding must open with to be posted, comma-separated in the page (default `P1`, `must-fix`). Only the top of the scale goes to the author on its own; a finding of any other severity stays in the prepared review for you. An empty list posts the alert's reason and no findings. Editable from the page's Settings panel. |
-| `postFooter` | Ends the posted review's own body, under a blank line: a team to mention, a line saying what posted this (default empty, which adds nothing). Only the review body carries it, so a mention fires once for the review rather than once per finding. Editable from the page's Settings panel. |
-| `quietOnceCommented` | Whether a pull request you have already commented on stops being alerted about (default false). Any comment of yours counts — a comment on the pull request, a review, an inline review comment, the daemon's own earlier post — so with it on a pull request is alerted about once. The review is still prepared and lands under **Ready**; only the alert is dropped, and nothing is posted. Editable from the page's Settings panel. |
-| `agent.model` | `--model` for the review agent; `null` leaves its own default. Editable from the page. |
-| `agent.effort` | `--effort`: `low`, `medium`, `high`, `xhigh` or `max`; `null` leaves its own default. Editable from the page. |
-| `agent.mcpAllow` | The exact MCP tool names the agent may call, e.g. `mcp__claude_ai_Atlassian__getJiraIssue`. Empty (the default) means no MCP servers at all. Editable from the page. |
-| `agent.extraArgs` | Appended verbatim to the built command, for a flag this table does not cover. |
-| `agent.maxBudgetUsd` | `--max-budget-usd` for one run; `null` leaves it uncapped. A run that hits it is a failed attempt with that reason. Editable from the page. |
-| `validate.model` | The model that checks the drafted P1 and P2 findings before you see them; `null` (the default) runs no second pass. Editable from the page. |
-| `validate.timeoutMinutes` | How long the check may take before it is stopped and the draft goes out unchecked (default 15). Editable from the page. |
-| `validate.maxBudgetUsd` | `--max-budget-usd` for the checking run; `null` leaves it uncapped. Editable from the page. |
-| `triage.repos` | The repositories whose every open pull request is watched, as `owner/repo`, one per line in the page. Empty (the default) watches nothing, so the inbox sees only what asks for you. Editable from the page's Settings panel. |
-| `triage.bodyPatterns` | Regular expressions matched against the description, multiline — `^\* (platform|algo-data) - risk level: high$`. A match flags the pull request, and the matched line becomes the reason. These cost nothing: the description travels in the search. Editable from the page's Settings panel. |
-| `triage.model` | A cheap model for what the rules miss; `null` (the default) leaves the rules on their own. Each look is one short run with no tools. Editable from the page, as "Triage model". |
-| `triage.maxDiffKb` | How much of the diff that model is given, in kilobytes (default 150); the rest is cut with a marker. |
-| `triage.maxBudgetUsd` | `--max-budget-usd` for one triage run (default 0.25); `null` leaves it uncapped. |
-| `waitForCi` | Whether a pull request waits for green CI before an agent is spent on it (default false). Editable from the page. |
-| `prepareTimeoutMinutes` | How long one preparation may take before it's abandoned. Editable from the page. |
-| `maxPrepared` | How many the daemon prepares from the queue on its own (default 5); a bumped pull request is prepared past it. Each preparation is an agent run; the rest of the queue waits until a prepared review is posted or dismissed. Editable from the page, as "Auto-prepare from queue". |
-| `live` | Whether opening a prepared review also parks a live agent on it (default true). Questions asked in the page — the Ask button on a finding — each run the agent once to answer; the agent may answer and amend findings, never edit code, and never reaches GitHub. Editable from the page. |
-| `liveTimeoutMinutes` | How long one answer may take before the agent is stopped (default 10). Editable from the page. |
-
-The command itself is not configurable: the daemon builds `claude -p --output-format json` with the flags the review depends on. It runs with `--setting-sources ""`, so the agent gets none of your Claude settings — no MCP servers, no memory, no `CLAUDE.md`, none of your installed skills. Listing tools in `agent.mcpAllow` brings your MCP servers back and adds a `PreToolUse` hook (`diffity inbox mcp-gate`) that refuses every MCP call but those, by name; the prompt then tells the agent it may read the ticket or document the pull request refers to, and nothing else outside the checkout. A deny list keeps it off `gh pr review`, `gh pr comment`, `gh pr merge` and `gh api`, and off `pnpm`, `npm`, `npx`, `yarn`, `bun` and `make` — CI has already built and tested this head. The skill shipped with this build goes into the agent's system prompt — `diffity-review` for a preparation, `diffity-live` for an answer — so neither depends on what you have installed.
-
-What CI made of the head goes into the prompt: every check that reported, with its verdict, a count of the ones a workflow skipped, and the instruction not to install, build, typecheck, lint or test — CI has done that, and the checkout is the author's code — so the agent reasons from the source and says in its summary when a check failed or is still running. Each card carries the same verdict as a dot before its title: green for passing, red for failing, amber while checks are still going, and no dot at all when nothing has decided — no checks, or only skipped and cancelled ones. With `waitForCi` on, a pull request whose checks are still running waits in the queue ("waiting: CI running (3 checks)") and one whose checks failed is set aside ("CI failed: check-job, pr-mgmt-job") — both re-decided at every poll, so passing checks bring one back to the queue on their own, unlike a filter skip. ↑ prepares it whatever CI says, and a review already prepared for an older head stays openable while its refresh waits.
-
-Name a model in `validate.model` and a second pass checks the draft before you see it. It runs only when the draft holds a P1 or P2 — the findings that would hold up a merge — and only on those: for each one it reads the lines the finding points at and what they depend on, then leaves it, rewrites it (`agent amend`) if the text or the severity is off, or dismisses it (`agent dismiss`) if it does not hold; it adds a finding only where checking one of these revealed another, and amends the general summary when its verdict or counts no longer stand. It gets no review skill and is told not to re-review the diff, and like the drafting pass it runs without the forge's credentials and behind the same deny list. A pass that times out, ends without its `VALIDATED` line, hits its budget or runs into your session limit does not lose you the review: the draft is exported as it stands and its card says "1 P1 · unchecked", so you know the findings are the first pass's alone. When a checking model is set, questions asked in the page are answered with it too — a question is about a finding, which is that model's job.
-
-Every agent run is logged: the pull request and head it was for, which pass it was (`triage` for a cheap look at a watched pull request, `prepare` for a preparation, `validate` for a check of its findings, `answer` for a question asked in the page), the models it actually used, how long it took, its turns, its cost and its tokens, and how it ended (`triaged`, `prepared`, `skipped`, `validated`, `answered`, `failed`, `timeout`, `rate-limited`). `diffity inbox runs` prints that log with totals — the record of what the inbox costs you. A prepared review's card carries its own share of it, "· 8 min · $1.20", with each run behind that head listed on hover, and the page's footer keeps a running total for today and for the last seven days.
-
-A run that ends on your Claude session limit is not the pull request's fault, so it is waited out rather than retried: the row goes back in the queue as "waiting: Claude session limit until 14:00", no failed attempt is counted against it, and no further preparation starts until the limit lifts. The reset time is read out of the agent's own message ("resets 2pm (Europe/Stockholm)"), or set half an hour ahead when the message names none. Polling and reconciling carry on meanwhile, so the page stays current and says how long the pause has left; the pause is kept with the inbox, so restarting the daemon does not spend another run rediscovering the limit.
-
-If your config still has a `prepare` key from an earlier version, delete it — the daemon refuses to start with it, and the built command takes its place. A flag you were passing belongs in `agent.extraArgs`.
-
-> ⚠️ The agent runs inside a checkout the pull request's author controls, so it can execute their repository code. The daemon runs it without the forge's credentials in its environment, with the deny list above, and — unless you list MCP tools in `agent.mcpAllow`, which loads your settings for the servers behind the gate — with none of your Claude settings. That is defence in depth, not a sandbox.
-
-## Multiple projects
-
-Diffity supports running multiple projects simultaneously. Each gets its own port automatically:
-
-```bash
-# Terminal 1 — starts on :5391
-cd ~/projects/app && diffity
-
-# Terminal 2 — starts on :5392
-cd ~/projects/api && diffity
-```
-
-If you run `diffity` in a repo that already has a running instance, it opens the existing one instead of starting a new server. Use `--new` to kill the existing instance and start fresh.
-
-```bash
-diffity list               # show all running instances
-diffity list --json        # machine-readable output
-```
-
-## Options
-
-```
---base <ref>       Base ref to compare from (e.g. main, HEAD~3, v1.0.0)
---compare <ref>    Ref to compare against base (default: working tree)
---port <port>      Custom port (default: auto-assigned from 5391)
---no-open          Don't open browser
---dark             Dark mode
---unified          Unified view (default: split)
---quiet            Minimal terminal output
---new              Stop existing instance and start fresh
---repo <path>      Repository to work on, when the current directory is not one
-```
-
-`--repo` is for the common case where a project directory holds several worktrees as
-subdirectories rather than being a repository itself. It must come before a positional argument.
-
-## Environment variables
-
-| Variable       | Description                                                               |
-| -------------- | ------------------------------------------------------------------------- |
-| `DIFFITY_HOST` | Hostname used in the printed URL (default: `localhost`).                  |
-| `DIFFITY_BIND` | Interface the server listens on (default: `127.0.0.1`).                   |
-| `DIFFITY_DATA_DIR` | Where review notes are kept (default: `~/.diffity/<repo-hash>`).      |
-| `DIFFITY_SYNC_DEV_SKILLS` | Set to `1` to have a build install the `diffity-dev-*` skills into `~/.claude/skills`. |
-
-Useful when running diffity inside a VM or container and opening it from another machine:
-
-```bash
-DIFFITY_BIND=0.0.0.0 DIFFITY_HOST=diffity.local diffity
-```
-
-The server has no authentication: anything that can reach it can read the diff, the
-repository's files and the review comments. Only widen `DIFFITY_BIND` on a network you
-trust.
-
-## Where review notes live
-
-Review threads, walkthroughs and sessions are kept in a SQLite database. By default that is
-`~/.diffity/<repo-hash>/reviews.db`, one per repository.
-
-A project can keep its own instead, which is what you want when several worktrees of the same
-repository each need their own notes, or when the notes should travel with the project rather
-than the machine. Commit a `.diffity.json` at the repository root:
+The first tool call opens the browser to sign in and allow the connection. Then:
+
+- **The `review` prompt** (arguments `repo`, `pr`) holds the review method, so nothing has to be
+  installed on the agent's side. In Claude Code it is `/mcp__diffity__review`.
+- **Sessions.** `create_session` takes a pull request, two commits, or a base commit and a patch
+  (for work that is not pushed). Its result carries the page's URL. A new session on a pull request
+  that moved on carries the open findings over.
+- **Findings** are inline comments with a severity prefix (`P1`/`P2`/`P3` unless the repository
+  says otherwise); tours give the diff a reading order.
+- **Posting.** From the page the user posts the findings to the pull request as one review, and
+  pulls GitHub's review threads in. Posting is only for pull request sessions, and refused once the
+  pull request has moved past the session's head. GitHub is reached as the user: through the GitHub
+  App they connect on **Settings**, or a token pasted there when no App is configured.
+
+A repository can name its review standards in a `.diffity.json` at its root, which the
+`get_standards` tool reads:
 
 ```json
-{ "dataDir": "../.diffity" }
+{ "review": { "severities": ["P1", "P2", "P3"], "standards": ".claude/skills/code-review/SKILL.md" } }
 ```
 
-Relative paths resolve against the repository root, absolute paths are used as given, and
-`DIFFITY_DATA_DIR` overrides both. A directory chosen this way is used as-is — no hashed
-subdirectory, since there is nothing to disambiguate.
+## Running on localhost
 
-Point it **outside** the working tree, or add it to `.gitignore`. Otherwise the notes show up as
-untracked files in the very diff you are reviewing; diffity warns on startup when that happens.
-The database quotes the code under review, so it is created readable only by you.
+The database is PGlite under the data directory; the dev login trusts any typed address in the
+allowed domain, and a dev GitHub token stands in for connecting GitHub.
 
-## Review standards
+```bash
+npm ci
+npm run build
 
-An agent reviewing a diff can be told what this project reviews against, so the standards live with
-the code rather than in one person's agent configuration:
-
-```json
-{
-  "review": {
-    "severities": ["P1", "P2", "P3"],
-    "standards": ".claude/skills/code-review/SKILL.md"
-  }
-}
+DIFFITY_DATA_DIR=/tmp/diffity-data \
+DIFFITY_DEV_LOGIN=1 \
+DIFFITY_DEV_GITHUB_TOKEN=$(gh auth token) \
+  node packages/server/dist/index.js
 ```
 
-`severities` are the labels findings are prefixed with, most severe first, defaulting to
-`P1`/`P2`/`P3`. `standards` is a repository-relative path to a document the agent reads before
-reviewing. `diffity agent standards` prints both, and the review skill reads it first.
+Open <http://localhost:5390> and sign in, and add the connector with
+`claude mcp add --transport http diffity http://localhost:5390/mcp`. `npm run dev` with the same
+environment rebuilds the UI and restarts the server on change.
+
+## Environment
+
+| Variable | Default | |
+|---|---|---|
+| `DIFFITY_DATA_DIR` | — (required) | Repository mirrors, and the PGlite database (`pg/`) when there is no `DATABASE_URL` |
+| `DATABASE_URL` | — | Postgres connection URL; without it the database is PGlite under the data directory |
+| `DIFFITY_PG_CA` | — | The Postgres server CA's PEM; the server is then verified against it, not by host name (`verify-ca`), and `sslmode`/`sslrootcert` in the URL are ignored |
+| `DIFFITY_PUBLIC_URL` | `http://localhost:5390` | The origin users and agents reach the server on; OAuth issuer and session links use it |
+| `PORT` | `5390` | Port to listen on |
+| `DIFFITY_BIND` | `127.0.0.1` for a localhost public URL, else (or on Cloud Run) `0.0.0.0` | Interface to listen on |
+| `DIFFITY_TRUST_PROXY` | off | Express `trust proxy`: the number of proxies in front (`1` on Cloud Run), `true`, or addresses |
+| `DIFFITY_SECRET_KEY` | generated per run on localhost, required elsewhere | 32 bytes, base64 (`openssl rand -base64 32`); encrypts stored GitHub tokens |
+| `DIFFITY_IAP_AUDIENCE` | — | `/projects/<number>/global/backendServices/<id>`: every page request must carry a valid IAP assertion for it; no login form |
+| `DIFFITY_DEV_LOGIN` | off | `1` enables the email-only development login; refused unless the public URL is localhost, and with IAP |
+| `DIFFITY_ALLOWED_DOMAIN` | `naturalcycles.com` | Who may sign in (checked behind IAP too) |
+| `DIFFITY_ALLOWED_EMAILS` | — | Comma-separated addresses; replaces the domain rule when set |
+| `DIFFITY_GITHUB_APP_CLIENT_ID`, `DIFFITY_GITHUB_APP_CLIENT_SECRET` | — | The GitHub App users connect on **Settings**; without it, users paste a token there instead |
+| `DIFFITY_GITHUB_APP_SLUG` | — | The App's URL name, for the install link on **Settings** |
+| `DIFFITY_DEV_GITHUB_TOKEN` | — | A token used for users who have not connected GitHub; localhost only |
+| `GITHUB_API_URL` | `https://api.github.com` | GitHub REST and GraphQL API |
+| `GITHUB_URL` | `https://github.com` | Where the App's authorization and token exchange happen |
+
+An `http://` public URL other than localhost is refused by the MCP SDK's OAuth metadata unless
+`MCP_DANGEROUSLY_ALLOW_INSECURE_ISSUER_URL=1` is set; use https anywhere else.
+
+The GitHub App's callback URL is `<DIFFITY_PUBLIC_URL>/github/callback`. Its user tokens expire
+and are refreshed by the server; the App reads only repositories it is installed on.
+
+## Container
+
+```bash
+docker build -t diffity .
+docker run --rm -p 127.0.0.1:5390:5390 \
+  -e DIFFITY_DEV_LOGIN=1 -e DIFFITY_DEV_GITHUB_TOKEN=$(gh auth token) diffity
+```
+
+Publish the port on loopback only while the dev login is on: it trusts whatever email is typed.
+The image keeps its data (mirrors, and PGlite without `DATABASE_URL`) in `/data`.
+
+## Deploy
+
+`.github/workflows/deploy.yml`, run by hand (`workflow_dispatch`), builds and smoke-tests the image,
+pushes it to `europe-west1-docker.pkg.dev/nc-innovation-496314/diffity/diffity`, and deploys the
+Cloud Run service `diffity` in `nc-innovation-496314`. The infrastructure (IAP load balancer at
+`diffity.prod.naturalcycles.net`, Cloud SQL Postgres over the VPC connector, runtime service
+account, secrets) is in NaturalCycles/NCInfraIaC. On the load balancer, `/mcp`, `/token`,
+`/register`, `/revoke` and the OAuth `/.well-known/*` metadata bypass IAP, since agents
+authenticate with diffity's own OAuth; everything else is behind IAP.
+
+The deploy sets `DIFFITY_PUBLIC_URL`, `DIFFITY_TRUST_PROXY=1` and `DIFFITY_IAP_AUDIENCE` (looked
+up from the `diffity` backend service), and mounts the secrets `diffity-database-url`
+(`DATABASE_URL`), `diffity-postgres-ca` (`DIFFITY_PG_CA`) and `diffity-secret-key`
+(`DIFFITY_SECRET_KEY`). It needs:
+
+- the `GCP_SERVICE_ACCOUNT` secret in the `prod` environment, and `SLACK_API_TOKEN`;
+- the repository variable `DIFFITY_GITHUB_APP_CLIENT_ID` (and optionally
+  `DIFFITY_GITHUB_APP_SLUG`) for the GitHub App; with it, the secret
+  `diffity-github-app-client-secret` is mounted as `DIFFITY_GITHUB_APP_CLIENT_SECRET`. Without it,
+  users paste a GitHub token on **Settings**.
+
+## Access and isolation
+
+- Every session, thread, comment and walkthrough belongs to one user; another user's ids answer as
+  if they did not exist.
+- Behind IAP the user is whoever IAP's signed `x-goog-iap-jwt-assertion` names, verified on every
+  request against Google's keys and `DIFFITY_IAP_AUDIENCE`; a request without it gets 401.
+- Before a session is created, GitHub is asked whether the user's token can read the repository.
+  Mirror fetches use that token through the environment, never the mirror's config.
+- OAuth client secrets, codes, access and refresh tokens and the web session cookie are stored as
+  sha256 hashes; GitHub tokens (pasted, or the App's access and refresh tokens) are encrypted with
+  `DIFFITY_SECRET_KEY`.
+- Posting is only for pull request sessions, and refused once the pull request has moved past the
+  session's head: the user asks for a new session, which the open findings carry over to.
 
 ## License
 
-[MIT](./LICENSE) — © Kamran Ahmed (the upstream
-[diffity](https://github.com/nilbuild/diffity)), with this fork's changes by Natural Cycles.
+[MIT](./LICENSE) — © Kamran Ahmed (the upstream [diffity](https://github.com/nilbuild/diffity)),
+with Natural Cycles' changes.

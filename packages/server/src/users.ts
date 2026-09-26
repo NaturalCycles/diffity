@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Store } from './db.js';
+import type { Db } from './db.js';
 import { decrypt, encrypt, randomToken, sha256 } from './crypto.js';
 
 export interface UserSettings {
@@ -11,6 +11,7 @@ export interface User {
   email: string;
   name: string;
   settings: UserSettings;
+  githubLogin: string | null;
 }
 
 interface UserRow {
@@ -18,6 +19,7 @@ interface UserRow {
   email: string;
   name: string;
   settings: string;
+  github_login: string | null;
 }
 
 const DEFAULT_SETTINGS: UserSettings = { shareReviews: 'private' };
@@ -29,45 +31,41 @@ function rowToUser(row: UserRow): User {
   } catch {
     // A hand-edited row falls back to the defaults rather than locking its owner out.
   }
-  return { id: row.id, email: row.email, name: row.name, settings };
+  return { id: row.id, email: row.email, name: row.name, settings, githubLogin: row.github_login };
 }
 
 export class Users {
-  constructor(private readonly store: Store, private readonly secretKey: Buffer) {}
+  constructor(private readonly db: Db, private readonly secretKey: Buffer) {}
 
-  findOrCreate(email: string, name?: string): User {
+  async findOrCreate(email: string, name?: string): Promise<User> {
     const normalised = email.trim().toLowerCase();
-    const existing = this.store.get<UserRow>('SELECT * FROM users WHERE email = ?', normalised);
+    const existing = await this.db.one<UserRow>('SELECT * FROM users WHERE email = $1', [normalised]);
     if (existing) {
       return rowToUser(existing);
     }
-    const id = randomUUID();
-    this.store.run(
-      'INSERT INTO users (id, email, name, created_at) VALUES (?, ?, ?, ?)',
-      id,
-      normalised,
-      name?.trim() || normalised,
-      new Date().toISOString(),
+    await this.db.query(
+      'INSERT INTO users (id, email, name, created_at) VALUES ($1, $2, $3, $4) ON CONFLICT (email) DO NOTHING',
+      [randomUUID(), normalised, name?.trim() || normalised, new Date().toISOString()],
     );
-    return this.get(id)!;
+    return rowToUser((await this.db.one<UserRow>('SELECT * FROM users WHERE email = $1', [normalised]))!);
   }
 
-  get(id: string): User | null {
-    const row = this.store.get<UserRow>('SELECT * FROM users WHERE id = ?', id);
+  async get(id: string): Promise<User | null> {
+    const row = await this.db.one<UserRow>('SELECT * FROM users WHERE id = $1', [id]);
     return row ? rowToUser(row) : null;
   }
 
-  setGitHubToken(userId: string, token: string | null): void {
-    this.store.run(
-      'UPDATE users SET github_token = ? WHERE id = ?',
+  async setGitHubToken(userId: string, token: string | null, login: string | null = null): Promise<void> {
+    await this.db.query('UPDATE users SET github_token = $1, github_login = $2 WHERE id = $3', [
       token ? encrypt(this.secretKey, token) : null,
+      token ? login : null,
       userId,
-    );
+    ]);
   }
 
   /** Null as well when the token was sealed with a key this process no longer has. */
-  gitHubToken(userId: string): string | null {
-    const row = this.store.get<{ github_token: string | null }>('SELECT github_token FROM users WHERE id = ?', userId);
+  async gitHubToken(userId: string): Promise<string | null> {
+    const row = await this.db.one<{ github_token: string | null }>('SELECT github_token FROM users WHERE id = $1', [userId]);
     return row?.github_token ? decrypt(this.secretKey, row.github_token) : null;
   }
 }
@@ -75,28 +73,27 @@ export class Users {
 const WEB_SESSION_DAYS = 30;
 
 export class WebSessions {
-  constructor(private readonly store: Store) {}
+  constructor(private readonly db: Db) {}
 
   /** The cookie value; the table holds only its hash. */
-  create(userId: string, now = Date.now()): string {
+  async create(userId: string, now = Date.now()): Promise<string> {
     const token = randomToken();
-    this.store.run(
-      'INSERT INTO web_sessions (id_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)',
+    await this.db.query('INSERT INTO web_sessions (id_hash, user_id, created_at, expires_at) VALUES ($1, $2, $3, $4)', [
       sha256(token),
       userId,
       new Date(now).toISOString(),
       now + WEB_SESSION_DAYS * 24 * 60 * 60 * 1000,
-    );
+    ]);
     return token;
   }
 
-  userFor(token: string | undefined, now = Date.now()): string | null {
+  async userFor(token: string | undefined, now = Date.now()): Promise<string | null> {
     if (!token) {
       return null;
     }
-    const row = this.store.get<{ user_id: string; expires_at: number }>(
-      'SELECT user_id, expires_at FROM web_sessions WHERE id_hash = ?',
-      sha256(token),
+    const row = await this.db.one<{ user_id: string; expires_at: number }>(
+      'SELECT user_id, expires_at FROM web_sessions WHERE id_hash = $1',
+      [sha256(token)],
     );
     if (!row || row.expires_at < now) {
       return null;
@@ -104,9 +101,9 @@ export class WebSessions {
     return row.user_id;
   }
 
-  destroy(token: string | undefined): void {
+  async destroy(token: string | undefined): Promise<void> {
     if (token) {
-      this.store.run('DELETE FROM web_sessions WHERE id_hash = ?', sha256(token));
+      await this.db.query('DELETE FROM web_sessions WHERE id_hash = $1', [sha256(token)]);
     }
   }
 

@@ -8,10 +8,6 @@ export function makeComment(overrides: Partial<Comment> = {}): Comment {
     body: '',
     kind: 'review',
     createdAt: '',
-    liveRequestedAt: null,
-    liveIntent: null,
-    liveClaimedAt: null,
-    liveAnsweredAt: null,
     ...overrides,
   };
 }

@@ -5,12 +5,6 @@ import {
   parseUpdateThreadStatusRequest,
   parseDeleteThreadsRequest,
   parseEditCommentRequest,
-  parseCreateTourRequest,
-  parseAddTourStepRequest,
-  parseUpdateTourStatusRequest,
-  parseRevertFileRequest,
-  parseRevertHunkRequest,
-  parseOpenInEditorRequest,
   parsePullCommentsRequest,
   parseReviewSubmission,
 } from '../src/index.js';
@@ -32,11 +26,11 @@ function errorOf(result: { ok: boolean; error?: string }): string {
 
 describe('a thread request', () => {
   it('passes with exactly the fields it sent', () => {
-    const result = parseCreateThreadRequest({ ...goodThread, kind: 'aside', live: true, intent: 'act' });
+    const result = parseCreateThreadRequest({ ...goodThread, kind: 'aside' });
 
     expect(result).toEqual({
       ok: true,
-      value: { ...goodThread, anchorContent: undefined, kind: 'aside', live: true, intent: 'act',
+      value: { ...goodThread, anchorContent: undefined, kind: 'aside',
         author: { name: 'You', type: 'user', avatarUrl: undefined } },
     });
   });
@@ -65,8 +59,6 @@ describe('a thread request', () => {
     [{ ...goodThread, endLine: '5' }, 'endLine'],
     [{ ...goodThread, body: '' }, 'body must be a non-empty string'],
     [{ ...goodThread, kind: 'weird' }, 'kind must be one of: review, aside'],
-    [{ ...goodThread, live: 'yes' }, 'live must be a boolean'],
-    [{ ...goodThread, intent: 'do-it' }, 'intent must be one of: ask, act'],
     [{ ...goodThread, sessionId: undefined }, 'sessionId'],
   ])('rejects %j naming the field', (body, expected) => {
     expect(errorOf(parseCreateThreadRequest(body))).toContain(expected);
@@ -92,7 +84,7 @@ describe('the smaller bodies', () => {
   it('replies need body and author', () => {
     expect(parseReplyRequest({ body: 'hi', author: { name: 'A', type: 'agent' } }).ok).toBe(true);
     expect(errorOf(parseReplyRequest({ body: 'hi' }))).toContain('author');
-    expect(errorOf(parseReplyRequest({ body: 'hi', author: { name: 'A', type: 'agent' }, intent: 'maybe' }))).toContain('intent');
+    expect(errorOf(parseReplyRequest({ body: 'hi', author: { name: 'A', type: 'agent' }, kind: 'maybe' }))).toContain('kind');
   });
 
   it('status must be a real status', () => {
@@ -109,31 +101,6 @@ describe('the smaller bodies', () => {
   it('an edit needs its new body', () => {
     expect(parseEditCommentRequest({ body: 'new text' }).ok).toBe(true);
     expect(errorOf(parseEditCommentRequest({ body: 2 }))).toContain('body');
-  });
-
-  it('tours need a session and a topic; steps need a place', () => {
-    expect(parseCreateTourRequest({ sessionId: 's1', topic: 'Reading order' }).ok).toBe(true);
-    expect(errorOf(parseCreateTourRequest({ sessionId: 's1' }))).toContain('topic');
-    expect(parseAddTourStepRequest({ filePath: 'a.ts', startLine: 1, endLine: 2 }).ok).toBe(true);
-    expect(errorOf(parseAddTourStepRequest({ filePath: 'a.ts', startLine: 1, endLine: 2.5 }))).toContain('endLine');
-    expect(errorOf(parseAddTourStepRequest({ filePath: 'a.ts', startLine: 4, endLine: 1 })))
-      .toBe('endLine must not be before startLine');
-    expect(parseUpdateTourStatusRequest({ status: 'ready' }).ok).toBe(true);
-    expect(errorOf(parseUpdateTourStatusRequest({ status: 'done' }))).toBe('status must be one of: building, ready');
-  });
-
-  it('reverts name what they revert', () => {
-    expect(parseRevertFileRequest({ filePath: 'a.ts', isUntracked: false }).ok).toBe(true);
-    expect(errorOf(parseRevertFileRequest({ filePath: 42 }))).toContain('filePath');
-    expect(errorOf(parseRevertFileRequest({ filePath: 'a.ts', isUntracked: 'yes' }))).toContain('isUntracked');
-    expect(parseRevertHunkRequest({ patch: 'diff --git ...' }).ok).toBe(true);
-    expect(errorOf(parseRevertHunkRequest({ patch: '' }))).toContain('patch');
-  });
-
-  it('the editor path may be empty, which means the repository root', () => {
-    expect(parseOpenInEditorRequest({ filePath: '' }).ok).toBe(true);
-    expect(parseOpenInEditorRequest({ filePath: 'a.ts', line: 3 }).ok).toBe(true);
-    expect(errorOf(parseOpenInEditorRequest({ filePath: 'a.ts', line: 0 }))).toContain('line');
   });
 
   it('pulling comments names the session', () => {

@@ -7,26 +7,13 @@ export interface ReviewRun {
   note: string;
 }
 
-export interface RefCapabilities {
-  reviews: boolean;
-  revert: boolean;
-  staleness: boolean;
-}
-
-/** What `/api/info` and `/api/tree/info` answer. The tree has no review run to speak of. */
+/** What `/api/info` answers. */
 export interface RepoInfoResponse {
   name: string;
   branch: string;
   root: string;
   description: string;
-  capabilities: RefCapabilities;
-  sessionId: string | null;
+  sessionId: string;
   review?: ReviewRun | null;
   github: GitHubRemote | null;
-  editor: 'vscode' | null;
-  /**
-   * Served by the hosted server, which reviews pushed commits: there is no working tree to browse
-   * and nothing is posted to the forge from the page. Absent means the local CLI.
-   */
-  hosted?: boolean;
 }

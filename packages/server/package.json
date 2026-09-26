@@ -1,6 +1,5 @@
 {
   "name": "@diffity/server",
-  "version": "0.10.38",
   "private": true,
   "type": "module",
   "description": "Hosted, multi-user diffity: the review UI and an OAuth-protected MCP endpoint",
@@ -9,28 +8,32 @@
   },
   "scripts": {
     "build": "tsx build.ts",
-    "dev": "tsx src/index.ts",
+    "dev": "tsx watch src/index.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.typecheck.json"
   },
   "engines": {
-    "node": ">=22.13"
+    "node": ">=24"
   },
   "devDependencies": {
     "@diffity/api": "*",
-    "@diffity/git": "*",
     "@diffity/parser": "*",
+    "@electric-sql/pglite-socket": "^0.2.11",
     "@types/express": "^5.0.6",
     "@types/node": "^25.5.0",
+    "@types/pg": "^8.23.1",
     "esbuild": "^0.27.0",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vitest": "^4.1.0"
   },
   "dependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "@modelcontextprotocol/sdk": "^1.30.1",
     "express": "^5.2.1",
+    "jose": "^6.2.12",
+    "pg": "^8.23.0",
     "zod": "^4.6.5"
   }
 }

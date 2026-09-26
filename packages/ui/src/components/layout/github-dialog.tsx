@@ -29,10 +29,8 @@ interface GitHubDialogProps {
   details: GitHubDetails;
   threads: CommentThread[];
   sessionId: string | null;
-  /** An agent is still writing findings, so the review is not ready to leave the machine. */
+  /** An agent is still writing findings, so the review is not ready to post. */
   reviewInProgress?: boolean;
-  /** False on the hosted server, which does not post to the forge from the page yet. */
-  postingAvailable?: boolean;
   onPulled: () => void;
   onClose: () => void;
 }
@@ -50,7 +48,7 @@ function lineLabel(thread: CommentThread): string {
 }
 
 export function GitHubDialog(props: GitHubDialogProps) {
-  const { details, threads, sessionId, reviewInProgress, postingAvailable = true, onPulled, onClose } = props;
+  const { details, threads, sessionId, reviewInProgress, onPulled, onClose } = props;
   const [commentCount, setCommentCount] = useState(details.commentCount);
   const [submitting, setSubmitting] = useState(false);
   const [pulling, setPulling] = useState(false);
@@ -205,12 +203,6 @@ export function GitHubDialog(props: GitHubDialogProps) {
         </div>
 
         <div className="px-4 pb-4 pt-2 space-y-3 overflow-y-auto">
-          {!postingAvailable && (
-            <div className="px-2.5 py-2 rounded-md border border-border bg-bg-secondary text-[11px] text-text-secondary">
-              Posting this review to GitHub is not available here yet.
-            </div>
-          )}
-          {postingAvailable && (<>
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <span className="text-[11px] font-medium uppercase tracking-wider text-text-secondary">
@@ -359,7 +351,6 @@ export function GitHubDialog(props: GitHubDialogProps) {
               </button>
             )}
           </div>
-          </>)}
 
           <a
             href={details.prUrl}

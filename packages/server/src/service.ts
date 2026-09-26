@@ -1,10 +1,28 @@
 import { parseDiff } from '@diffity/parser';
-import { DEFAULT_SEVERITIES, parseRepoConfig, REPO_CONFIG_FILE } from '@diffity/git';
-import type { CommentThread, DiffResponse, GitHubDetails, Suppressed } from '@diffity/api';
-import { isSha, isSafeRepoPath, isRepoName, type Mirrors, type NameStatus } from './git.js';
-import type { GitHubAccess, GitHubApi } from './github.js';
+import type {
+  CommentThread,
+  DiffResponse,
+  GitHubDetails,
+  PullCommentsResult,
+  ReviewResult,
+  ReviewSubmission,
+  Suppressed,
+} from '@diffity/api';
+import { isSha, isSafeRepoPath, isRepoName, serializer, type Mirrors, type NameStatus } from './git.js';
+import type { GitHubAccess, GitHubApi, ReviewCommentPayload } from './github.js';
 import type { PrMeta, ReviewSessionRecord, Reviews } from './reviews.js';
 import { followRename, reanchor, splitLines } from './anchor.js';
+import { DEFAULT_SEVERITIES, parseReviewConfig, REPO_CONFIG_FILE } from './repo-config.js';
+import {
+  commentableLines,
+  existingThreadFor,
+  groupPulledThreads,
+  isAlreadyCommented,
+  matchCreatedComments,
+  threadsResolvedRemotely,
+  toReviewPayload,
+  type SentComment,
+} from './github-review.js';
 
 /** A failure worth telling the caller about in words, with the HTTP status it amounts to. */
 export class ServiceError extends Error {
@@ -105,21 +123,26 @@ class Cache<T> {
 export class ReviewService {
   private readonly diffCache = new Cache<string>();
   private readonly filesCache = new Cache<NameStatus[]>();
+  private readonly githubLocks = new Map<string, <T>(work: () => Promise<T>) => Promise<T>>();
 
   constructor(
     readonly reviews: Reviews,
     private readonly mirrors: Mirrors,
-    private readonly github: GitHubApi,
+    readonly github: GitHubApi,
     private readonly access: GitHubAccess,
     readonly publicUrl: URL,
   ) {}
+
+  settingsUrl(): string {
+    return new URL('/settings', this.publicUrl).href;
+  }
 
   sessionUrl(sessionId: string): string {
     return new URL(`/s/${sessionId}/`, this.publicUrl).href;
   }
 
-  requireSession(userId: string, idOrPrefix: string): ReviewSessionRecord {
-    const session = this.reviews.getSession(userId, idOrPrefix);
+  async requireSession(userId: string, idOrPrefix: string): Promise<ReviewSessionRecord> {
+    const session = await this.reviews.getSession(userId, idOrPrefix);
     if (!session) {
       throw new ServiceError(`No session matches ${idOrPrefix}`, 404);
     }
@@ -137,7 +160,7 @@ export class ReviewService {
       throw new ServiceError(
         token
           ? `${slug.owner}/${slug.repo} does not exist or your GitHub token cannot read it`
-          : `${slug.owner}/${slug.repo} is not readable without a GitHub token; add one at ${new URL('/settings', this.publicUrl).href}`,
+          : `${slug.owner}/${slug.repo} is not readable without GitHub access; connect GitHub at ${this.settingsUrl()}`,
         404,
       );
     }
@@ -181,7 +204,7 @@ export class ReviewService {
       }
     }
 
-    const { session, created } = this.reviews.findOrCreateSession({
+    const { session, created } = await this.reviews.findOrCreateSession({
       userId,
       owner,
       repo,
@@ -200,11 +223,11 @@ export class ReviewService {
    * acting on the findings is what moves the head. Lines follow their code where it can be found.
    */
   private async carryForward(session: ReviewSessionRecord): Promise<number> {
-    const priors = this.reviews.priorPrSessions(session.userId, session.repoId, session.prNumber!, session.id);
+    const priors = await this.reviews.priorPrSessions(session.userId, session.repoId, session.prNumber!, session.id);
     if (priors.length === 0) {
       return 0;
     }
-    const moved = this.reviews.moveOpenWork(session.userId, priors.map(prior => prior.id), session.id);
+    const moved = await this.reviews.moveOpenWork(session.userId, priors.map(prior => prior.id), session.id);
     if (moved === 0) {
       return 0;
     }
@@ -222,11 +245,11 @@ export class ReviewService {
         // A head the mirror no longer has cannot say what was renamed; the paths stay as they are.
       }
     }
-    const threads = this.reviews.threadsForSession(session.userId, session.id, 'open');
+    const threads = await this.reviews.threadsForSession(session.userId, session.id, 'open');
     for (const thread of threads) {
       const path = followRename(thread.filePath, moves);
       if (path !== thread.filePath) {
-        this.reviews.updateThreadPath(session.userId, thread.id, path);
+        await this.reviews.updateThreadPath(session.userId, thread.id, path);
         thread.filePath = path;
       }
     }
@@ -245,7 +268,7 @@ export class ReviewService {
       }
       const range = reanchor(thread.anchorContent!, splitLines(content), thread.startLine);
       if (range && range.startLine !== thread.startLine) {
-        this.reviews.updateThreadLines(session.userId, thread.id, range.startLine, range.endLine);
+        await this.reviews.updateThreadLines(session.userId, thread.id, range.startLine, range.endLine);
       }
     }
     return moved;
@@ -315,7 +338,7 @@ export class ReviewService {
   /** The project's own review rules, as they are at the reviewed head. */
   async standards(session: ReviewSessionRecord): Promise<Standards> {
     const raw = await this.readFile(session, 'new', REPO_CONFIG_FILE);
-    const review = raw ? parseRepoConfig(raw).review : undefined;
+    const review = raw ? parseReviewConfig(raw) : undefined;
     let standards: Standards['standards'] = null;
     if (review?.standards) {
       const content = await this.readFile(session, 'new', review.standards);
@@ -342,8 +365,236 @@ export class ReviewService {
     }
   }
 
-  threadsForSession(session: ReviewSessionRecord): CommentThread[] {
+  threadsForSession(session: ReviewSessionRecord): Promise<CommentThread[]> {
     return this.reviews.threadsForSession(session.userId, session.id);
+  }
+
+  /** One GitHub mutation per user at a time, so a second submit sees the first one's comments. */
+  private githubLock(userId: string): <T>(work: () => Promise<T>) => Promise<T> {
+    let lock = this.githubLocks.get(userId);
+    if (!lock) {
+      lock = serializer();
+      this.githubLocks.set(userId, lock);
+    }
+    return lock;
+  }
+
+  private async prToken(session: ReviewSessionRecord): Promise<string> {
+    if (session.prNumber === null) {
+      throw new ServiceError('Only a pull request session can be posted to or pulled from GitHub');
+    }
+    const token = await this.access.tokenFor(session.userId);
+    if (!token) {
+      throw new ServiceError(`Connect GitHub first, at ${this.settingsUrl()}`, 403);
+    }
+    return token;
+  }
+
+  /** The stored details, brought up to date from GitHub where the user's access allows. */
+  async gitHubDetails(session: ReviewSessionRecord): Promise<GitHubDetails | null> {
+    const stored = gitHubDetailsFor(session);
+    const token = stored ? await this.access.tokenFor(session.userId) : null;
+    if (!stored || !token) {
+      return stored;
+    }
+    try {
+      const [pull, comments, reviews, login] = await Promise.all([
+        this.github.getPull(token, session.owner, session.repo, stored.prNumber),
+        this.github.pullComments(token, session.owner, session.repo, stored.prNumber),
+        this.github.reviews(token, session.owner, session.repo, stored.prNumber),
+        this.github.viewerLogin(token),
+      ]);
+      return {
+        ...stored,
+        prTitle: pull?.title ?? stored.prTitle,
+        prBody: pull?.body ?? stored.prBody,
+        commentCount: comments.length,
+        viewerDidAuthor: !!login && login === (pull?.author ?? stored.prAuthor),
+        reviews,
+      };
+    } catch {
+      return stored;
+    }
+  }
+
+  /**
+   * One review holding every comment, against the reviewed head: the author gets one
+   * notification and a partial failure cannot leave half a review. Comments GitHub would refuse,
+   * or that are already there, are left out rather than failing the whole review.
+   */
+  async postReview(session: ReviewSessionRecord, submission: ReviewSubmission): Promise<ReviewResult> {
+    const token = await this.prToken(session);
+    // A verdict carries its own meaning; only a plain comment needs something in it.
+    if (submission.event === 'COMMENT' && submission.comments.length === 0 && !submission.body.trim()) {
+      throw new ServiceError('A comment review needs a summary or at least one comment');
+    }
+    const { owner, repo } = session;
+    const prNumber = session.prNumber!;
+    return this.githubLock(session.userId)(async () => {
+      const pull = await this.github.getPull(token, owner, repo, prNumber);
+      if (!pull) {
+        throw new ServiceError(`${owner}/${repo} has no pull request #${prNumber}`, 404);
+      }
+      if (pull.headSha !== session.headSha) {
+        throw new ServiceError(
+          `The pull request has moved on to ${pull.headSha.slice(0, 7)} since this session (${session.headSha.slice(0, 7)}). `
+          + 'Ask your agent for a new session on the pull request; open findings carry over to it.',
+          409,
+        );
+      }
+      const [patch, existing, viewerLogin] = await Promise.all([
+        this.diffText(session),
+        this.github.pullComments(token, owner, repo, prNumber),
+        this.github.viewerLogin(token),
+      ]);
+      const commentable = commentableLines(patch);
+      const threadIds = await this.reviews.threadsOnTheForge(
+        session.userId,
+        submission.comments.map(comment => comment.threadId).filter((id): id is string => !!id),
+      );
+
+      const errors: string[] = [];
+      const payload: ReviewCommentPayload[] = [];
+      const sent: SentComment[] = [];
+      let skipped = 0;
+      for (const comment of submission.comments) {
+        const sides = commentable.get(comment.filePath);
+        if (!sides) {
+          errors.push(`${comment.filePath} — not in the pull request's diff`);
+          continue;
+        }
+        if (!sides[comment.side].has(comment.endLine)) {
+          errors.push(`${comment.filePath}:${comment.endLine} — not a line of the pull request's diff, so GitHub will not take a comment there`);
+          continue;
+        }
+        if (isAlreadyCommented(existing, comment, { threadIds, viewerLogin })) {
+          skipped++;
+          continue;
+        }
+        payload.push(toReviewPayload(comment));
+        if (comment.threadId) {
+          sent.push({ threadId: comment.threadId, path: comment.filePath, body: comment.body, endLine: comment.endLine });
+        }
+      }
+
+      const body = submission.body.trim();
+      const result: ReviewResult = {
+        submitted: 0,
+        submittedThreadIds: [],
+        commentIds: [],
+        skipped,
+        failed: errors.length,
+        errors,
+        reviewUrl: null,
+        commitSha: session.headSha,
+      };
+      if (payload.length === 0 && !body && submission.event === 'COMMENT') {
+        return result;
+      }
+
+      let review: { id: number; htmlUrl: string | null };
+      try {
+        review = await this.github.createReview(token, owner, repo, prNumber, {
+          commit_id: session.headSha,
+          event: submission.event,
+          body,
+          comments: payload,
+        });
+      } catch (err) {
+        return {
+          ...result,
+          failed: errors.length + payload.length,
+          errors: [...errors, err instanceof Error ? err.message : 'GitHub rejected the review'],
+        };
+      }
+      // Without the ids a sent finding is still recognised by its wording later.
+      const created = await this.github.reviewComments(token, owner, repo, prNumber, review.id).catch(() => []);
+      const commentIds = matchCreatedComments(sent, created);
+      const ids = new Map(commentIds.map(entry => [entry.threadId, entry.githubCommentId]));
+      await this.reviews.markThreadsSubmitted(
+        session.userId,
+        sent.map(entry => ({ threadId: entry.threadId, body: entry.body, githubCommentId: ids.get(entry.threadId) })),
+        { reviewUrl: review.htmlUrl, headSha: session.headSha },
+      );
+      return {
+        ...result,
+        submitted: payload.length,
+        submittedThreadIds: sent.map(entry => entry.threadId),
+        commentIds,
+        reviewUrl: review.htmlUrl,
+      };
+    });
+  }
+
+  /**
+   * GitHub's review threads into this session, and the ones the author resolved there resolved
+   * here. A thread on a line this session's code does not have is left out: it would sit on
+   * whatever happens to be at that line.
+   */
+  async pullComments(session: ReviewSessionRecord): Promise<PullCommentsResult> {
+    const token = await this.prToken(session);
+    const { owner, repo, userId } = session;
+    const prNumber = session.prNumber!;
+    return this.githubLock(userId)(async () => {
+      const [remoteComments, remoteState] = await Promise.all([
+        this.github.pullComments(token, owner, repo, prNumber),
+        this.github.threadState(token, owner, repo, prNumber),
+      ]);
+      const remote = groupPulledThreads(remoteComments);
+      const local = await this.reviews.threadsForSession(userId, session.id);
+
+      const incoming = remote.filter(thread => !existingThreadFor(local, thread));
+      const lineCounts = new Map<string, number>();
+      for (const side of ['old', 'new'] as const) {
+        const paths = [...new Set(incoming.filter(thread => thread.side === side).map(thread => thread.filePath))];
+        const contents = await this.mirrors.readFiles(owner, repo, token, side === 'old' ? session.baseSha : session.headSha, paths);
+        for (const [path, content] of contents) {
+          if (content != null) {
+            lineCounts.set(`${side} ${path}`, splitLines(content).length);
+          }
+        }
+      }
+      const unmappable = new Set(incoming.filter(thread => (lineCounts.get(`${thread.side} ${thread.filePath}`) ?? 0) < thread.endLine));
+
+      const settled = remoteState ? threadsResolvedRemotely(local, remoteState) : [];
+      for (const threadId of settled) {
+        await this.reviews.updateThreadStatus(userId, threadId, 'resolved');
+      }
+
+      let pulled = 0;
+      let skipped = 0;
+      for (const thread of remote) {
+        if (unmappable.has(thread)) {
+          continue;
+        }
+        const existing = existingThreadFor(local, thread);
+        if (existing) {
+          skipped++;
+          if (existing.githubCommentId == null) {
+            await this.reviews.setThreadForgeComment(userId, existing.id, thread.firstCommentId);
+            existing.githubCommentId = thread.firstCommentId;
+          }
+          continue;
+        }
+        const [first, ...rest] = thread.comments;
+        const created = await this.reviews.createThread({
+          userId,
+          sessionId: session.id,
+          filePath: thread.filePath,
+          side: thread.side,
+          startLine: thread.startLine,
+          endLine: thread.endLine,
+          body: first.body,
+          author: { name: first.authorName, type: first.authorType },
+          githubCommentId: thread.firstCommentId,
+        });
+        for (const reply of rest) {
+          await this.reviews.addReply(userId, created.id, reply.body, { name: reply.authorName, type: reply.authorType });
+        }
+        pulled++;
+      }
+      return { pulled, skipped, resolved: settled.length, resolutionUnavailable: remoteState === null, unmapped: unmappable.size };
+    });
   }
 }
 

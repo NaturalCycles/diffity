@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Config } from '../src/config.js';
+import { migrate, openPglite, type Db } from '../src/db.js';
 import { startServer, type RunningServer, type ServerOverrides } from '../src/server.js';
 
 const GIT_ENV = {
@@ -27,6 +28,12 @@ export function tempDir(prefix: string): string {
 
 export function removeDir(dir: string): void {
   rmSync(dir, { recursive: true, force: true });
+}
+
+export async function memoryDb(): Promise<Db> {
+  const db = await openPglite();
+  await migrate(db);
+  return db;
 }
 
 export interface Fixture {
@@ -118,60 +125,187 @@ export interface FakeRepo {
   pulls: Record<number, { title: string; baseSha: string; headSha: string; author?: string }>;
 }
 
+export interface FakeComment {
+  id: number;
+  path: string;
+  line: number | null;
+  start_line: number | null;
+  side: string;
+  body: string;
+  in_reply_to_id: number | null;
+  user: { login: string; type: string };
+  created_at: string;
+  pull: number;
+  review_id: number | null;
+}
+
 export interface FakeGitHub {
   url: string;
   requests: string[];
+  /** Review comments on every pull request, as GitHub holds them. */
+  comments: FakeComment[];
+  /** The bodies of `POST .../reviews`. */
+  postedReviews: { commit_id: string; event: string; body: string; comments: { path: string; line: number; side: string; body: string; start_line?: number }[] }[];
+  /** Which root comment ids GitHub shows as resolved. */
+  resolved: Set<number>;
+  /** Token login for `GET /user`. */
+  logins: Record<string, string>;
+  /** `POST /login/oauth/access_token`, answered by the test. */
+  tokenEndpoint: (params: URLSearchParams) => unknown;
+  /** Makes `POST .../reviews` answer this status instead. */
+  failReviewWith: number | null;
   close(): Promise<void>;
 }
 
-/** `GET /repos/{o}/{r}` and `GET /repos/{o}/{r}/pulls/{n}`, answering 404 to anyone not allowed. */
+/**
+ * The REST, GraphQL and OAuth endpoints diffity uses, answering 404 to anyone not allowed to read
+ * a repository.
+ */
 export async function startFakeGitHub(repos: FakeRepo[]): Promise<FakeGitHub> {
-  const requests: string[] = [];
+  let nextId = 1000;
+  const fake: FakeGitHub = {
+    url: '',
+    requests: [],
+    comments: [],
+    postedReviews: [],
+    resolved: new Set(),
+    logins: {},
+    tokenEndpoint: () => ({ error: 'bad_verification_code' }),
+    failReviewWith: null,
+    close: async () => {},
+  };
   const server: Server = createServer((req, res) => {
-    requests.push(`${req.method} ${req.url}`);
-    const token = /^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1] ?? null;
-    const match = /^\/repos\/([^/]+)\/([^/]+)(?:\/pulls\/(\d+))?$/.exec(req.url ?? '');
-    const repo = match
-      ? repos.find(r => r.owner.toLowerCase() === match[1].toLowerCase() && r.name.toLowerCase() === match[2].toLowerCase())
-      : undefined;
-    const allowed = repo && (!repo.private || (token !== null && repo.tokens.includes(token)));
-    const send = (status: number, body: unknown) => {
-      res.writeHead(status, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(body));
-    };
-    if (!match || !repo || !allowed) {
-      send(404, { message: 'Not Found' });
-      return;
-    }
-    if (!match[3]) {
-      send(200, { name: repo.name, private: repo.private, owner: { login: repo.owner } });
-      return;
-    }
-    const pull = repo.pulls[Number(match[3])];
-    if (!pull) {
-      send(404, { message: 'Not Found' });
-      return;
-    }
-    send(200, {
-      number: Number(match[3]),
-      title: pull.title,
-      html_url: `https://github.com/${repo.owner}/${repo.name}/pull/${match[3]}`,
-      created_at: '2026-09-01T10:00:00Z',
-      body: 'What the change is for',
-      state: 'open',
-      user: { login: pull.author ?? 'octocat' },
-      base: { sha: pull.baseSha, ref: 'main' },
-      head: { sha: pull.headSha, ref: 'feature' },
+    const chunks: Buffer[] = [];
+    req.on('data', chunk => chunks.push(chunk));
+    req.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('utf8');
+      const url = new URL(req.url ?? '/', 'http://fake');
+      fake.requests.push(`${req.method} ${url.pathname}`);
+      const token = /^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1] ?? null;
+      const send = (status: number, body: unknown) => {
+        res.writeHead(status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(body));
+      };
+      const page = <T>(items: T[]) => {
+        const size = Number(url.searchParams.get('per_page') ?? 30);
+        const index = Number(url.searchParams.get('page') ?? 1);
+        return items.slice((index - 1) * size, index * size);
+      };
+
+      if (url.pathname === '/login/oauth/access_token' && req.method === 'POST') {
+        send(200, fake.tokenEndpoint(new URLSearchParams(raw)));
+        return;
+      }
+      if (url.pathname === '/user') {
+        const login = token ? fake.logins[token] : undefined;
+        send(login ? 200 : 401, login ? { login } : { message: 'Bad credentials' });
+        return;
+      }
+      if (url.pathname === '/graphql' && req.method === 'POST') {
+        const { variables } = JSON.parse(raw) as { variables: { number: number } };
+        const roots = fake.comments.filter(c => c.pull === variables.number && !c.in_reply_to_id);
+        send(200, {
+          data: {
+            repository: {
+              pullRequest: {
+                reviewThreads: {
+                  nodes: roots.map(c => ({
+                    isResolved: fake.resolved.has(c.id),
+                    line: c.line,
+                    originalLine: c.line,
+                    diffSide: c.side,
+                    path: c.path,
+                    comments: { nodes: [{ body: c.body, fullDatabaseId: String(c.id) }] },
+                  })),
+                },
+              },
+            },
+          },
+        });
+        return;
+      }
+
+      const match = /^\/repos\/([^/]+)\/([^/]+)(?:\/pulls\/(\d+)(\/.*)?)?$/.exec(url.pathname);
+      const repo = match
+        ? repos.find(r => r.owner.toLowerCase() === match[1].toLowerCase() && r.name.toLowerCase() === match[2].toLowerCase())
+        : undefined;
+      const allowed = repo && (!repo.private || (token !== null && repo.tokens.includes(token)));
+      if (!match || !repo || !allowed) {
+        send(404, { message: 'Not Found' });
+        return;
+      }
+      if (!match[3]) {
+        send(200, { name: repo.name, private: repo.private, owner: { login: repo.owner } });
+        return;
+      }
+      const number = Number(match[3]);
+      const pull = repo.pulls[number];
+      if (!pull) {
+        send(404, { message: 'Not Found' });
+        return;
+      }
+      const rest = match[4] ?? '';
+      if (rest === '/comments') {
+        send(200, page(fake.comments.filter(c => c.pull === number)));
+        return;
+      }
+      if (rest === '/reviews' && req.method === 'POST') {
+        if (fake.failReviewWith) {
+          send(fake.failReviewWith, { message: 'Validation Failed', errors: ['Line could not be resolved'] });
+          return;
+        }
+        const review = JSON.parse(raw) as FakeGitHub['postedReviews'][number];
+        fake.postedReviews.push(review);
+        const reviewId = nextId++;
+        for (const comment of review.comments) {
+          fake.comments.push({
+            id: nextId++,
+            path: comment.path,
+            line: comment.line,
+            start_line: comment.start_line ?? null,
+            side: comment.side,
+            body: comment.body,
+            in_reply_to_id: null,
+            user: { login: fake.logins[token!] ?? 'someone', type: 'User' },
+            created_at: '2026-09-02T10:00:00Z',
+            pull: number,
+            review_id: reviewId,
+          });
+        }
+        send(200, { id: reviewId, html_url: `https://github.com/${repo.owner}/${repo.name}/pull/${number}#pullrequestreview-${reviewId}` });
+        return;
+      }
+      if (rest === '/reviews') {
+        send(200, page([
+          { user: { login: 'carol', type: 'User' }, state: 'APPROVED', body: '', submitted_at: '2026-09-02T09:00:00Z' },
+          { user: { login: 'dave', type: 'User' }, state: 'COMMENTED', body: '', submitted_at: '2026-09-02T09:00:00Z' },
+        ]));
+        return;
+      }
+      const reviewComments = /^\/reviews\/(\d+)\/comments$/.exec(rest);
+      if (reviewComments) {
+        send(200, page(fake.comments.filter(c => c.review_id === Number(reviewComments[1]))));
+        return;
+      }
+      send(200, {
+        number,
+        title: pull.title,
+        html_url: `https://github.com/${repo.owner}/${repo.name}/pull/${number}`,
+        created_at: '2026-09-01T10:00:00Z',
+        body: 'What the change is for',
+        state: 'open',
+        user: { login: pull.author ?? 'octocat' },
+        base: { sha: pull.baseSha, ref: 'main' },
+        head: { sha: pull.headSha, ref: 'feature' },
+      });
     });
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
   const port = typeof address === 'object' && address ? address.port : 0;
-  return {
-    url: `http://127.0.0.1:${port}`,
-    requests,
-    close: () => new Promise(resolve => server.close(() => resolve())),
-  };
+  fake.url = `http://127.0.0.1:${port}`;
+  fake.close = () => new Promise(resolve => server.close(() => resolve()));
+  return fake;
 }
 
 export function testConfig(dataDir: string, githubApiUrl: string, overrides: Partial<Config> = {}): Config {
@@ -187,6 +321,12 @@ export function testConfig(dataDir: string, githubApiUrl: string, overrides: Par
     allowedEmails: [],
     devGitHubToken: null,
     githubApiUrl,
+    githubUrl: githubApiUrl,
+    githubApp: null,
+    databaseUrl: null,
+    pgCa: null,
+    iapAudience: null,
+    trustProxy: false,
     ...overrides,
   };
 }
@@ -215,7 +355,7 @@ export async function startTestServer(
 ): Promise<TestServer> {
   const port = await freePort();
   const config = testConfig(dataDir, githubApiUrl, { publicUrl: new URL(`http://127.0.0.1:${port}`), ...configOverrides });
-  const running = await startServer(config, { rateLimit: false, ...overrides }, { port, host: '127.0.0.1' });
+  const running = await startServer(config, { rateLimit: false, db: await memoryDb(), ...overrides }, { port, host: '127.0.0.1' });
   return { ...running, base: `http://127.0.0.1:${running.port}`, dataDir, config };
 }
 
@@ -258,9 +398,10 @@ export function pkcePair(): { verifier: string; challenge: string } {
  */
 export async function connectAgent(
   base: string,
-  cookie: string,
+  cookieOrHeaders: string | Record<string, string>,
   clientName = 'Test Agent',
 ): Promise<{ clientId: string; accessToken: string; refreshToken: string; verifier: string }> {
+  const auth = typeof cookieOrHeaders === 'string' ? { cookie: cookieOrHeaders } : cookieOrHeaders;
   const redirectUri = 'http://127.0.0.1:9/callback';
   const registered = await fetch(`${base}/register`, {
     method: 'POST',
@@ -278,7 +419,7 @@ export async function connectAgent(
       code_challenge_method: 'S256',
       state: 'xyz',
     })}`,
-    { headers: { cookie }, redirect: 'manual' },
+    { headers: auth, redirect: 'manual' },
   );
   const html = await authorize.text();
   const request = /name="request" value="([^"]+)"/.exec(html)?.[1];
@@ -288,7 +429,7 @@ export async function connectAgent(
   const consent = await fetch(`${base}/oauth/consent`, {
     method: 'POST',
     redirect: 'manual',
-    headers: { cookie, 'Content-Type': 'application/x-www-form-urlencoded', Origin: base, 'Sec-Fetch-Site': 'same-origin' },
+    headers: { ...auth, 'Content-Type': 'application/x-www-form-urlencoded', Origin: base, 'Sec-Fetch-Site': 'same-origin' },
     body: new URLSearchParams({ request, decision: 'allow' }).toString(),
   });
   const location = new URL(consent.headers.get('location')!);
