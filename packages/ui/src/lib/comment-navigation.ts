@@ -7,34 +7,6 @@ export function getUnresolvedFileThreads(threads: CommentThread[]): CommentThrea
   );
 }
 
-export function getThreadLineLabel(thread: CommentThread): string {
-  return thread.startLine === thread.endLine
-    ? `L${thread.startLine}`
-    : `L${thread.startLine}-${thread.endLine}`;
-}
-
-export function getThreadPreview(thread: CommentThread, maxLength = 84): string {
-  const normalized = (thread.comments.at(-1)?.body ?? '')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  if (!normalized) {
-    return 'Comment';
-  }
-
-  if (normalized.length <= maxLength) {
-    return normalized;
-  }
-
-  const truncated = normalized.slice(0, Math.max(0, maxLength - 3)).trimEnd();
-  const lastSpace = truncated.lastIndexOf(' ');
-  const cleanCut = lastSpace > Math.floor(maxLength / 2)
-    ? truncated.slice(0, lastSpace)
-    : truncated;
-
-  return `${cleanCut}...`;
-}
-
 export function buildThreadCountsByFile(threads: CommentThread[]): Map<string, number> {
   const counts = new Map<string, number>();
 

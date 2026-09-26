@@ -185,7 +185,7 @@ describe('the UI API', () => {
     expect((await api(`${base()}/diff`, { cookie: bobCookie })).status).toBe(404);
   });
 
-  it('describes the session as a hosted review of fixed commits', async () => {
+  it('describes the session', async () => {
     const info = (await api(`${base()}/info`, { cookie: aliceCookie })).body as RepoInfoResponse;
     expect(info).toMatchObject({
       name: 'acme/widgets',
@@ -196,28 +196,18 @@ describe('the UI API', () => {
     expect(pr).toMatchObject({ github: { owner: 'acme', repo: 'widgets' }, branch: 'feature', description: '#1 Change line ten' });
   });
 
-  it('answers the diff, one file of it, and a fingerprint that never moves', async () => {
+  it('answers the diff, and what hiding whitespace suppressed', async () => {
     const diff = await api(`${base()}/diff?ref=work`, { cookie: aliceCookie });
     expect(diff.body.files.map((f: { newPath: string }) => f.newPath).sort()).toEqual(['added.ts', 'new-name.ts', 'src.ts']);
     expect(diff.body.suppressed).toBeNull();
     expect((await api(`${base()}/diff?whitespace=hide`, { cookie: aliceCookie })).body.suppressed).toEqual({ files: 0, lines: 0 });
-    const one = await api(`${base()}/diff/file?path=added.ts`, { cookie: aliceCookie });
-    expect(one.body.file.newPath).toBe('added.ts');
-    expect((await api(`${base()}/diff/file?path=README.md`, { cookie: aliceCookie })).body).toEqual({ file: null });
-    expect((await api(`${base()}/diff/file`, { cookie: aliceCookie })).status).toBe(400);
-    const a = (await api(`${base()}/diff-fingerprint`, { cookie: aliceCookie })).body;
-    const b = (await api(`${base()}/diff-fingerprint`, { cookie: aliceCookie })).body;
-    expect(a).toEqual(b);
   });
 
-  it('answers file content at the base, and at the head through the tree route', async () => {
+  it('answers file content at the base', async () => {
     const old = await api(`${base()}/file/src.ts?ref=work`, { cookie: aliceCookie });
     expect(old.body.content[9]).toBe('line 10 of the widget');
     expect(old.body.content).toHaveLength(30);
     expect((await api(`${base()}/file/added.ts`, { cookie: aliceCookie })).status).toBe(404);
-    expect((await api(`${base()}/file/added.ts?side=new`, { cookie: aliceCookie })).body.content).toEqual(['export const added = 2;']);
-    expect((await api(`${base()}/tree/file/${encodeURIComponent('src.ts')}`, { cookie: aliceCookie })).body.content[12])
-      .toBe('line 10 changed by the feature');
     expect((await api(`${base()}/file/..%2F..%2Fetc%2Fpasswd`, { cookie: aliceCookie })).status).toBe(404);
   });
 
@@ -290,7 +280,7 @@ describe('the UI API', () => {
       userId: aliceId, sessionId: prSession.id, filePath: 'src.ts', side: 'new', startLine: 1, endLine: 1,
       body: 'In the PR session', author: { name: 'a', type: 'agent' },
     });
-    const tour = await server.service.reviews.createTour(aliceId, prSession.id, 'Order', '');
+    await server.service.reviews.createTour(aliceId, prSession.id, 'Order', '');
     expect((await api(`${base()}/threads/${thread.id}/reply`, {
       method: 'POST', cookie: aliceCookie, json: { body: 'x', author: { name: 'a', type: 'user' } },
     })).status).toBe(404);
@@ -298,32 +288,29 @@ describe('the UI API', () => {
     expect((await api(`${base()}/threads/${thread.id}`, { method: 'DELETE', cookie: aliceCookie })).status).toBe(404);
     expect((await api(`${base()}/comments/${thread.comments[0].id}`, { method: 'PATCH', cookie: aliceCookie, json: { body: 'x' } })).status).toBe(404);
     expect((await api(`${base()}/comments/${thread.comments[0].id}`, { method: 'DELETE', cookie: aliceCookie })).status).toBe(404);
-    expect((await api(`${base()}/tours/${tour.id}`, { cookie: aliceCookie })).status).toBe(404);
+    expect((await api(`${base()}/tours?session=${session.id}`, { cookie: aliceCookie })).body).toEqual([]);
     // And bob, through his own session, reaches none of it either.
     const bobBase = `/s/${bobSession.id}/api`;
     expect((await api(`${bobBase}/threads/${thread.id}`, { method: 'DELETE', cookie: bobCookie })).status).toBe(404);
-    expect((await api(`${bobBase}/tours/${tour.id}`, { cookie: bobCookie })).status).toBe(404);
+    expect((await api(`${bobBase}/tours?session=${bobSession.id}`, { cookie: bobCookie })).body).toEqual([]);
     expect((await server.service.reviews.getThread(aliceId, thread.id))?.status).toBe('open');
   });
 
-  it('lists tours and serves one', async () => {
+  it('lists tours with their steps', async () => {
     const tour = await server.service.reviews.createTour(aliceId, session.id, 'Reading order', 'why');
     await server.service.reviews.addTourStep(aliceId, tour.id, { filePath: 'src.ts', startLine: 10, endLine: 10, body: 'b', annotation: 'a' });
     const listed = (await api(`${base()}/tours?session=${session.id}`, { cookie: aliceCookie })).body as Tour[];
     expect(listed.map(t => t.topic)).toEqual(['Reading order']);
-    expect(((await api(`${base()}/tours/${tour.id}`, { cookie: aliceCookie })).body as Tour).steps).toHaveLength(1);
+    expect(listed[0].steps).toHaveLength(1);
   });
 
-  it('answers the GitHub details of a pull request session only, and nothing for removed features', async () => {
+  it('answers the GitHub details of a pull request session only', async () => {
     expect((await api(`${base()}/github/details`, { cookie: aliceCookie })).body).toBeNull();
     expect((await api(`/s/${prSession.id}/api/github/details`, { cookie: aliceCookie })).body).toMatchObject({
       prNumber: 1, prTitle: 'Change line ten', headSha: fixture.head1,
     });
     expect((await api(`${base()}/github/create-review`, { method: 'POST', cookie: aliceCookie, json: { event: 'COMMENT', body: 'x' } })).status)
       .toBe(400);
-    for (const path of ['/live/status', '/viewer', '/revert-file']) {
-      expect((await api(`${base()}${path}`, { method: 'POST', cookie: aliceCookie, json: {} })).status).toBe(404);
-    }
   });
 
   it('refuses a write from another site', async () => {

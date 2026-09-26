@@ -13,7 +13,7 @@ interface PullRequestPanelProps {
   details: GitHubDetails | null;
   /** Known before the details arrive, so the panel can hold its place rather than pop in. */
   hasPullRequest?: boolean;
-  /** Scopes the remembered open state, so one checkout does not speak for another. */
+  /** Scopes the remembered open state, so one repository does not speak for another. */
   repoRoot?: string | null;
 }
 

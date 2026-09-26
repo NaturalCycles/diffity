@@ -1,6 +1,3 @@
-// The same rules as the CLI's anchor.ts, over file content read from a commit rather than the
-// working tree, which a server does not have.
-
 export interface AnchorRange {
   startLine: number;
   endLine: number;

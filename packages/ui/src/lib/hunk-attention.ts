@@ -130,14 +130,6 @@ export interface FocusRange {
   endLine: number;
 }
 
-/**
- * Whether a hunk covers any of the lines the walkthrough points at. Compared on the new side,
- * which is where a walkthrough step's lines are recorded.
- */
-export function hunkIntersectsRanges(hunk: DiffHunk, ranges: FocusRange[] | undefined): boolean {
-  return rangesIntersectingHunk(hunk, ranges).length > 0;
-}
-
 export function rangesIntersectingHunk<T extends FocusRange>(
   hunk: DiffHunk,
   ranges: T[] | undefined,

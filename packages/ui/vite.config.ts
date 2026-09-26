@@ -13,14 +13,6 @@ export default defineConfig({
     // Component tests render for real: a render-time ReferenceError has nothing else catching it.
     environment: "jsdom",
   },
-  server: {
-    proxy: {
-      "/api": {
-        target: "http://localhost:5391",
-        changeOrigin: true,
-      },
-    },
-  },
   build: {
     chunkSizeWarningLimit: 1000,
     emptyOutDir: true,

@@ -187,8 +187,8 @@ describe('reading a session', () => {
     expect(diff.suppressed).toBeNull();
     const hidden = await service.parsedDiff(session, { ignoreWhitespace: true });
     expect(hidden.suppressed).toEqual({ files: 0, lines: 0 });
-    const one = await service.parsedDiff(session, { path: 'added.ts' });
-    expect(one.files.map(file => file.newPath)).toEqual(['added.ts']);
+    expect(await service.diffText(session, { path: 'added.ts' })).toContain('+++ b/added.ts');
+    expect(await service.diffText(session, { path: 'added.ts' })).not.toContain('src.ts');
     await expect(service.diffText(session, { path: '../x' })).rejects.toThrow('Not a repository path');
   });
 

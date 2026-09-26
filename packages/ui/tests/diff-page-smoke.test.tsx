@@ -151,7 +151,7 @@ describe('the diff page, mounted whole', () => {
     expect(screen.queryByTestId('threads-without-file')).toBeNull();
   });
 
-  it('says when the working tree has nothing to show', async () => {
+  it('says when the diff has nothing to show', async () => {
     const empty: DiffResponse = { ...parseDiff(''), suppressed: null };
     vi.stubGlobal('fetch', (input: RequestInfo | URL) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;

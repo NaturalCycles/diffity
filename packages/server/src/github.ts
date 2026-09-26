@@ -18,11 +18,9 @@ export class StoredTokenAccess implements GitHubAccess {
 export interface RepoInfo {
   owner: string;
   name: string;
-  private: boolean;
 }
 
 export interface PullInfo {
-  number: number;
   title: string;
   url: string;
   createdAt: string;
@@ -32,7 +30,6 @@ export interface PullInfo {
   headSha: string;
   headRef: string;
   baseRef: string;
-  state: string;
 }
 
 export interface ReviewComment {
@@ -203,8 +200,8 @@ export class GitHubApi {
     if (!res.ok) {
       throw new GitHubApiError(`GitHub answered ${res.status} for ${owner}/${repo}`, res.status);
     }
-    const json = (await res.json()) as { name: string; private: boolean; owner: { login: string } };
-    return { owner: json.owner.login, name: json.name, private: json.private };
+    const json = (await res.json()) as { name: string; owner: { login: string } };
+    return { owner: json.owner.login, name: json.name };
   }
 
   async getPull(token: string | null, owner: string, repo: string, prNumber: number): Promise<PullInfo | null> {
@@ -216,18 +213,15 @@ export class GitHubApi {
       throw new GitHubApiError(`GitHub answered ${res.status} for ${owner}/${repo}#${prNumber}`, res.status);
     }
     const json = (await res.json()) as {
-      number: number;
       title: string;
       html_url: string;
       created_at: string;
       body: string | null;
-      state: string;
       user: { login: string } | null;
       base: { sha: string; ref: string };
       head: { sha: string; ref: string };
     };
     return {
-      number: json.number,
       title: json.title,
       url: json.html_url,
       createdAt: json.created_at,
@@ -237,7 +231,6 @@ export class GitHubApi {
       headSha: json.head.sha,
       headRef: json.head.ref,
       baseRef: json.base.ref,
-      state: json.state,
     };
   }
 

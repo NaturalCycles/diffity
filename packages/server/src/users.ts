@@ -2,15 +2,10 @@ import { randomUUID } from 'node:crypto';
 import type { Db } from './db.js';
 import { decrypt, encrypt, randomToken, sha256 } from './crypto.js';
 
-export interface UserSettings {
-  shareReviews: 'private';
-}
-
 export interface User {
   id: string;
   email: string;
   name: string;
-  settings: UserSettings;
   githubLogin: string | null;
 }
 
@@ -18,20 +13,11 @@ interface UserRow {
   id: string;
   email: string;
   name: string;
-  settings: string;
   github_login: string | null;
 }
 
-const DEFAULT_SETTINGS: UserSettings = { shareReviews: 'private' };
-
 function rowToUser(row: UserRow): User {
-  let settings: UserSettings = DEFAULT_SETTINGS;
-  try {
-    settings = { ...DEFAULT_SETTINGS, ...(JSON.parse(row.settings) as Partial<UserSettings>) };
-  } catch {
-    // A hand-edited row falls back to the defaults rather than locking its owner out.
-  }
-  return { id: row.id, email: row.email, name: row.name, settings, githubLogin: row.github_login };
+  return { id: row.id, email: row.email, name: row.name, githubLogin: row.github_login };
 }
 
 export class Users {
@@ -70,7 +56,7 @@ export class Users {
   }
 }
 
-const WEB_SESSION_DAYS = 30;
+export const WEB_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 
 export class WebSessions {
   constructor(private readonly db: Db) {}
@@ -82,7 +68,7 @@ export class WebSessions {
       sha256(token),
       userId,
       new Date(now).toISOString(),
-      now + WEB_SESSION_DAYS * 24 * 60 * 60 * 1000,
+      now + WEB_SESSION_MAX_AGE_SECONDS * 1000,
     ]);
     return token;
   }
@@ -105,9 +91,5 @@ export class WebSessions {
     if (token) {
       await this.db.query('DELETE FROM web_sessions WHERE id_hash = $1', [sha256(token)]);
     }
-  }
-
-  static maxAgeSeconds(): number {
-    return WEB_SESSION_DAYS * 24 * 60 * 60;
   }
 }

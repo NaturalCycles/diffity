@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readReadingPosition, writeReadingPosition, clearReadingPosition } from '../src/lib/reading-position';
+import { readReadingPosition, writeReadingPosition } from '../src/lib/reading-position';
 
 function fakeStorage(): Storage {
   const map = new Map<string, string>();
@@ -35,11 +35,4 @@ describe('remembering where someone was reading', () => {
     expect(readReadingPosition(store, '/other-repo', 'main')).toBeNull();
   });
 
-  it('forgets on request, for when the reader starts over', () => {
-    const store = fakeStorage();
-    writeReadingPosition(store, '/repo', 'main', 'src/a.ts');
-    clearReadingPosition(store, '/repo', 'main');
-
-    expect(readReadingPosition(store, '/repo', 'main')).toBeNull();
-  });
 });

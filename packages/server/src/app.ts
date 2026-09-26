@@ -7,11 +7,9 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import type { AuthorizationParams } from '@modelcontextprotocol/sdk/server/auth/provider.js';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
 import type { Config } from './config.js';
-import type { Users, User, WebSessions } from './users.js';
-import { WebSessions as WebSessionsClass } from './users.js';
+import { WEB_SESSION_MAX_AGE_SECONDS, type Users, type User, type WebSessions } from './users.js';
 import { hashPresentedClientSecret, type OAuthProvider } from './oauth.js';
-import type { ReviewService } from './service.js';
-import { describeSession } from './service.js';
+import { describeSession, type ReviewService } from './service.js';
 import type { DevLoginProvider, IapLogin } from './login.js';
 import { GitHubConnectError, type GitHubAppAccess } from './github-app.js';
 import { createMcpServer } from './mcp.js';
@@ -98,9 +96,11 @@ export function createApp(deps: AppDeps): express.Express {
   app.disable('x-powered-by');
   app.set('trust proxy', config.trustProxy);
 
-  const indexHtml = deps.uiDir && existsSync(join(deps.uiDir, 'index.html'))
-    ? readFileSync(join(deps.uiDir, 'index.html'), 'utf-8')
-    : null;
+  // Read per request, so a UI rebuild shows without restarting the server.
+  const indexHtml = (): string | null => {
+    const file = deps.uiDir ? join(deps.uiDir, 'index.html') : null;
+    return file && existsSync(file) ? readFileSync(file, 'utf-8') : null;
+  };
 
   const cookieToken = (req: Request): string | undefined => parseCookies(req.headers.cookie)[SESSION_COOKIE];
 
@@ -276,7 +276,7 @@ export function createApp(deps: AppDeps): express.Express {
     }
     const user = await users.findOrCreate(result.email, result.name);
     const token = await webSessions.create(user.id);
-    res.set('Set-Cookie', sessionCookie(token, { secure: secureCookies, maxAgeSeconds: WebSessionsClass.maxAgeSeconds() }));
+    res.set('Set-Cookie', sessionCookie(token, { secure: secureCookies, maxAgeSeconds: WEB_SESSION_MAX_AGE_SECONDS }));
     res.redirect(303, next);
   });
 
@@ -452,7 +452,8 @@ export function createApp(deps: AppDeps): express.Express {
       sendPage(res, 404, 'Not found', '<h1>No such session</h1><p><a href="/">Your sessions</a></p>', user);
       return;
     }
-    if (!indexHtml) {
+    const html = indexHtml();
+    if (!html) {
       sendPage(res, 503, 'Not built', '<h1>The review UI is not built</h1><p>Run <code>npm run build</code> at the repository root.</p>', user);
       return;
     }
@@ -462,7 +463,7 @@ export function createApp(deps: AppDeps): express.Express {
       .set('Content-Security-Policy', UI_CONTENT_SECURITY_POLICY)
       .set('Cache-Control', 'no-store')
       .type('html')
-      .send(indexHtml.replace('<head>', `<head><script>window.__DIFFITY_BASE__=${base}</script>`));
+      .send(html.replace('<head>', `<head><script>window.__DIFFITY_BASE__=${base}</script>`));
   });
 
   app.use((_req, res) => {

@@ -56,7 +56,6 @@ export function DiffPage() {
   const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(new Set());
   const manuallyToggledRef = useRef<Set<string>>(new Set());
   const [pendingSelection, setPendingSelection] = useState<LineSelection | null>(null);
-  const mainRef = useRef<HTMLElement | null>(null);
   const diffViewRef = useRef<DiffViewHandle>(null);
   const currentFileIdx = useRef(0);
   const initializedDiffRef = useRef<typeof diff>(null);
@@ -94,8 +93,7 @@ export function DiffPage() {
     setTourStepIndex(TOUR_NOT_STARTED);
   }, [activeTour?.id]);
 
-  // Naming the amount matters: a filtered diff disagrees with the forge's own counts, and after
-  // the stale-base episode an unexplained disagreement is the last thing this page should show.
+  // A filtered diff disagrees with the forge's own counts, so the page names the difference.
   const whitespaceNotice = useMemo(() => {
     if (!hideWhitespace) {
       return null;
@@ -528,9 +526,6 @@ export function DiffPage() {
             onReviewedChange={handleReviewedChange}
             onActiveFileChange={handleActiveFileFromScroll}
             handle={diffViewRef}
-            scrollRef={(node) => {
-              mainRef.current = node;
-            }}
             threads={threads}
             commentsEnabled={reviewsEnabled}
             commentActions={commentActions}

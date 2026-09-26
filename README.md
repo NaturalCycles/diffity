@@ -56,7 +56,8 @@ DIFFITY_DEV_GITHUB_TOKEN=$(gh auth token) \
 
 Open <http://localhost:5390> and sign in, and add the connector with
 `claude mcp add --transport http diffity http://localhost:5390/mcp`. `npm run dev` with the same
-environment rebuilds the UI and restarts the server on change.
+environment runs the server from source and restarts it when that changes; after a UI change,
+`npm run build -w @diffity/ui` and reload the page.
 
 ## Environment
 
@@ -107,12 +108,15 @@ account, secrets) is in NaturalCycles/NCInfraIaC. On the load balancer, `/mcp`, 
 `/register`, `/revoke` and the OAuth `/.well-known/*` metadata bypass IAP, since agents
 authenticate with diffity's own OAuth; everything else is behind IAP.
 
-The deploy sets `DIFFITY_PUBLIC_URL`, `DIFFITY_TRUST_PROXY=1` and `DIFFITY_IAP_AUDIENCE` (looked
-up from the `diffity` backend service), and mounts the secrets `diffity-database-url`
+The deploy runs one instance (pending OAuth consents are held in memory), sets
+`DIFFITY_PUBLIC_URL`, `DIFFITY_TRUST_PROXY=1` and `DIFFITY_IAP_AUDIENCE`, and mounts the secrets `diffity-database-url`
 (`DATABASE_URL`), `diffity-postgres-ca` (`DIFFITY_PG_CA`) and `diffity-secret-key`
 (`DIFFITY_SECRET_KEY`). It needs:
 
 - the `GCP_SERVICE_ACCOUNT` secret in the `prod` environment, and `SLACK_API_TOKEN`;
+- the repository variable `DIFFITY_IAP_AUDIENCE`:
+  `/projects/<project number>/global/backendServices/<id>`, the id from
+  `gcloud compute backend-services describe diffity --global --project nc-innovation-496314 --format='value(id)'`;
 - the repository variable `DIFFITY_GITHUB_APP_CLIENT_ID` (and optionally
   `DIFFITY_GITHUB_APP_SLUG`) for the GitHub App; with it, the secret
   `diffity-github-app-client-secret` is mounted as `DIFFITY_GITHUB_APP_CLIENT_SECRET`. Without it,

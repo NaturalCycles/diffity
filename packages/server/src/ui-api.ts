@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import express, { type Request, type Response, type Router } from 'express';
 import {
   isThreadStatus,
@@ -11,8 +10,6 @@ import {
   parseUpdateThreadStatusRequest,
   THREAD_STATUSES,
   type CommentAuthor,
-  type DiffFileResponse,
-  type DiffFingerprint,
   type FileContentResponse,
   type ParseResult,
   type RepoInfoResponse,
@@ -124,40 +121,16 @@ export function uiApiRouter(deps: UiApiDeps): Router {
     res.json(await service.parsedDiff(session, { ignoreWhitespace: req.query.whitespace === 'hide' }));
   }));
 
-  router.get('/diff/file', handle(async ({ session }, req, res) => {
-    const path = typeof req.query.path === 'string' ? req.query.path : '';
-    if (!path) {
-      fail(res, 400, 'Missing path');
-      return;
-    }
-    const diff = await service.parsedDiff(session, { ignoreWhitespace: req.query.whitespace === 'hide', path });
-    res.json({ file: diff.files[0] ?? null } satisfies DiffFileResponse);
-  }));
-
-  // Both ends are fixed commits, so the diff can never go stale; the fingerprint says so.
-  router.get('/diff-fingerprint', handle(({ session }, _req, res) => {
-    res.json({
-      fingerprint: createHash('sha1').update(`${session.baseSha}..${session.headSha}`).digest('hex'),
-      files: {},
-    } satisfies DiffFingerprint);
-  }));
-
-  const serveFile = (side: 'old' | 'new') => handle(async ({ session }, req, res) => {
+  router.get('/file/{*path}', handle(async ({ session }, req, res) => {
     const raw = (req.params as { path?: string | string[] }).path;
-    const decoded = Array.isArray(raw) ? raw.join('/') : raw ?? '';
-    const chosen = side === 'old' && req.query.side === 'new' ? 'new' : side;
-    const content = await service.readFile(session, chosen, decoded);
+    const path = Array.isArray(raw) ? raw.join('/') : raw ?? '';
+    const content = await service.readFile(session, 'old', path);
     if (content === null) {
-      fail(res, 404, `File not found: ${decoded}`);
+      fail(res, 404, `File not found: ${path}`);
       return;
     }
-    res.json({ path: decoded, content: splitLines(content) } satisfies FileContentResponse);
-  });
-
-  // The UI asks for the base side here, the way the CLI answers it for a ref.
-  router.get('/file/{*path}', serveFile('old'));
-  // The rich markdown and SVG preview reads the new side through the tree route.
-  router.get('/tree/file/{*path}', serveFile('new'));
+    res.json({ path, content: splitLines(content) } satisfies FileContentResponse);
+  }));
 
   router.get('/threads', handle(async ({ user, session }, req, res) => {
     if (!sessionMatches(res, session, req.query.session)) {
@@ -257,15 +230,6 @@ export function uiApiRouter(deps: UiApiDeps): Router {
       return;
     }
     res.json(await reviews.toursForSession(user.id, session.id));
-  }));
-
-  router.get('/tours/:id', handle(async ({ user, session }, req, res) => {
-    const tour = await reviews.getTour(user.id, String(req.params.id));
-    if (!tour || tour.sessionId !== session.id) {
-      fail(res, 404, 'Tour not found');
-      return;
-    }
-    res.json(tour);
   }));
 
   router.get('/github/details', handle(async ({ session }, _req, res) => {

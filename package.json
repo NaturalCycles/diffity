@@ -14,14 +14,11 @@
     "build": "npm run build -w @diffity/parser && npm run build -w @diffity/api && npm run build -w @diffity/ui && npm run build -w @diffity/server",
     "typecheck": "npm run typecheck --workspaces",
     "test": "npm run typecheck && npm run test --workspaces",
-    "dev": "concurrently -n ui,server \"npx -w @diffity/ui vite build --watch\" \"npm run dev -w @diffity/server\""
+    "dev": "npm run build && npm run dev -w @diffity/server"
   },
   "engines": {
     "node": ">=24"
   },
   "author": "Natural Cycles",
-  "license": "MIT",
-  "devDependencies": {
-    "concurrently": "^9.2.1"
-  }
+  "license": "MIT"
 }

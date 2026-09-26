@@ -74,6 +74,6 @@ export interface PullCommentsResult {
   skipped: number;
   /** True when thread resolution state could not be fetched, so nothing was resolved locally. */
   resolutionUnavailable: boolean;
-  /** Incoming threads whose line is not in this checkout, so no local thread was made for them. */
+  /** Incoming threads on lines the session's code does not have, so no thread was made for them. */
   unmapped: number;
 }

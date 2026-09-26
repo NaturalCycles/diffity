@@ -202,7 +202,7 @@ function likePrefix(prefix: string): string {
 export class Reviews {
   constructor(private readonly db: Db) {}
 
-  /** A full id, or the 8-character prefix the CLI's ids accept, among this user's rows only. */
+  /** A full id, or a prefix of at least 8 characters, among this user's rows only. */
   private async resolveId(table: 'sessions' | 'threads' | 'comments' | 'tours', userId: string, idOrPrefix: string): Promise<string | null> {
     const exact = await this.db.one<{ id: string }>(`SELECT id FROM ${table} WHERE id = $1 AND user_id = $2`, [idOrPrefix, userId]);
     if (exact) {

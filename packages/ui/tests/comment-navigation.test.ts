@@ -4,8 +4,6 @@ import { makeComment, makeThread as wireThread } from './helpers/wire';
 import {
   buildFirstOpenThreadByFile,
   buildThreadCountsByFile,
-  getThreadLineLabel,
-  getThreadPreview,
 } from '../src/lib/comment-navigation';
 
 function makeThread(overrides: Partial<CommentThread> = {}): CommentThread {
@@ -54,30 +52,5 @@ describe('buildThreadCountsByFile', () => {
     ]);
 
     expect(Array.from(counts.entries())).toEqual([['src/a.ts', 2]]);
-  });
-});
-
-describe('thread formatting helpers', () => {
-  it('formats single-line and multi-line labels', () => {
-    expect(getThreadLineLabel(makeThread({ startLine: 7, endLine: 7 }))).toBe('L7');
-    expect(getThreadLineLabel(makeThread({ startLine: 7, endLine: 10 }))).toBe('L7-10');
-  });
-
-  it('normalizes whitespace and truncates previews', () => {
-    const preview = getThreadPreview(
-      makeThread({
-        comments: [
-          makeComment({
-            id: 'comment-1',
-            author: { name: 'You', type: 'user' },
-            body: '  Multi-line\ncomment with   extra spacing and enough text to force truncation in the preview list.  ',
-            createdAt: '2026-03-17T12:00:00Z',
-          }),
-        ],
-      }),
-      48,
-    );
-
-    expect(preview).toBe('Multi-line comment with extra spacing and...');
   });
 });

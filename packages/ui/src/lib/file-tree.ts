@@ -51,29 +51,6 @@ export function buildFileTree(files: DiffFile[]): TreeNode[] {
   return root;
 }
 
-export function buildFileTreeFromPaths(paths: string[]): TreeNode[] {
-  const root: TreeNode[] = [];
-
-  for (const fullPath of paths) {
-    const parts = fullPath.split('/');
-
-    let currentChildren = root;
-    for (let i = 0; i < parts.length - 1; i++) {
-      const dirPath = parts.slice(0, i + 1).join('/');
-      const dir = getOrCreateDir(currentChildren, parts[i], dirPath);
-      currentChildren = dir.children;
-    }
-
-    currentChildren.push({
-      type: 'file',
-      name: parts[parts.length - 1],
-      path: fullPath,
-    });
-  }
-
-  return root;
-}
-
 export function collapseSingleChildDirs(nodes: TreeNode[]): TreeNode[] {
   return nodes.map(node => {
     if (node.type !== 'dir') {

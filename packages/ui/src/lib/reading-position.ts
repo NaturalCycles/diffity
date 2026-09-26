@@ -14,7 +14,3 @@ export function readReadingPosition(storage: Storage, repoRoot: string, ref: str
 export function writeReadingPosition(storage: Storage, repoRoot: string, ref: string, filePath: string): void {
   storage.setItem(key(repoRoot, ref), filePath);
 }
-
-export function clearReadingPosition(storage: Storage, repoRoot: string, ref: string): void {
-  storage.removeItem(key(repoRoot, ref));
-}

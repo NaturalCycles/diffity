@@ -5,8 +5,7 @@ export function repoInfoOptions() {
   return queryOptions({
     queryKey: ['repo-info'],
     queryFn: () => fetchRepoInfo(),
-    // A restart on a new commit creates a new session, and comments written against the id a
-    // tab is still holding would land somewhere invisible.
+    // Keeps the review-in-progress banner current while an agent writes.
     refetchInterval: 5000,
   });
 }

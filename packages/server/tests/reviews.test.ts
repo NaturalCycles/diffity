@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import type { Db } from '../src/db.js';
 import { AmbiguousIdError, Reviews, type ReviewSessionRecord } from '../src/reviews.js';
-import { Users, WebSessions } from '../src/users.js';
+import { Users, WEB_SESSION_MAX_AGE_SECONDS, WebSessions } from '../src/users.js';
 import { memoryDb } from './helpers.js';
 
 let db: Db;
@@ -37,11 +37,10 @@ function thread(userId = alice, sessionId = session.id) {
 }
 
 describe('users', () => {
-  it('finds a user by normalised email and keeps the settings default', async () => {
+  it('finds a user by normalised email', async () => {
     const again = await users.findOrCreate('alice@example.com');
     expect(again.id).toBe(alice);
     expect(again.name).toBe('Alice');
-    expect(again.settings).toEqual({ shareReviews: 'private' });
     expect(await users.get('missing')).toBeNull();
   });
 
@@ -59,7 +58,7 @@ describe('users', () => {
     const token = await sessions.create(alice, 1_000);
     expect(JSON.stringify(await db.query('SELECT * FROM web_sessions'))).not.toContain(token);
     expect(await sessions.userFor(token, 2_000)).toBe(alice);
-    expect(await sessions.userFor(token, 1_000 + WebSessions.maxAgeSeconds() * 1000 + 1)).toBeNull();
+    expect(await sessions.userFor(token, 1_000 + WEB_SESSION_MAX_AGE_SECONDS * 1000 + 1)).toBeNull();
     expect(await sessions.userFor(undefined)).toBeNull();
     expect(await sessions.userFor('forged')).toBeNull();
     await sessions.destroy(token);

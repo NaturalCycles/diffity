@@ -8,7 +8,7 @@ import type {
   ReviewSubmission,
   Suppressed,
 } from '@diffity/api';
-import { isSha, isSafeRepoPath, isRepoName, serializer, type Mirrors, type NameStatus } from './git.js';
+import { isSha, isSafeRepoPath, isRepoName, keyedSerializer, type Mirrors, type NameStatus } from './git.js';
 import type { GitHubAccess, GitHubApi, ReviewCommentPayload } from './github.js';
 import type { PrMeta, ReviewSessionRecord, Reviews } from './reviews.js';
 import { followRename, reanchor, splitLines } from './anchor.js';
@@ -123,7 +123,8 @@ class Cache<T> {
 export class ReviewService {
   private readonly diffCache = new Cache<string>();
   private readonly filesCache = new Cache<NameStatus[]>();
-  private readonly githubLocks = new Map<string, <T>(work: () => Promise<T>) => Promise<T>>();
+  /** One GitHub mutation per user at a time, so a second submit sees the first one's comments. */
+  private readonly githubLock = keyedSerializer();
 
   constructor(
     readonly reviews: Reviews,
@@ -297,7 +298,7 @@ export class ReviewService {
   }
 
   /** What `/api/diff` answers: the parsed diff, the base side's line counts, and what `-w` hid. */
-  async parsedDiff(session: ReviewSessionRecord, options: { ignoreWhitespace?: boolean; path?: string } = {}): Promise<DiffResponse> {
+  async parsedDiff(session: ReviewSessionRecord, options: { ignoreWhitespace?: boolean } = {}): Promise<DiffResponse> {
     const diff = parseDiff(await this.diffText(session, options));
     const token = await this.access.tokenFor(session.userId);
     const counted = diff.files.filter(file => file.status !== 'added' && !file.isBinary);
@@ -315,7 +316,7 @@ export class ReviewService {
       }
     }
     let suppressed: Suppressed | null = null;
-    if (options.ignoreWhitespace && options.path === undefined) {
+    if (options.ignoreWhitespace) {
       const unfiltered = parseShortStat(
         await this.mirrors.shortStat(session.owner, session.repo, token, session.baseSha, session.headSha),
       );
@@ -367,16 +368,6 @@ export class ReviewService {
 
   threadsForSession(session: ReviewSessionRecord): Promise<CommentThread[]> {
     return this.reviews.threadsForSession(session.userId, session.id);
-  }
-
-  /** One GitHub mutation per user at a time, so a second submit sees the first one's comments. */
-  private githubLock(userId: string): <T>(work: () => Promise<T>) => Promise<T> {
-    let lock = this.githubLocks.get(userId);
-    if (!lock) {
-      lock = serializer();
-      this.githubLocks.set(userId, lock);
-    }
-    return lock;
   }
 
   private async prToken(session: ReviewSessionRecord): Promise<string> {
@@ -550,11 +541,11 @@ export class ReviewService {
         const contents = await this.mirrors.readFiles(owner, repo, token, side === 'old' ? session.baseSha : session.headSha, paths);
         for (const [path, content] of contents) {
           if (content != null) {
-            lineCounts.set(`${side} ${path}`, splitLines(content).length);
+            lineCounts.set(`${side}\0${path}`, splitLines(content).length);
           }
         }
       }
-      const unmappable = new Set(incoming.filter(thread => (lineCounts.get(`${thread.side} ${thread.filePath}`) ?? 0) < thread.endLine));
+      const unmappable = new Set(incoming.filter(thread => (lineCounts.get(`${thread.side}\0${thread.filePath}`) ?? 0) < thread.endLine));
 
       const settled = remoteState ? threadsResolvedRemotely(local, remoteState) : [];
       for (const threadId of settled) {

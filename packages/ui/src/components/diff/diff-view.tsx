@@ -44,7 +44,6 @@ interface DiffViewProps {
   reviewedFiles: Set<string>;
   onReviewedChange: (path: string, reviewed: boolean) => void;
   onActiveFileChange?: (path: string) => void;
-  scrollRef?: React.RefCallback<HTMLElement>;
   handle?: React.Ref<DiffViewHandle>;
   threads: CommentThread[];
   commentsEnabled: boolean;
@@ -79,7 +78,7 @@ function estimateFileHeight(file: { hunks: { lines: { length: number } }[]; isBi
 export function DiffView(props: DiffViewProps) {
   const {
     diff, viewMode, theme, collapsedFiles, onToggleCollapse,
-    reviewedFiles, onReviewedChange, onActiveFileChange, scrollRef,
+    reviewedFiles, onReviewedChange, onActiveFileChange,
     handle,
     threads, commentsEnabled, commentActions, onAddThread,
     pendingSelection, onPendingSelectionChange,
@@ -309,12 +308,7 @@ export function DiffView(props: DiffViewProps) {
 
   return (
     <main
-      ref={(node) => {
-        scrollElementRef.current = node;
-        if (scrollRef) {
-          scrollRef(node);
-        }
-      }}
+      ref={scrollElementRef}
       onScroll={handleScroll}
       className="flex-1 overflow-y-auto pb-12"
     >

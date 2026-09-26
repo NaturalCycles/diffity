@@ -1,4 +1,4 @@
-import type { DiffFile, ParsedDiff } from '@diffity/parser';
+import type { ParsedDiff } from '@diffity/parser';
 
 /**
  * How much whitespace hiding removed. A filtered diff renders fewer files and lines than the forge
@@ -12,17 +12,6 @@ export interface Suppressed {
 /** What `/api/diff` answers. */
 export interface DiffResponse extends ParsedDiff {
   suppressed: Suppressed | null;
-}
-
-/** Null rather than an empty diff: the file may no longer differ at all. */
-export interface DiffFileResponse {
-  file: DiffFile | null;
-}
-
-export interface DiffFingerprint {
-  fingerprint: string;
-  /** Each file against its own churn, so the page can say which ones moved. */
-  files: Record<string, string>;
 }
 
 export interface FileContentResponse {

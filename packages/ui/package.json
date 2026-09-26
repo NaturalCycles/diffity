@@ -3,7 +3,6 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "react-router dev",
     "build": "react-router build",
     "typecheck": "react-router typegen && tsc",
     "test": "vitest run",

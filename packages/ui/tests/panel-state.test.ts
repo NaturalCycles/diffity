@@ -36,7 +36,7 @@ describe('remembering whether a panel is open', () => {
     expect(readPanelOpen(store, 'pr', '/repo')).toBe(true);
   });
 
-  it('keeps one checkout out of another', () => {
+  it('keeps one repository out of another', () => {
     const store = fakeStorage();
     writePanelOpen(store, 'pr', '/repo-a', false);
 

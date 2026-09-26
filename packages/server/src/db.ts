@@ -29,7 +29,6 @@ export const MIGRATIONS: Migration[] = [
         id TEXT PRIMARY KEY,
         email TEXT NOT NULL UNIQUE,
         name TEXT NOT NULL,
-        settings TEXT NOT NULL DEFAULT '{"shareReviews":"private"}',
         github_token TEXT,
         github_login TEXT,
         github_access_token TEXT,

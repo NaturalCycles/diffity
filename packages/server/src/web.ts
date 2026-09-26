@@ -2,10 +2,7 @@ import type { NextFunction, Request, Response } from 'express';
 
 export const SESSION_COOKIE = 'diffity_session';
 
-/**
- * Repository content is rendered in the review UI, so nothing it contains may reach the network.
- * The same policy the CLI serves its UI under.
- */
+/** Repository content is rendered in the review UI, so nothing it contains may reach the network. */
 export const UI_CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
   "base-uri 'none'",

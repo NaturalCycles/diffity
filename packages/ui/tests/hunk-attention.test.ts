@@ -2,10 +2,10 @@ import { describe, it, expect } from 'vitest';
 import type { DiffFile, DiffHunk, DiffLine } from '@diffity/parser';
 import {
   classifyHunk,
-  hunkIntersectsRanges,
   isImportOnlyHunk,
   isIndentationSensitive,
   isWhitespaceOnlyHunk,
+  rangesIntersectingHunk,
 } from '../src/lib/hunk-attention';
 
 function line(type: DiffLine['type'], content: string): DiffLine {
@@ -134,26 +134,26 @@ describe('classifyHunk', () => {
   });
 });
 
-describe('hunkIntersectsRanges', () => {
+describe('rangesIntersectingHunk', () => {
   const target = { ...hunk([]), newStart: 10, newCount: 5 }; // lines 10-14
 
   it('matches a range inside the hunk', () => {
-    expect(hunkIntersectsRanges(target, [{ startLine: 12, endLine: 12 }])).toBe(true);
+    expect(rangesIntersectingHunk(target, [{ startLine: 12, endLine: 12 }]).length > 0).toBe(true);
   });
 
   it('matches a range straddling either edge', () => {
-    expect(hunkIntersectsRanges(target, [{ startLine: 5, endLine: 10 }])).toBe(true);
-    expect(hunkIntersectsRanges(target, [{ startLine: 14, endLine: 30 }])).toBe(true);
+    expect(rangesIntersectingHunk(target, [{ startLine: 5, endLine: 10 }]).length > 0).toBe(true);
+    expect(rangesIntersectingHunk(target, [{ startLine: 14, endLine: 30 }]).length > 0).toBe(true);
   });
 
   it('does not match a range that misses by one', () => {
-    expect(hunkIntersectsRanges(target, [{ startLine: 1, endLine: 9 }])).toBe(false);
-    expect(hunkIntersectsRanges(target, [{ startLine: 15, endLine: 20 }])).toBe(false);
+    expect(rangesIntersectingHunk(target, [{ startLine: 1, endLine: 9 }]).length > 0).toBe(false);
+    expect(rangesIntersectingHunk(target, [{ startLine: 15, endLine: 20 }]).length > 0).toBe(false);
   });
 
   it('is false without ranges', () => {
-    expect(hunkIntersectsRanges(target, [])).toBe(false);
-    expect(hunkIntersectsRanges(target, undefined)).toBe(false);
+    expect(rangesIntersectingHunk(target, []).length > 0).toBe(false);
+    expect(rangesIntersectingHunk(target, undefined).length > 0).toBe(false);
   });
 });
 

@@ -75,7 +75,7 @@ export function runGitBuffer(args: string[], options: GitOptions = {}): Promise<
 }
 
 /** Runs works one at a time in arrival order; one failing does not break the chain. */
-export function serializer(): <T>(work: () => Promise<T>) => Promise<T> {
+function serializer(): <T>(work: () => Promise<T>) => Promise<T> {
   let chain: Promise<unknown> = Promise.resolve();
   return work => {
     const run = chain.then(work, work);
@@ -84,7 +84,20 @@ export function serializer(): <T>(work: () => Promise<T>) => Promise<T> {
   };
 }
 
-/** Same flags as the CLI's diffs, so the parser sees the format it was written for. */
+/** Work under the same key runs in arrival order; different keys run side by side. */
+export function keyedSerializer(): (key: string) => <T>(work: () => Promise<T>) => Promise<T> {
+  const byKey = new Map<string, <T>(work: () => Promise<T>) => Promise<T>>();
+  return key => {
+    let run = byKey.get(key);
+    if (!run) {
+      run = serializer();
+      byKey.set(key, run);
+    }
+    return run;
+  };
+}
+
+/** The format the parser expects, whatever the environment's git defaults. */
 const DIFF_FORMAT_ARGS = ['--no-color', '--no-ext-diff', '--src-prefix=a/', '--dst-prefix=b/'];
 
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
@@ -157,7 +170,7 @@ export function parseNameStatus(raw: string): NameStatus[] {
  * fetched with some permitted user's token.
  */
 export class Mirrors {
-  private readonly locks = new Map<string, <T>(work: () => Promise<T>) => Promise<T>>();
+  private readonly lock = keyedSerializer();
 
   constructor(private readonly dataDir: string, private readonly remoteUrl: RemoteUrlBuilder = githubRemoteUrl) {}
 
@@ -166,15 +179,6 @@ export class Mirrors {
       throw new Error(`Not a repository name: ${owner}/${repo}`);
     }
     return join(this.dataDir, 'mirrors', owner.toLowerCase(), `${repo.toLowerCase()}.git`);
-  }
-
-  private lock(key: string): <T>(work: () => Promise<T>) => Promise<T> {
-    let run = this.locks.get(key);
-    if (!run) {
-      run = serializer();
-      this.locks.set(key, run);
-    }
-    return run;
   }
 
   private withRepo<T>(owner: string, repo: string, work: (gitDir: string) => Promise<T>): Promise<T> {

@@ -4,7 +4,7 @@ export interface PullCounts {
   resolved: number;
   /** The forge could not be asked which threads are resolved, as opposed to answering "none". */
   resolutionUnavailable?: boolean;
-  /** Comments on lines this checkout does not have, so no thread was made for them. */
+  /** Comments on lines the session's code does not have, so no thread was made for them. */
   unmapped?: number;
 }
 
@@ -28,7 +28,7 @@ export function pullOutcome({ pulled, skipped, resolved, resolutionUnavailable, 
     parts.push('could not read which are resolved');
   }
   if (unmapped > 0) {
-    parts.push(`${count(unmapped, 'comment')} on lines this checkout does not have`);
+    parts.push(`${count(unmapped, 'comment')} on lines this session's code does not have`);
   }
 
   if (parts.length === 0) {

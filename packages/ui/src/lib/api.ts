@@ -17,16 +17,10 @@ import type {
 import { apiPath } from './base';
 
 export type {
-  DiffResponse,
   GitHubDetails,
-  GitHubRemote,
   PrComment,
-  PrReview,
-  RepoInfoResponse,
   ReviewEvent,
-  ReviewResult,
   ReviewRun,
-  Suppressed,
   Tour,
   TourStep,
 } from '@diffity/api';

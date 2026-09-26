@@ -23,7 +23,7 @@ From the repository root:
 npm ci
 npm run build       # parser → api → ui → server; the server build keeps the UI output
 npm test            # typecheck, then every package's tests
-npm run dev         # UI build in watch mode, and the server from source (needs the README's localhost env)
+npm run dev         # build once, then the server from source, restarted on change (needs the README's localhost env)
 ```
 
 One package: `npm test -w @diffity/server`, `npm run typecheck -w @diffity/ui`. Server tests run
