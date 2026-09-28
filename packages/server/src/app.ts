@@ -454,7 +454,7 @@ export function createApp(deps: AppDeps): express.Express {
     }
     const html = indexHtml();
     if (!html) {
-      sendPage(res, 503, 'Not built', '<h1>The review UI is not built</h1><p>Run <code>npm run build</code> at the repository root.</p>', user);
+      sendPage(res, 503, 'Not built', '<h1>The review UI is not built</h1><p>Run <code>pnpm build</code> at the repository root.</p>', user);
       return;
     }
     // The UI reads its API and router base from this, so one build serves every session.

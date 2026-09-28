@@ -1,15 +1,18 @@
 import { build } from 'esbuild';
-import { copyFileSync, existsSync, readFileSync, rmSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const distDir = join(here, 'dist');
-const uiSource = join(distDir, 'ui/client');
+const uiSource = join(here, '../ui/dist/client');
 const { version } = JSON.parse(readFileSync(join(here, '../../package.json'), 'utf8')) as { version: string };
 
-// Not the whole of dist: the UI's build writes into dist/ui.
-rmSync(join(distDir, 'index.js'), { force: true });
+if (!existsSync(join(uiSource, 'index.html'))) {
+  throw new Error(`${uiSource} is missing: build @diffity/ui first (pnpm build at the repository root)`);
+}
+
+rmSync(distDir, { recursive: true, force: true });
 
 await build({
   entryPoints: [join(here, 'src/index.ts')],
@@ -31,7 +34,4 @@ await build({
 });
 
 copyFileSync(join(here, 'src/review-prompt.md'), join(distDir, 'review-prompt.md'));
-
-if (!existsSync(join(uiSource, 'index.html'))) {
-  throw new Error(`${uiSource} is missing: build @diffity/ui first (npm run build at the repository root)`);
-}
+cpSync(uiSource, join(distDir, 'ui'), { recursive: true });

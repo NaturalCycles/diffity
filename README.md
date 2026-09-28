@@ -45,8 +45,8 @@ The database is PGlite under the data directory; the dev login trusts any typed 
 allowed domain, and a dev GitHub token stands in for connecting GitHub.
 
 ```bash
-npm ci
-npm run build
+pnpm install
+pnpm build
 
 DIFFITY_DATA_DIR=/tmp/diffity-data \
 DIFFITY_DEV_LOGIN=1 \
@@ -55,9 +55,9 @@ DIFFITY_DEV_GITHUB_TOKEN=$(gh auth token) \
 ```
 
 Open <http://localhost:5390> and sign in, and add the connector with
-`claude mcp add --transport http diffity http://localhost:5390/mcp`. `npm run dev` with the same
+`claude mcp add --transport http diffity http://localhost:5390/mcp`. `pnpm dev` with the same
 environment runs the server from source and restarts it when that changes; after a UI change,
-`npm run build -w @diffity/ui` and reload the page.
+`pnpm -F @diffity/ui build` and reload the page.
 
 ## Environment
 

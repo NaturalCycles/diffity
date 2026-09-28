@@ -4,21 +4,16 @@
   "private": true,
   "type": "module",
   "description": "Hosted, multi-user diffity: a GitHub-style review page for agents' findings, and an MCP endpoint that writes them",
-  "workspaces": [
-    "packages/parser",
-    "packages/api",
-    "packages/ui",
-    "packages/server"
-  ],
   "scripts": {
-    "build": "npm run build -w @diffity/parser && npm run build -w @diffity/api && npm run build -w @diffity/ui && npm run build -w @diffity/server",
-    "typecheck": "npm run typecheck --workspaces",
-    "test": "npm run typecheck && npm run test --workspaces",
-    "dev": "npm run build && npm run dev -w @diffity/server"
+    "build": "pnpm -F @diffity/parser build && pnpm -F @diffity/api build && pnpm -F @diffity/ui build && pnpm -F @diffity/server build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm typecheck && pnpm -r --workspace-concurrency=1 test",
+    "dev": "pnpm build && pnpm -F @diffity/server dev"
   },
   "engines": {
     "node": ">=24"
   },
   "author": "Natural Cycles",
-  "license": "MIT"
+  "license": "MIT",
+  "packageManager": "pnpm@12.3.1"
 }

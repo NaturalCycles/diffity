@@ -20,13 +20,13 @@ them from their built `dist`, so build before typechecking.
 From the repository root:
 
 ```bash
-npm ci
-npm run build       # parser → api → ui → server; the server build keeps the UI output
-npm test            # typecheck, then every package's tests
-npm run dev         # build once, then the server from source, restarted on change (needs the README's localhost env)
+pnpm install
+pnpm build          # parser → api → ui → server; the server build copies in the UI
+pnpm test           # typecheck, then every package's tests
+pnpm dev            # build once, then the server from source, restarted on change (needs the README's localhost env)
 ```
 
-One package: `npm test -w @diffity/server`, `npm run typecheck -w @diffity/ui`. Server tests run
+One package: `pnpm -F @diffity/server test`, `pnpm -F @diffity/ui typecheck`. Server tests run
 on in-memory PGlite; nothing needs a database or network.
 
 ## Conventions

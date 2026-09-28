@@ -1,26 +1,24 @@
 # Build from the repository root: docker build -t diffity .
 
-FROM node:24-slim AS build
-WORKDIR /src
-COPY package.json package-lock.json ./
-COPY packages/api/package.json packages/api/
-COPY packages/parser/package.json packages/parser/
-COPY packages/server/package.json packages/server/
-COPY packages/ui/package.json packages/ui/
-RUN npm ci
-COPY tsconfig.json ./
-COPY packages ./packages
-RUN npm run build
-
-FROM node:24-slim AS deps
+FROM node:24-slim AS base
+ENV PNPM_HOME=/pnpm
+ENV PATH=/pnpm:$PATH
+RUN corepack enable && corepack prepare pnpm@12.3.1 --activate
 WORKDIR /app
-COPY package.json package-lock.json ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/api/package.json packages/api/
 COPY packages/parser/package.json packages/parser/
 COPY packages/server/package.json packages/server/
 COPY packages/ui/package.json packages/ui/
-# The workspace packages are bundled into dist; only the server's npm dependencies are installed.
-RUN npm ci --omit=dev --workspace @diffity/server --include-workspace-root=false --ignore-scripts
+
+FROM base AS build
+RUN pnpm install --frozen-lockfile
+COPY . .
+RUN pnpm build
+
+# The workspace packages are bundled into dist; only the server's own dependencies are installed.
+FROM base AS prod-deps
+RUN pnpm install --frozen-lockfile --prod --filter @diffity/server
 
 FROM node:24-slim
 RUN apt-get update \
@@ -29,10 +27,12 @@ RUN apt-get update \
   && useradd --system --uid 10001 --home-dir /data --shell /usr/sbin/nologin diffity \
   && mkdir -p /data \
   && chown diffity:diffity /data
-WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
-COPY --from=build /src/packages/server/package.json ./package.json
-COPY --from=build /src/packages/server/dist ./dist
+# The same layout as the install: packages/server/node_modules links into /app/node_modules/.pnpm.
+COPY --from=prod-deps /app/node_modules /app/node_modules
+COPY --from=prod-deps /app/packages/server/node_modules /app/packages/server/node_modules
+COPY --from=build /app/packages/server/package.json /app/packages/server/package.json
+COPY --from=build /app/packages/server/dist /app/packages/server/dist
+WORKDIR /app/packages/server
 ENV NODE_ENV=production \
   DIFFITY_DATA_DIR=/data \
   DIFFITY_BIND=0.0.0.0 \

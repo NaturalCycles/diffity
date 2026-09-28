@@ -11,7 +11,7 @@ const version = typeof __DIFFITY_VERSION__ === 'string' ? __DIFFITY_VERSION__ : 
 
 /** The UI builds into the server's dist, which is next to this module or, from source, beside src. */
 function findUiDir(): string | null {
-  const candidates = [join(here, 'ui/client'), join(here, '../dist/ui/client')];
+  const candidates = [join(here, 'ui'), join(here, '../../ui/dist/client')];
   return candidates.find(dir => existsSync(join(dir, 'index.html'))) ?? null;
 }
 
@@ -35,7 +35,7 @@ async function main(): Promise<void> {
   }
   const uiDir = findUiDir();
   if (!uiDir) {
-    console.warn('Warning: the review UI is not built; run `npm run build` at the repository root.');
+    console.warn('Warning: the review UI is not built; run `pnpm build` at the repository root.');
   }
 
   const running = await startServer(config, { uiDir, version });

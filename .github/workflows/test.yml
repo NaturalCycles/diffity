@@ -3,7 +3,7 @@ name: test
 on:
   pull_request:
   push:
-    branches: [develop]
+    branches: [hosted-server]
 
 permissions:
   contents: read
@@ -13,11 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24
-          cache: npm
-      - run: npm ci
+      - uses: NaturalCycles/ci-typescript/actions/setup-node-pnpm@v2
       # Typecheck resolves workspace imports through built dists, so the build comes first.
-      - run: npm run build
-      - run: npm test
+      - run: pnpm build
+      - run: pnpm test

@@ -17,8 +17,8 @@
     "node": ">=24"
   },
   "devDependencies": {
-    "@diffity/api": "*",
-    "@diffity/parser": "*",
+    "@diffity/api": "workspace:*",
+    "@diffity/parser": "workspace:*",
     "@electric-sql/pglite-socket": "^0.2.11",
     "@types/express": "^5.0.6",
     "@types/node": "^25.5.0",
