@@ -61,6 +61,10 @@ export function GeneralComments(props: GeneralCommentsProps) {
                   commentActions.addThread(GENERAL_THREAD_FILE_PATH, 'new', 0, 0, body, DEFAULT_AUTHOR);
                   setShowForm(false);
                 }}
+                onAsk={(body) => {
+                  commentActions.addThread(GENERAL_THREAD_FILE_PATH, 'new', 0, 0, body, DEFAULT_AUTHOR, undefined, true);
+                  setShowForm(false);
+                }}
                 onCancel={() => setShowForm(false)}
                 placeholder="Leave a general comment..."
                 submitLabel="Comment"
@@ -74,6 +78,7 @@ export function GeneralComments(props: GeneralCommentsProps) {
                   key={thread.id}
                   thread={thread}
                   onReply={(body) => commentActions.addReply(thread.id, body, DEFAULT_AUTHOR)}
+                  onAskReply={(body) => commentActions.addReply(thread.id, body, DEFAULT_AUTHOR, true)}
                   onResolve={() => commentActions.resolveThread(thread.id)}
                   onUnresolve={() => commentActions.unresolveThread(thread.id)}
                   onEditComment={(commentId, body) => commentActions.editComment(commentId, body)}

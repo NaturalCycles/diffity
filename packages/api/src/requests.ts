@@ -20,6 +20,7 @@ import {
   int,
   lineRange,
   member,
+  optBool,
   optMember,
   optStr,
   parseWith,
@@ -42,6 +43,8 @@ export interface CreateThreadRequest {
   anchorContent?: string;
   /** An aside starts a conversation rather than a finding, and is never posted. Absent means review. */
   kind?: CommentKind;
+  /** Hands the comment to the agent listening on the session as a question; it is then an aside. */
+  ask?: boolean;
 }
 
 /** What `POST /api/threads/:id/reply` accepts. */
@@ -49,6 +52,7 @@ export interface ReplyRequest {
   body: string;
   author: CommentAuthor;
   kind?: CommentKind;
+  ask?: boolean;
 }
 
 /** What `PATCH /api/threads/:id/status` accepts. */
@@ -83,6 +87,7 @@ export function parseCreateThreadRequest(body: unknown): ParseResult<CreateThrea
     author: author(obj.author, 'author'),
     anchorContent: optStr(obj.anchorContent, 'anchorContent'),
     kind: optMember(obj.kind, 'kind', COMMENT_KINDS),
+    ask: optBool(obj.ask, 'ask'),
   }));
 }
 
@@ -91,6 +96,7 @@ export function parseReplyRequest(body: unknown): ParseResult<ReplyRequest> {
     body: str(obj.body, 'body'),
     author: author(obj.author, 'author'),
     kind: optMember(obj.kind, 'kind', COMMENT_KINDS),
+    ask: optBool(obj.ask, 'ask'),
   }));
 }
 

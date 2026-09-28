@@ -51,6 +51,16 @@ export function optStr(value: unknown, label: string): string | undefined {
   return value == null ? undefined : anyStr(value, label);
 }
 
+export function optBool(value: unknown, label: string): boolean | undefined {
+  if (value == null) {
+    return undefined;
+  }
+  if (typeof value !== 'boolean') {
+    throw new FieldError(`${label} must be a boolean`);
+  }
+  return value;
+}
+
 export function int(value: unknown, label: string, min: number): number {
   if (typeof value !== 'number' || !Number.isInteger(value) || value < min) {
     throw new FieldError(`${label} must be an integer >= ${min}`);

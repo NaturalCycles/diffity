@@ -6,6 +6,7 @@ import {
   isThreadStatus,
   isTourStatus,
   type Comment,
+  type AskState,
   type CommentAuthor,
   type CommentKind,
   type CommentSide,
@@ -90,6 +91,7 @@ interface CommentRow {
   body: string;
   kind: string;
   created_at: string;
+  ask?: AskState | null;
 }
 
 interface TourRow {
@@ -152,6 +154,7 @@ function rowToComment(row: CommentRow): Comment {
     body: row.body,
     kind: isCommentKind(row.kind) ? row.kind : 'review',
     createdAt: row.created_at,
+    ...(row.ask ? { ask: row.ask } : {}),
   };
 }
 
@@ -309,10 +312,15 @@ export class Reviews {
       return 0;
     }
     return this.db.transaction(async tx => {
-      const moved = await tx.query(
+      const moved = await tx.query<{ id: string }>(
         `UPDATE threads SET session_id = $1 WHERE user_id = $2 AND status = 'open' AND session_id = ANY($3) RETURNING id`,
         [toSessionId, userId, fromSessionIds],
       );
+      await tx.query('UPDATE live_requests SET session_id = $1 WHERE user_id = $2 AND thread_id = ANY($3)', [
+        toSessionId,
+        userId,
+        moved.map(row => row.id),
+      ]);
       await tx.query('UPDATE tours SET session_id = $1 WHERE user_id = $2 AND session_id = ANY($3)', [
         toSessionId,
         userId,
@@ -378,7 +386,12 @@ export class Reviews {
     if (threadIds.length === 0) {
       return map;
     }
-    const rows = await this.db.query<CommentRow>('SELECT * FROM comments WHERE thread_id = ANY($1) ORDER BY seq ASC', [threadIds]);
+    const rows = await this.db.query<CommentRow>(
+      `SELECT c.*, CASE WHEN r.id IS NULL THEN NULL WHEN r.answered_at IS NULL THEN 'pending' ELSE 'answered' END AS ask
+         FROM comments c LEFT JOIN live_requests r ON r.comment_id = c.id
+        WHERE c.thread_id = ANY($1) ORDER BY c.seq ASC`,
+      [threadIds],
+    );
     for (const row of rows) {
       const list = map.get(row.thread_id) ?? [];
       list.push(rowToComment(row));

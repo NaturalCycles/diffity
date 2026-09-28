@@ -21,6 +21,7 @@ import { isThreadResolved } from '../comments/types';
 
 interface ToolbarProps {
   reviewInProgress?: boolean;
+  agentListening?: boolean;
   viewMode: ViewMode;
   onViewModeChange: (mode: ViewMode) => void;
   hideWhitespace: boolean;
@@ -129,6 +130,7 @@ export function Toolbar(props: ToolbarProps) {
     description,
     githubDetails,
     reviewInProgress,
+    agentListening,
     sessionId,
     onGitHubPulled,
   } = props;
@@ -176,6 +178,15 @@ export function Toolbar(props: ToolbarProps) {
         )}
       </div>
       <div className="flex items-center gap-2 ml-auto shrink-0">
+        {agentListening && (
+          <span
+            className="flex items-center gap-1.5 px-2 py-1 text-xs text-accent"
+            title="An agent is waiting: Ask Claude on a comment reaches it."
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-added" />
+            Agent listening
+          </span>
+        )}
         <SegmentedToggle options={viewModeOptions} value={viewMode} onChange={onViewModeChange} />
         <CommentToolbarActions
           threads={threads}

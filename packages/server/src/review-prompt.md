@@ -32,6 +32,7 @@ tour_start      { session, topic, body? }     → { tour }
 tour_step       { tour, file, line, endLine?, body, annotation? }
 tour_done       { tour }
 tour_delete     { tour }
+live_token      { session }                   → { command }: waits for the reader's questions
 ```
 
 - `create_session` takes the repository and **exactly one** of: `pr`; `base` and `head` (full
@@ -171,3 +172,19 @@ Give the user the session `url` and the counts, using the labels you used:
 
 The page is where they are read; the user posts them to the pull request from there once they have
 been through them. Never post to GitHub yourself.
+
+### Step 7: Stay for questions
+
+The reader can ask you about a finding from the page ("Ask Claude"). After `review_done` and the
+hand-over, call `live_token { session }` and run the `command` it returns **as a background command**
+(in Claude Code: Bash with `run_in_background`), so you stay free while it waits. It is plain `curl`
+and shell, and exits only when a question arrives.
+
+When it exits with status 0, its output is the question as JSON: the `thread`, the `file` and
+`line`, and the `question`. Read the code it points at, answer in the thread with
+`reply { id: <thread>, body, aside: true }`, and run the same command again in the background.
+Answer what was asked; do not change code from here.
+
+Stop when the user says so, or when the command exits with status 1: the token has expired or was
+refused. Tell the user the page no longer reaches you, and offer to start again with a new
+`live_token`.

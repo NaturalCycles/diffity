@@ -6,6 +6,7 @@ import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middlew
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { AuthorizationParams } from '@modelcontextprotocol/sdk/server/auth/provider.js';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
+import { GENERAL_THREAD_FILE_PATH } from '@diffity/api';
 import type { Config } from './config.js';
 import { WEB_SESSION_MAX_AGE_SECONDS, type Users, type User, type WebSessions } from './users.js';
 import { hashPresentedClientSecret, type OAuthProvider } from './oauth.js';
@@ -13,6 +14,7 @@ import { describeSession, type ReviewService } from './service.js';
 import type { DevLoginProvider, IapLogin } from './login.js';
 import { GitHubConnectError, type GitHubAppAccess } from './github-app.js';
 import { createMcpServer } from './mcp.js';
+import { MAX_WAIT_SECONDS, type Live } from './live.js';
 import { uiApiRouter } from './ui-api.js';
 import { escapeHtml, page } from './html.js';
 import { randomToken } from './crypto.js';
@@ -32,6 +34,7 @@ export interface AppDeps {
   webSessions: WebSessions;
   oauth: OAuthProvider;
   service: ReviewService;
+  live: Live;
   devLogin: DevLoginProvider | null;
   /** When set, identity comes from IAP's header on every request, and there is no login form. */
   iap: IapLogin | null;
@@ -86,7 +89,7 @@ function formTargetFor(redirectUri: string): string {
 }
 
 export function createApp(deps: AppDeps): express.Express {
-  const { config, users, webSessions, oauth, service } = deps;
+  const { config, users, webSessions, oauth, service, live } = deps;
   const publicUrl = config.publicUrl;
   const mcpUrl = new URL('/mcp', publicUrl);
   const secureCookies = publicUrl.protocol === 'https:';
@@ -212,6 +215,7 @@ export function createApp(deps: AppDeps): express.Express {
     }
     const server = createMcpServer({
       service,
+      live,
       userId,
       agentName: (await oauth.clientsStore.clientName(req.auth!.clientId)) ?? 'Claude',
       version: deps.version,
@@ -241,6 +245,48 @@ export function createApp(deps: AppDeps): express.Express {
       jsonrpc: '2.0',
       error: { code: -32000, message: 'This server is stateless: POST only' },
       id: null,
+    });
+  });
+
+  // Outside IAP on the load balancer: the live token is the only credential it takes.
+  app.get('/live/await', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    const token = /^Bearer (\S+)$/.exec(req.headers.authorization ?? '')?.[1];
+    const sessionId = typeof req.query.session === 'string' ? req.query.session : '';
+    const userId = token && sessionId ? await live.verifyToken(token, sessionId) : null;
+    if (!userId) {
+      res.status(401).json({ error: 'The live token is missing, expired or for another session; get a new one with live_token' });
+      return;
+    }
+    const asked = Number(req.query.wait ?? MAX_WAIT_SECONDS);
+    const wait = Number.isFinite(asked) ? Math.min(Math.max(asked, 0), MAX_WAIT_SECONDS) : MAX_WAIT_SECONDS;
+    await live.recordPoll(userId, sessionId);
+    const gone = new AbortController();
+    res.on('close', () => gone.abort());
+    const request = await live.next(userId, sessionId, wait * 1000, gone.signal);
+    if (gone.signal.aborted) {
+      if (request) {
+        await live.release(request.id);
+      }
+      return;
+    }
+    const thread = request ? await reviews.getThread(userId, request.threadId) : null;
+    const question = thread?.comments.find(comment => comment.id === request!.commentId);
+    if (!request || !thread || !question) {
+      res.status(204).end();
+      return;
+    }
+    res.json({
+      request: request.id,
+      session: sessionId,
+      thread: thread.id,
+      file: thread.filePath === GENERAL_THREAD_FILE_PATH ? null : thread.filePath,
+      side: thread.side,
+      line: thread.startLine,
+      endLine: thread.endLine,
+      from: question.author.name,
+      question: question.body,
+      hint: `Answer with reply { id: "${thread.id}", body, aside: true }, then run the command again.`,
     });
   });
 
@@ -439,7 +485,7 @@ export function createApp(deps: AppDeps): express.Express {
     res.set('Content-Security-Policy', UI_CONTENT_SECURITY_POLICY);
     res.set('Cache-Control', 'no-store');
     next();
-  }, uiApiRouter({ service, userFor }));
+  }, uiApiRouter({ service, live, userFor }));
 
   app.get('/s/:sid{/*rest}', async (req, res) => {
     const user = await userFor(req);

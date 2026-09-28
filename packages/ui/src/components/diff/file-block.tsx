@@ -114,12 +114,12 @@ export function FileBlock(props: FileBlockProps) {
     return extractLinesFromExpandedLines(allExpandedLines, side, startLine, endLine);
   }, [file.hunks, allExpandedLines]);
 
-  const addThread = useCallback((fp: string, side: CommentSide, startLine: number, endLine: number, body: string, author: import('../comments/types').CommentAuthor) => {
+  const addThread = useCallback((fp: string, side: CommentSide, startLine: number, endLine: number, body: string, author: import('../comments/types').CommentAuthor, ask?: boolean) => {
     let anchorContent = extractLinesFromDiff(file.hunks, side, startLine, endLine);
     if (!anchorContent) {
       anchorContent = extractLinesFromExpandedLines(allExpandedLines, side, startLine, endLine);
     }
-    rawAddThread(fp, side, startLine, endLine, body, author, anchorContent || undefined);
+    rawAddThread(fp, side, startLine, endLine, body, author, anchorContent || undefined, ask);
   }, [rawAddThread, file.hunks, allExpandedLines]);
 
   const allFileThreads = useMemo(() => {

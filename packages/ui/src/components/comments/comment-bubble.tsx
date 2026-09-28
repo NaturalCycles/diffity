@@ -125,6 +125,14 @@ export function CommentBubble(props: CommentBubbleProps) {
               aside
             </span>
           )}
+          {comment.ask && (
+            <span
+              className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${comment.ask === 'answered' ? 'bg-added/15 text-added' : 'bg-modified/15 text-modified'}`}
+              title={comment.ask === 'answered' ? 'The agent has answered in this thread.' : 'Sent to the agent; no answer yet.'}
+            >
+              {comment.ask === 'answered' ? 'answered' : 'asked'}
+            </span>
+          )}
           {!isEditing && (
             <div className="ml-auto flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
               <button

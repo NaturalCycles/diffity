@@ -17,3 +17,9 @@ export interface RepoInfoResponse {
   review?: ReviewRun | null;
   github: GitHubRemote | null;
 }
+
+/** What `/api/live/status` answers: whether an agent is waiting for questions on this session. */
+export interface LiveStatusResponse {
+  listening: boolean;
+  lastPollAt: string | null;
+}

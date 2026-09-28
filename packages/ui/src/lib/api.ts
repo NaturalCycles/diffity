@@ -6,6 +6,7 @@ import type {
   DiffResponse,
   FileContentResponse,
   GitHubDetails,
+  LiveStatusResponse,
   PullCommentsResult,
   RepoInfoResponse,
   ReplyRequest,
@@ -85,8 +86,8 @@ export function createThread(data: CreateThreadRequest): Promise<CommentThread> 
   });
 }
 
-export function replyToThread(threadId: string, body: string, author: CommentAuthor): Promise<Comment> {
-  const request: ReplyRequest = { body, author };
+export function replyToThread(threadId: string, body: string, author: CommentAuthor, ask?: boolean): Promise<Comment> {
+  const request: ReplyRequest = { body, author, ...(ask ? { ask } : {}) };
   return apiFetch(`/api/threads/${threadId}/reply`, {
     method: 'POST',
     headers: JSON_HEADERS,
@@ -153,6 +154,10 @@ export function pullCommentsFromGitHub(sessionId: string): Promise<PullCommentsR
     headers: JSON_HEADERS,
     body: JSON.stringify({ sessionId }),
   });
+}
+
+export function fetchLiveStatus(): Promise<LiveStatusResponse> {
+  return apiFetch('/api/live/status');
 }
 
 export function fetchTours(sessionId: string): Promise<Tour[]> {

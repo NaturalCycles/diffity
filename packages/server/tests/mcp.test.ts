@@ -123,7 +123,7 @@ describe('a review through the tools', () => {
     const { tools } = await alice.listTools();
     expect(tools.map(tool => tool.name).sort()).toEqual([
       'amend', 'comment', 'create_session', 'dismiss', 'general_comment', 'get_diff', 'get_file', 'get_standards',
-      'list_comments', 'list_sessions', 'reply', 'resolve', 'review_done', 'review_start', 'tour_delete', 'tour_done',
+      'list_comments', 'list_sessions', 'live_token', 'reply', 'resolve', 'review_done', 'review_start', 'tour_delete', 'tour_done',
       'tour_start', 'tour_step',
     ]);
   });

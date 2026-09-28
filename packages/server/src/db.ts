@@ -167,6 +167,36 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_tour_steps_tour ON tour_steps(tour_id);
     `,
   },
+  {
+    version: 2,
+    sql: `
+      CREATE TABLE live_requests (
+        id TEXT PRIMARY KEY,
+        seq BIGINT GENERATED ALWAYS AS IDENTITY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+        comment_id TEXT NOT NULL REFERENCES comments(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL DEFAULT 'ask' CHECK (kind IN ('ask')),
+        created_at TEXT NOT NULL,
+        claimed_at BIGINT,
+        claim_expires_at BIGINT,
+        answered_at BIGINT
+      );
+      CREATE INDEX idx_live_requests_session ON live_requests(session_id, seq);
+      CREATE INDEX idx_live_requests_thread ON live_requests(thread_id);
+      CREATE INDEX idx_live_requests_comment ON live_requests(comment_id);
+
+      CREATE TABLE live_tokens (
+        token_hash TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        expires_at BIGINT NOT NULL
+      );
+
+      ALTER TABLE sessions ADD COLUMN live_polled_at BIGINT;
+    `,
+  },
 ];
 
 /** Any constant; two instances starting together take turns migrating. */

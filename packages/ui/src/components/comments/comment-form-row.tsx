@@ -8,7 +8,7 @@ interface CommentFormRowProps {
   startLine: number;
   endLine: number;
   currentAuthor: CommentAuthor;
-  onSubmit: (filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor) => void;
+  onSubmit: (filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor, ask?: boolean) => void;
   onCancel: () => void;
   viewMode?: 'unified' | 'split';
 }
@@ -24,6 +24,7 @@ export function CommentFormRow(props: CommentFormRowProps) {
     <div className="max-w-[700px]">
       <CommentForm
         onSubmit={(body) => onSubmit(filePath, side, startLine, endLine, body, currentAuthor)}
+        onAsk={(body) => onSubmit(filePath, side, startLine, endLine, body, currentAuthor, true)}
         onCancel={onCancel}
         lineLabel={`Add a comment on line${startLine !== endLine ? 's' : ''} ${lineLabel}`}
       />

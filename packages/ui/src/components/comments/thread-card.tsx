@@ -13,6 +13,7 @@ interface ThreadCardProps {
   onDeleteComment: (commentId: string) => void;
   onDeleteThread: () => void;
   onReply?: (body: string) => void;
+  onAskReply?: (body: string) => void;
   onResolve?: () => void;
   onUnresolve?: () => void;
   headerLeft?: React.ReactNode;
@@ -28,6 +29,7 @@ export function ThreadCard(props: ThreadCardProps) {
     onDeleteComment,
     onDeleteThread,
     onReply,
+    onAskReply,
     onResolve,
     onUnresolve,
     headerLeft,
@@ -97,6 +99,10 @@ export function ThreadCard(props: ThreadCardProps) {
                 onReply(body);
                 setShowReply(false);
               }}
+              onAsk={onAskReply && ((body) => {
+                onAskReply(body);
+                setShowReply(false);
+              })}
               onCancel={() => setShowReply(false)}
               placeholder="Reply..."
               submitLabel="Reply"

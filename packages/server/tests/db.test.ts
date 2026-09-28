@@ -27,7 +27,7 @@ describe('migrations', () => {
       .map(row => row.tablename);
     expect(tables).toEqual(expect.arrayContaining([
       'users', 'web_sessions', 'github_oauth_states', 'oauth_clients', 'oauth_codes', 'oauth_tokens',
-      'repos', 'sessions', 'threads', 'comments', 'tours', 'tour_steps', 'schema_version',
+      'repos', 'sessions', 'threads', 'comments', 'tours', 'tour_steps', 'live_requests', 'live_tokens', 'schema_version',
     ]));
     await db.close();
 

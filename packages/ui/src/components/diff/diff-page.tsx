@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useLoaderData } from 'react-router';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useDiff } from '../../hooks/use-diff';
 import { useInfo } from '../../hooks/use-info';
 import { useTheme } from '../../hooks/use-theme';
@@ -37,6 +37,8 @@ import { fetchGitHubDetails, type GitHubDetails } from '../../lib/api';
 import type { LineSelection } from '../comments/types';
 import type { ParsedDiff } from '@diffity/parser';
 import { isThreadResolved } from '../comments/types';
+import { liveStatusOptions } from '../../queries/live';
+import { AgentListeningContext } from '../../lib/agent-listening';
 
 export function DiffPage() {
   const { theme: initialTheme, view: initialViewMode } = useLoaderData<{
@@ -76,6 +78,7 @@ export function DiffPage() {
   const { data: serverThreads, isFetched: threadsFetched } = useReviewThreads(reviewsEnabled ? sessionId : null);
   const threads = reviewsEnabled && serverThreads ? serverThreads : [];
   const commentActions = useCommentActions(sessionId, reviewsEnabled);
+  const agentListening = !!useQuery(liveStatusOptions(sessionId)).data?.listening;
 
   const commentCountsByFile = useMemo(() => buildThreadCountsByFile(threads), [threads]);
 
@@ -462,85 +465,88 @@ export function DiffPage() {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-bg text-text font-sans">
-      <Toolbar
-        viewMode={viewMode}
-        onViewModeChange={setViewMode}
-        hideWhitespace={hideWhitespace}
-        onHideWhitespaceChange={setHideWhitespace}
-        theme={theme}
-        onToggleTheme={toggleTheme}
-        wrapLines={wrapLines}
-        onToggleWrapLines={toggleWrapLines}
-        onShowHelp={() => setShowHelp(true)}
-        diff={diff || undefined}
-        threads={threads}
-        onDeleteAllComments={commentActions.deleteAllThreads}
-        onScrollToThread={handleScrollToThread}
-        repoName={info?.name || null}
-        branch={info?.branch || null}
-        description={whitespaceNotice ?? info?.description ?? null}
-        githubDetails={githubDetails}
-        reviewInProgress={!!info?.review?.inProgress}
-        sessionId={sessionId}
-        onGitHubPulled={() => queryClient.invalidateQueries({ queryKey: ['threads'] })}
-      />
-      <PullRequestPanel details={githubDetails} hasPullRequest={!!info?.github} repoRoot={repoRoot} />
-      {info?.review?.inProgress && (
-        <ReviewProgressBanner review={info.review} findings={threads.length} />
-      )}
-      {activeTour && (
-        <TourStepper
-          tour={activeTour}
-          stepIndex={activeStepIndex}
-          onStepChange={handleTourStepChange}
+    <AgentListeningContext.Provider value={agentListening}>
+      <div className="flex flex-col h-screen bg-bg text-text font-sans">
+        <Toolbar
+          viewMode={viewMode}
+          onViewModeChange={setViewMode}
+          hideWhitespace={hideWhitespace}
+          onHideWhitespaceChange={setHideWhitespace}
+          theme={theme}
+          onToggleTheme={toggleTheme}
+          wrapLines={wrapLines}
+          onToggleWrapLines={toggleWrapLines}
+          onShowHelp={() => setShowHelp(true)}
+          diff={diff || undefined}
+          threads={threads}
+          onDeleteAllComments={commentActions.deleteAllThreads}
+          onScrollToThread={handleScrollToThread}
+          repoName={info?.name || null}
+          branch={info?.branch || null}
+          description={whitespaceNotice ?? info?.description ?? null}
+          githubDetails={githubDetails}
+          reviewInProgress={!!info?.review?.inProgress}
+          agentListening={agentListening}
+          sessionId={sessionId}
+          onGitHubPulled={() => queryClient.invalidateQueries({ queryKey: ['threads'] })}
         />
-      )}
-      <div className="relative flex flex-1 overflow-hidden">
-        <Sidebar
-          files={orderedDiff?.files || []}
-          activeFile={activeFile}
-          reviewedFiles={reviewedFiles}
-          commentCountsByFile={commentCountsByFile}
-          onFileClick={handleSidebarFileClick}
-          onCommentedFileClick={handleSidebarCommentedFileClick}
-          reviewOrder={
-            activeTour && activeTour.steps.length > 0
-              ? {
-                  stops: tourStops,
-                  enabled: reviewOrderEnabled,
-                  onToggle: () => setReviewOrderEnabled(prev => !prev),
-                }
-              : undefined
-          }
-        />
-        <div className="relative flex flex-1 min-w-0">
-        {orderedDiff ? (
-          <DiffView
-            diff={orderedDiff}
-            viewMode={viewMode}
-            theme={theme}
-            collapsedFiles={collapsedFiles}
-            onToggleCollapse={handleToggleCollapse}
-            reviewedFiles={reviewedFiles}
-            onReviewedChange={handleReviewedChange}
-            onActiveFileChange={handleActiveFileFromScroll}
-            handle={diffViewRef}
-            threads={threads}
-            commentsEnabled={reviewsEnabled}
-            commentActions={commentActions}
-            onAddThread={handleAddThread}
-            pendingSelection={pendingSelection}
-            onPendingSelectionChange={setPendingSelection}
-            focusRangesByFile={focusRangesByFile}
-            tourMarksByFile={tourMarksByFile}
-            activeStepIndex={activeStepIndex}
-            onTourMarkClick={handleTourStepChange}
+        <PullRequestPanel details={githubDetails} hasPullRequest={!!info?.github} repoRoot={repoRoot} />
+        {info?.review?.inProgress && (
+          <ReviewProgressBanner review={info.review} findings={threads.length} />
+        )}
+        {activeTour && (
+          <TourStepper
+            tour={activeTour}
+            stepIndex={activeStepIndex}
+            onStepChange={handleTourStepChange}
           />
-        ) : null}
+        )}
+        <div className="relative flex flex-1 overflow-hidden">
+          <Sidebar
+            files={orderedDiff?.files || []}
+            activeFile={activeFile}
+            reviewedFiles={reviewedFiles}
+            commentCountsByFile={commentCountsByFile}
+            onFileClick={handleSidebarFileClick}
+            onCommentedFileClick={handleSidebarCommentedFileClick}
+            reviewOrder={
+              activeTour && activeTour.steps.length > 0
+                ? {
+                    stops: tourStops,
+                    enabled: reviewOrderEnabled,
+                    onToggle: () => setReviewOrderEnabled(prev => !prev),
+                  }
+                : undefined
+            }
+          />
+          <div className="relative flex flex-1 min-w-0">
+          {orderedDiff ? (
+            <DiffView
+              diff={orderedDiff}
+              viewMode={viewMode}
+              theme={theme}
+              collapsedFiles={collapsedFiles}
+              onToggleCollapse={handleToggleCollapse}
+              reviewedFiles={reviewedFiles}
+              onReviewedChange={handleReviewedChange}
+              onActiveFileChange={handleActiveFileFromScroll}
+              handle={diffViewRef}
+              threads={threads}
+              commentsEnabled={reviewsEnabled}
+              commentActions={commentActions}
+              onAddThread={handleAddThread}
+              pendingSelection={pendingSelection}
+              onPendingSelectionChange={setPendingSelection}
+              focusRangesByFile={focusRangesByFile}
+              tourMarksByFile={tourMarksByFile}
+              activeStepIndex={activeStepIndex}
+              onTourMarkClick={handleTourStepChange}
+            />
+          ) : null}
+          </div>
         </div>
+        {showHelp && <ShortcutModal onClose={() => setShowHelp(false)} />}
       </div>
-      {showHelp && <ShortcutModal onClose={() => setShowHelp(false)} />}
-    </div>
+    </AgentListeningContext.Provider>
   );
 }

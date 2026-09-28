@@ -8,7 +8,7 @@ import { ThreadCard } from './thread-card';
 
 interface CommentThreadProps {
   thread: CommentThreadType;
-  onReply: (threadId: string, body: string, author: CommentAuthor) => void;
+  onReply: (threadId: string, body: string, author: CommentAuthor, ask?: boolean) => void;
   onResolve: (threadId: string) => void;
   onUnresolve: (threadId: string) => void;
   onEditComment: (commentId: string, body: string) => void;
@@ -114,6 +114,7 @@ export function CommentThread(props: CommentThreadProps) {
       <ThreadCard
         thread={thread}
         onReply={(body) => onReply(thread.id, body, currentAuthor)}
+        onAskReply={(body) => onReply(thread.id, body, currentAuthor, true)}
         onResolve={() => {
           onResolve(thread.id);
           setIsCollapsed(true);

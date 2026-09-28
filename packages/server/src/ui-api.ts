@@ -11,6 +11,7 @@ import {
   THREAD_STATUSES,
   type CommentAuthor,
   type FileContentResponse,
+  type LiveStatusResponse,
   type ParseResult,
   type RepoInfoResponse,
 } from '@diffity/api';
@@ -18,9 +19,11 @@ import type { ReviewSessionRecord } from './reviews.js';
 import { describeSession, ServiceError, type ReviewService } from './service.js';
 import { splitLines } from './anchor.js';
 import type { User } from './users.js';
+import type { Live } from './live.js';
 
 export interface UiApiDeps {
   service: ReviewService;
+  live: Live;
   userFor: (req: Request) => Promise<User | null>;
 }
 
@@ -43,7 +46,7 @@ function parsed<T>(res: Response, result: ParseResult<T>): T | null {
 
 /** The `/api/*` subset the review UI needs, scoped to one session of the signed-in user. */
 export function uiApiRouter(deps: UiApiDeps): Router {
-  const { service } = deps;
+  const { service, live } = deps;
   const reviews = service.reviews;
   const router = express.Router({ mergeParams: true });
   router.use(express.json({ limit: '2mb' }));
@@ -149,7 +152,7 @@ export function uiApiRouter(deps: UiApiDeps): Router {
     if (!body || !sessionMatches(res, session, body.sessionId)) {
       return;
     }
-    res.json(await reviews.createThread({
+    const thread = await reviews.createThread({
       userId: user.id,
       sessionId: session.id,
       filePath: body.filePath,
@@ -159,8 +162,12 @@ export function uiApiRouter(deps: UiApiDeps): Router {
       body: body.body,
       author: author(user),
       anchorContent: body.anchorContent,
-      kind: body.kind ?? 'review',
-    }));
+      kind: body.ask ? 'aside' : body.kind ?? 'review',
+    });
+    if (body.ask) {
+      await live.ask(user.id, session.id, thread.id, thread.comments[0].id);
+    }
+    res.json(body.ask ? await reviews.getThread(user.id, thread.id) : thread);
   }));
 
   router.delete('/threads', handle(async ({ user, session }, req, res) => {
@@ -178,7 +185,12 @@ export function uiApiRouter(deps: UiApiDeps): Router {
     if (!thread || !body) {
       return;
     }
-    res.json(await reviews.addReply(scoped.user.id, thread.id, body.body, author(scoped.user), body.kind ?? 'review'));
+    const kind = body.ask ? 'aside' : body.kind ?? 'review';
+    const reply = await reviews.addReply(scoped.user.id, thread.id, body.body, author(scoped.user), kind);
+    if (body.ask) {
+      await live.ask(scoped.user.id, scoped.session.id, thread.id, reply.id);
+    }
+    res.json(body.ask ? { ...reply, ask: 'pending' } : reply);
   }));
 
   router.patch('/threads/:id/status', handle(async (scoped, req, res) => {
@@ -230,6 +242,10 @@ export function uiApiRouter(deps: UiApiDeps): Router {
       return;
     }
     res.json(await reviews.toursForSession(user.id, session.id));
+  }));
+
+  router.get('/live/status', handle(async ({ user, session }, _req, res) => {
+    res.json((await live.status(user.id, session.id)) satisfies LiveStatusResponse);
   }));
 
   router.get('/github/details', handle(async ({ session }, _req, res) => {

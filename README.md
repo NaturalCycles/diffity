@@ -32,6 +32,23 @@ The first tool call opens the browser to sign in and allow the connection. Then:
   pull request has moved past the session's head. GitHub is reached as the user: through the GitHub
   App they connect on **Settings**, or a token pasted there when no App is configured.
 
+### Live questions
+
+A reader can ask the agent that wrote the review about a finding: **Ask Claude** on a comment or
+reply sends it as an aside and queues it for that session. The agent waits without blocking its
+chat: the `live_token { session }` tool returns a plain `curl` + POSIX shell command, which the
+agent runs as a background command (Claude Code: Bash with `run_in_background`; it works the same
+in a claude.ai cloud session, where nothing of diffity is installed). The command long-polls
+`GET /live/await?session=<id>&wait=25` — held up to 25 s, under the load balancer's 30 s timeout —
+and exits only when a question arrives, printing it as JSON. The agent answers with `reply`, which
+marks the question answered on the page, and runs the command again. A handed-out question that
+gets no answer within 10 minutes is handed out again. The page's toolbar shows **Agent listening**
+while the session was polled in the last minute; without it, Ask Claude is disabled.
+
+`/live/await` bypasses IAP on the load balancer and takes only the live token as a bearer: no
+cookie, no MCP token. A live token is stored hashed, expires after 12 hours, and allows waiting on
+its one session and nothing else; once it is refused (401), the command exits with status 1.
+
 A repository can name its review standards in a `.diffity.json` at its root, which the
 `get_standards` tool reads:
 
@@ -105,8 +122,8 @@ pushes it to `europe-west1-docker.pkg.dev/nc-innovation-496314/diffity/diffity`,
 Cloud Run service `diffity` in `nc-innovation-496314`. The infrastructure (IAP load balancer at
 `diffity.prod.naturalcycles.net`, Cloud SQL Postgres over the VPC connector, runtime service
 account, secrets) is in NaturalCycles/NCInfraIaC. On the load balancer, `/mcp`, `/token`,
-`/register`, `/revoke` and the OAuth `/.well-known/*` metadata bypass IAP, since agents
-authenticate with diffity's own OAuth; everything else is behind IAP.
+`/register`, `/revoke`, `/live/await` and the OAuth `/.well-known/*` metadata bypass IAP, since
+agents authenticate with diffity's own OAuth or a live token; everything else is behind IAP.
 
 The deploy runs one instance (pending OAuth consents are held in memory), sets
 `DIFFITY_PUBLIC_URL`, `DIFFITY_TRUST_PROXY=1` and `DIFFITY_IAP_AUDIENCE`, and mounts the secrets `diffity-database-url`

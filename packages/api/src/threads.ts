@@ -29,12 +29,17 @@ export interface CommentAuthor {
   avatarUrl?: string;
 }
 
+/** Where a question handed to the agent has got to: an answer in the thread settles it. */
+export type AskState = 'pending' | 'answered';
+
 export interface Comment {
   id: string;
   author: CommentAuthor;
   body: string;
   kind: CommentKind;
   createdAt: string;
+  /** Present when the comment was handed to the agent as a question. */
+  ask?: AskState;
 }
 
 export interface CommentThread {

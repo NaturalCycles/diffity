@@ -30,8 +30,8 @@ interface HunkBlockSplitProps {
   onLineMouseDown?: (line: number, side: CommentSide, shiftKey?: boolean) => void;
   onLineMouseEnter?: (line: number, side: CommentSide) => void;
   onCommentClick?: (line: number, side: CommentSide) => void;
-  onAddThread?: (filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor) => void;
-  onReply?: (threadId: string, body: string, author: CommentAuthor) => void;
+  onAddThread?: (filePath: string, side: CommentSide, startLine: number, endLine: number, body: string, author: CommentAuthor, ask?: boolean) => void;
+  onReply?: (threadId: string, body: string, author: CommentAuthor, ask?: boolean) => void;
   onResolve?: (threadId: string) => void;
   onUnresolve?: (threadId: string) => void;
   onEditComment?: (commentId: string, body: string) => void;

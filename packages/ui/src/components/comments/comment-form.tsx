@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useContext } from 'react';
+import { AgentListeningContext } from '../../lib/agent-listening';
 
 interface CommentFormProps {
   onSubmit: (body: string) => void;
@@ -7,13 +8,16 @@ interface CommentFormProps {
   submitLabel?: string;
   autoFocus?: boolean;
   lineLabel?: string;
+  /** Hands the text to the agent as a question; offered only where it is given. */
+  onAsk?: (body: string) => void;
 }
 
 export function CommentForm(props: CommentFormProps) {
   const {
     onSubmit, onCancel, placeholder = 'Leave a comment', submitLabel = 'Comment',
-    autoFocus = true, lineLabel,
+    autoFocus = true, lineLabel, onAsk,
   } = props;
+  const listening = useContext(AgentListeningContext);
   const [body, setBody] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -23,14 +27,15 @@ export function CommentForm(props: CommentFormProps) {
     }
   }, [autoFocus]);
 
-  const handleSubmit = () => {
+  const send = (to: (body: string) => void) => {
     const trimmed = body.trim();
     if (!trimmed) {
       return;
     }
-    onSubmit(trimmed);
+    to(trimmed);
     setBody('');
   };
+  const handleSubmit = () => send(onSubmit);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
@@ -70,6 +75,17 @@ export function CommentForm(props: CommentFormProps) {
         >
           Cancel
         </button>
+        {onAsk && (
+          <span title={listening ? 'Ask the agent that wrote this review; it answers in this thread.' : 'No agent is listening on this review'}>
+            <button
+              onClick={() => send(onAsk)}
+              disabled={!listening || !body.trim()}
+              className="px-3 py-1.5 text-xs font-medium rounded-md border border-accent/40 text-accent hover:bg-accent/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+            >
+              Ask Claude
+            </button>
+          </span>
+        )}
         <button
           onClick={handleSubmit}
           disabled={!body.trim()}

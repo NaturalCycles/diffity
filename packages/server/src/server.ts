@@ -10,6 +10,7 @@ import { GitHubApi, StoredTokenAccess, type GitHubAccess } from './github.js';
 import { GitHubAppAccess } from './github-app.js';
 import { ReviewService } from './service.js';
 import { DevLoginProvider, IapLogin } from './login.js';
+import { Live } from './live.js';
 import { createApp } from './app.js';
 
 export interface ServerOverrides {
@@ -30,6 +31,7 @@ export interface RunningServer {
   oauth: OAuthProvider;
   users: Users;
   service: ReviewService;
+  live: Live;
   githubApp: GitHubAppAccess | null;
   close(): Promise<void>;
 }
@@ -56,6 +58,7 @@ export async function startServer(
     : null;
   const access = overrides.gitHubAccess ?? githubApp ?? new StoredTokenAccess(users, config.devGitHubToken);
   const service = new ReviewService(reviews, mirrors, api, access, config.publicUrl);
+  const live = new Live(db);
 
   const app = createApp({
     config,
@@ -63,6 +66,7 @@ export async function startServer(
     webSessions,
     oauth,
     service,
+    live,
     devLogin: config.devLogin ? new DevLoginProvider(config) : null,
     iap: config.iapAudience ? new IapLogin({ ...config, iapAudience: config.iapAudience }, overrides.iapKeys) : null,
     githubApp,
@@ -77,6 +81,7 @@ export async function startServer(
     const now = Date.now();
     void Promise.all([
       oauth.purgeExpired(),
+      live.purgeExpired(now),
       db.query('DELETE FROM web_sessions WHERE expires_at < $1', [now]),
       db.query('DELETE FROM github_oauth_states WHERE expires_at < $1', [now]),
     ]).catch(err => console.error('Purging expired rows failed:', err));
@@ -100,6 +105,7 @@ export async function startServer(
     oauth,
     users,
     service,
+    live,
     githubApp,
     close: () =>
       new Promise(resolve => {

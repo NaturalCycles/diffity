@@ -6,9 +6,11 @@ import { GENERAL_THREAD_FILE_PATH, THREAD_STATUSES, type CommentAuthor, type Com
 import { AmbiguousIdError, type ReviewSessionRecord } from './reviews.js';
 import { ServiceError, describeSession, type ReviewService } from './service.js';
 import { clampToFile, readAnchor, splitLines } from './anchor.js';
+import { MAX_WAIT_SECONDS, awaitCommand, type Live } from './live.js';
 
 export interface McpContext {
   service: ReviewService;
+  live: Live;
   userId: string;
   /** Who the comments are from, as the connecting client named itself when it registered. */
   agentName: string;
@@ -314,6 +316,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
     guarded(async args => {
       const found = await thread(args.id, args.session);
       const reply = await reviews.addReply(userId, found.id, args.body, agent, args.aside ? 'aside' : 'review');
+      await ctx.live.answer(userId, found.id);
       return json({ thread: found.id, comment: reply.id });
     }),
   );
@@ -455,6 +458,31 @@ export function createMcpServer(ctx: McpContext): McpServer {
       const found = await tour(args.tour);
       await reviews.deleteTour(userId, found.id);
       return text(`Removed walkthrough ${found.id.slice(0, 8)}`);
+    }),
+  );
+
+  server.registerTool(
+    'live_token',
+    {
+      description:
+        'Wait for the reader\'s questions on a session. Returns a shell command to run in the background: it exits when '
+        + 'the reader asks something, printing the question and its thread. Answer with `reply`, then run the command again. '
+        + 'The token only waits on this session and expires after 12 hours; the command exits non-zero once it is refused.',
+      inputSchema: { session: sessionArg },
+    },
+    guarded(async args => {
+      const record = await session(args.session);
+      const { token, expiresAt } = await ctx.live.issueToken(userId, record.id);
+      const pollUrl = new URL(`/live/await?session=${record.id}&wait=${MAX_WAIT_SECONDS}`, service.publicUrl).href;
+      return json({
+        session: record.id,
+        token,
+        expiresAt: new Date(expiresAt).toISOString(),
+        pollUrl,
+        command: awaitCommand(token, pollUrl),
+        run: 'Run `command` as a background command (Claude Code: Bash with run_in_background). When it exits 0 its output '
+          + 'is the question; answer it with `reply`, then run the same command again. Exit 1 means the token is no longer valid.',
+      });
     }),
   );
 

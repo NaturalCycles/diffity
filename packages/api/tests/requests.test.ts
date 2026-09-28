@@ -78,6 +78,12 @@ describe('a thread request', () => {
   it('allows line 0, where general comments live', () => {
     expect(parseCreateThreadRequest({ ...goodThread, startLine: 0, endLine: 0 }).ok).toBe(true);
   });
+
+  it('carries ask only as a boolean', () => {
+    expect(parseCreateThreadRequest({ ...goodThread, ask: true })).toMatchObject({ ok: true, value: { ask: true } });
+    expect(parseReplyRequest({ body: 'hi', author: { name: 'A', type: 'user' }, ask: false })).toMatchObject({ ok: true, value: { ask: false } });
+    expect(errorOf(parseCreateThreadRequest({ ...goodThread, ask: 'yes' }))).toBe('ask must be a boolean');
+  });
 });
 
 describe('the smaller bodies', () => {
