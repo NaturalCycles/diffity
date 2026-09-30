@@ -110,6 +110,7 @@ jobs:
             --vpc-egress private-ranges-only \
             --allow-unauthenticated \
             --ingress internal-and-cloud-load-balancing \
+            --no-default-url \
             --execution-environment gen2 \
             --memory 2Gi \
             --cpu 1 \

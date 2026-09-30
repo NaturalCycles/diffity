@@ -123,7 +123,9 @@ Cloud Run service `diffity` in `nc-innovation-496314`. The infrastructure (IAP l
 `diffity.prod.naturalcycles.net`, Cloud SQL Postgres over the VPC connector, runtime service
 account, secrets) is in NaturalCycles/NCInfraIaC. On the load balancer, `/mcp`, `/token`,
 `/register`, `/revoke`, `/live/await` and the OAuth `/.well-known/*` metadata bypass IAP, since
-agents authenticate with diffity's own OAuth or a live token; everything else is behind IAP.
+agents authenticate with diffity's own OAuth or a live token; everything else is behind IAP. The
+service accepts unauthenticated invocations for those open paths, so the deploy limits its ingress
+to the load balancer and disables the `run.app` URL.
 
 The deploy runs one instance (pending OAuth consents are held in memory), sets
 `DIFFITY_PUBLIC_URL`, `DIFFITY_TRUST_PROXY=1` and `DIFFITY_IAP_AUDIENCE`, and mounts the secrets `diffity-database-url`
