@@ -9,8 +9,9 @@ import type {
   Suppressed,
 } from '@diffity/api';
 import { isSha, isSafeRepoPath, isRepoName, keyedSerializer, type Mirrors, type NameStatus } from './git.js';
-import type { GitHubAccess, GitHubApi, ReviewCommentPayload } from './github.js';
-import type { PrMeta, ReviewSessionRecord, Reviews } from './reviews.js';
+import type { GitHubAccess, GitHubApi, ReviewCommentPayload, ReviewRequest } from './github.js';
+import { prKey, type PrMeta, type ReviewSessionRecord, type Reviews } from './reviews.js';
+import type { Users, UserSettings } from './users.js';
 import { followRename, reanchor, splitLines } from './anchor.js';
 import { DEFAULT_SEVERITIES, parseReviewConfig, REPO_CONFIG_FILE } from './repo-config.js';
 import {
@@ -51,8 +52,26 @@ export interface Standards {
   standards: { path: string; content: string } | null;
 }
 
+export interface ReviewRequestRow extends ReviewRequest {
+  /** The user's newest session on this pull request. */
+  session: { id: string; headSha: string; createdAt: string } | null;
+}
+
+export interface ReviewRequests {
+  requests: ReviewRequestRow[];
+  /** How many the user's filters left out. */
+  hidden: number;
+}
+
 const MAX_PATCH_BYTES = 10 * 1024 * 1024;
 const CACHE_ENTRIES = 256;
+const REVIEW_REQUESTS_TTL_MS = 60_000;
+
+export function filterReviewRequests(requests: ReviewRequest[], settings: UserSettings): ReviewRequest[] {
+  const skip = settings.skipTitles.map(pattern => pattern.trim().toLowerCase()).filter(Boolean);
+  return requests.filter(request =>
+    (settings.includeDrafts || !request.draft) && !skip.some(pattern => request.title.toLowerCase().includes(pattern)));
+}
 
 export function parseRepoSlug(slug: string): { owner: string; repo: string } {
   const match = /^([^/\s]+)\/([^/\s]+?)(?:\.git)?$/.exec(slug.trim());
@@ -125,6 +144,7 @@ export class ReviewService {
   private readonly filesCache = new Cache<NameStatus[]>();
   /** One GitHub mutation per user at a time, so a second submit sees the first one's comments. */
   private readonly githubLock = keyedSerializer();
+  private readonly reviewRequestCache = new Map<string, { token: string; at: number; requests: Promise<ReviewRequest[]> }>();
 
   constructor(
     readonly reviews: Reviews,
@@ -132,6 +152,7 @@ export class ReviewService {
     readonly github: GitHubApi,
     private readonly access: GitHubAccess,
     readonly publicUrl: URL,
+    private readonly users: Users,
   ) {}
 
   settingsUrl(): string {
@@ -140,6 +161,37 @@ export class ReviewService {
 
   sessionUrl(sessionId: string): string {
     return new URL(`/s/${sessionId}/`, this.publicUrl).href;
+  }
+
+  /** Null when the user has no GitHub access to ask with. */
+  async reviewRequests(userId: string, now = Date.now()): Promise<ReviewRequests | null> {
+    const token = await this.access.tokenFor(userId);
+    if (!token) {
+      return null;
+    }
+    for (const [key, entry] of this.reviewRequestCache) {
+      if (now - entry.at > REVIEW_REQUESTS_TTL_MS) {
+        this.reviewRequestCache.delete(key);
+      }
+    }
+    let cached = this.reviewRequestCache.get(userId);
+    if (!cached || cached.token !== token) {
+      const entry = { token, at: now, requests: this.github.reviewRequests(token) };
+      this.reviewRequestCache.set(userId, entry);
+      entry.requests.catch(() => {
+        if (this.reviewRequestCache.get(userId) === entry) {
+          this.reviewRequestCache.delete(userId);
+        }
+      });
+      cached = entry;
+    }
+    const all = await cached.requests;
+    const shown = filterReviewRequests(all, await this.users.settings(userId));
+    const sessions = await this.reviews.latestPrSessions(userId, shown);
+    return {
+      requests: shown.map(request => ({ ...request, session: sessions.get(prKey(request.owner, request.repo, request.number)) ?? null })),
+      hidden: all.length - shown.length,
+    };
   }
 
   async requireSession(userId: string, idOrPrefix: string): Promise<ReviewSessionRecord> {

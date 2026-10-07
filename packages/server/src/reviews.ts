@@ -193,6 +193,10 @@ function rowToStep(row: TourStepRow): TourStep {
   };
 }
 
+export function prKey(owner: string, repo: string, number: number): string {
+  return `${owner.toLowerCase()}/${repo.toLowerCase()}#${number}`;
+}
+
 /** `%` and `_` in a prefix would otherwise widen the match. */
 function likePrefix(prefix: string): string {
   return prefix.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_') + '%';
@@ -291,6 +295,29 @@ export class Reviews {
       byRepo ? [userId, filter.limit ?? 100, filter.owner, filter.repo] : [userId, filter.limit ?? 100],
     );
     return rows.map(rowToSession);
+  }
+
+  /** The newest session of each of these pull requests that has one, keyed by `prKey`. */
+  async latestPrSessions(
+    userId: string,
+    pulls: { owner: string; repo: string; number: number }[],
+  ): Promise<Map<string, { id: string; headSha: string; createdAt: string }>> {
+    const found = new Map<string, { id: string; headSha: string; createdAt: string }>();
+    if (pulls.length === 0) {
+      return found;
+    }
+    const rows = await this.db.query<{ id: string; head_sha: string; created_at: string; owner: string; name: string; pr_number: number }>(
+      `SELECT DISTINCT ON (lower(r.owner), lower(r.name), s.pr_number) s.id, s.head_sha, s.created_at, r.owner, r.name, s.pr_number
+       FROM sessions s JOIN repos r ON r.id = s.repo_id
+       WHERE s.user_id = $1 AND s.pr_number IS NOT NULL
+         AND lower(r.owner) || '/' || lower(r.name) || '#' || s.pr_number = ANY($2::text[])
+       ORDER BY lower(r.owner), lower(r.name), s.pr_number, s.created_at DESC, s.seq DESC`,
+      [userId, pulls.map(pull => prKey(pull.owner, pull.repo, pull.number))],
+    );
+    for (const row of rows) {
+      found.set(prKey(row.owner, row.name, row.pr_number), { id: row.id, headSha: row.head_sha, createdAt: row.created_at });
+    }
+    return found;
   }
 
   /** Earlier sessions of the same pull request, newest first — where carried work comes from. */

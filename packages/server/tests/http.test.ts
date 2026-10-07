@@ -1,8 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CommentThread, RepoInfoResponse, Tour } from '@diffity/api';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { ReviewSessionRecord } from '../src/reviews.js';
 import {
   fakeUiDir,
+  git,
   login,
   makeFixture,
   removeDir,
@@ -25,6 +28,7 @@ let bobId: string;
 let session: ReviewSessionRecord;
 let prSession: ReviewSessionRecord;
 let bobSession: ReviewSessionRecord;
+let pr2Head: string;
 
 async function api(
   path: string,
@@ -58,13 +62,23 @@ async function api(
 
 beforeAll(async () => {
   fixture = makeFixture();
+  git(fixture.work, ['checkout', '-b', 'second', fixture.head1]);
+  writeFileSync(join(fixture.work, 'second.ts'), 'export const second = 2;\n');
+  git(fixture.work, ['add', '.']);
+  git(fixture.work, ['commit', '-m', 'second pull request']);
+  pr2Head = git(fixture.work, ['rev-parse', 'HEAD']);
+  git(fixture.work, ['checkout', 'main']);
+  git(fixture.work, ['push', join(fixture.remotes, 'acme', 'widgets.git'), `${pr2Head}:refs/pull/2/head`]);
   github = await startFakeGitHub([
     {
       owner: 'acme',
       name: 'widgets',
       private: false,
       tokens: [],
-      pulls: { 1: { title: 'Change line ten', baseSha: fixture.mainTip, headSha: fixture.head1 } },
+      pulls: {
+        1: { title: 'Change line ten', baseSha: fixture.mainTip, headSha: fixture.head1 },
+        2: { title: 'Rename a file', baseSha: fixture.mainTip, headSha: pr2Head },
+      },
     },
   ]);
   dataDir = tempDir('http');
@@ -151,6 +165,96 @@ describe('web pages', () => {
     const out = await api('/logout', { method: 'POST', cookie });
     expect(out.status).toBe(303);
     expect((await api('/', { cookie })).status).toBe(302);
+  });
+});
+
+describe('pull requests awaiting review', () => {
+  const form = (path: string, body: Record<string, string>, cookie: string, headers: Record<string, string> = {}) => api(path, {
+    method: 'POST',
+    cookie,
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...headers },
+    body: new URLSearchParams(body).toString(),
+  });
+
+  it('asks the user to connect GitHub when there is nothing to ask with', async () => {
+    const page = await api('/', { cookie: aliceCookie });
+    expect(page.body).toContain('Awaiting your review');
+    expect(page.body).toContain('Connect GitHub on Settings</a> to see pull requests waiting for your review');
+    expect(page.body).toContain('Your review sessions');
+  });
+
+  it('lists them, linking an existing session and offering to create one, minus what the filters hide', async () => {
+    github.reviewRequests['alice-token'] = [
+      { owner: 'acme', repo: 'widgets', number: 1, title: 'Change line ten', author: 'octocat', updatedAt: '2026-10-03T09:15:00Z' },
+      { owner: 'acme', repo: 'widgets', number: 2, title: 'Rename a file', author: 'carol', updatedAt: '2026-10-02T09:00:00Z' },
+      { owner: 'acme', repo: 'widgets', number: 3, title: 'Release 1.2', author: 'bot', updatedAt: '2026-10-01T09:00:00Z' },
+    ];
+    await server.users.setGitHubToken(aliceId, 'alice-token');
+    await server.users.setSettings(aliceId, { skipTitles: ['release'], includeDrafts: false });
+    try {
+      const page = (await api('/', { cookie: aliceCookie })).body as string;
+      expect(page).toContain('<a href="https://github.com/acme/widgets/pull/1">acme/widgets#1</a>');
+      expect(page).toContain(`<a href="/s/${prSession.id}/">open · ${fixture.head1.slice(0, 7)}</a>`);
+      expect(page).toContain('2026-10-03 09:15');
+      expect(page).toMatch(/action="\/sessions">\s*<input type="hidden" name="repo" value="acme\/widgets">\s*<input type="hidden" name="pr" value="2">/);
+      expect(page).not.toContain('Release 1.2');
+      expect(page).toContain('(1 hidden by your');
+
+      await server.users.setSettings(aliceId, { skipTitles: ['release', 'rename', 'change'], includeDrafts: false });
+      const empty = (await api('/', { cookie: aliceCookie })).body as string;
+      expect(empty).toContain('Nothing is waiting for your review. <span class="muted">(3 hidden by your');
+    } finally {
+      await server.users.setGitHubToken(aliceId, null);
+      await server.users.setSettings(aliceId, { skipTitles: [], includeDrafts: false });
+    }
+  });
+
+  it('saves the filters from the settings form, and only from this site', async () => {
+    expect(await form('/settings/review-requests', { skipTitles: 'Bump ', includeDrafts: '1' }, aliceCookie, { 'Sec-Fetch-Site': 'cross-site' }))
+      .toMatchObject({ status: 403 });
+    expect(await server.users.settings(aliceId)).toEqual({ skipTitles: [], includeDrafts: false });
+
+    const saved = await form('/settings/review-requests', { skipTitles: 'Bump \r\n\r\n release\nBump', includeDrafts: '1' }, aliceCookie);
+    expect(saved.status).toBe(303);
+    expect(saved.headers.get('location')).toBe('/settings');
+    expect(await server.users.settings(aliceId)).toEqual({ skipTitles: ['Bump', 'release'], includeDrafts: true });
+    const settings = (await api('/settings', { cookie: aliceCookie })).body as string;
+    expect(settings).toContain('>Bump\nrelease</textarea>');
+    expect(settings).toContain('value="1" checked>');
+
+    await form('/settings/review-requests', { skipTitles: '' }, aliceCookie);
+    expect(await server.users.settings(aliceId)).toEqual({ skipTitles: [], includeDrafts: false });
+    expect(await server.users.settings(bobId)).toEqual({ skipTitles: [], includeDrafts: false });
+  });
+
+  it('creates a pull request session from the button, for the signed-in user only', async () => {
+    expect(await form('/sessions', { repo: 'acme/widgets', pr: '2' }, aliceCookie, { 'Sec-Fetch-Site': 'cross-site' }))
+      .toMatchObject({ status: 403 });
+    const anonymous = await api('/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'repo=acme%2Fwidgets&pr=2',
+    });
+    expect(anonymous.status).toBe(302);
+    expect((await server.service.reviews.listSessions(aliceId)).some(s => s.prNumber === 2)).toBe(false);
+
+    const created = await form('/sessions', { repo: 'acme/widgets', pr: '2' }, aliceCookie);
+    expect(created.status).toBe(303);
+    const id = /^\/s\/([^/]+)\/$/.exec(created.headers.get('location') ?? '')?.[1];
+    expect(await server.service.reviews.getSession(aliceId, id!)).toMatchObject({ kind: 'pr', prNumber: 2, headSha: pr2Head });
+    expect(await server.service.reviews.getSession(bobId, id!)).toBeNull();
+    expect((await api(`/s/${id}/`, { cookie: bobCookie })).status).toBe(404);
+
+    const bobs = await form('/sessions', { repo: 'acme/widgets', pr: '2' }, bobCookie);
+    expect(bobs.headers.get('location')).not.toBe(created.headers.get('location'));
+  });
+
+  it('says why no session was created, with a way back', async () => {
+    const missing = await form('/sessions', { repo: 'acme/nothing', pr: '1' }, aliceCookie);
+    expect(missing.status).toBe(404);
+    expect(missing.body).toContain('acme/nothing is not readable without GitHub access');
+    expect(missing.body).toContain('<a href="/">Back to your sessions</a>');
+    expect((await form('/sessions', { repo: 'acme/widgets', pr: 'x' }, aliceCookie)).status).toBe(400);
   });
 });
 

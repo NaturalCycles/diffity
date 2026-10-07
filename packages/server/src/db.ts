@@ -197,6 +197,12 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE sessions ADD COLUMN live_polled_at BIGINT;
     `,
   },
+  {
+    version: 3,
+    sql: `
+      ALTER TABLE users ADD COLUMN settings JSONB NOT NULL DEFAULT '{}';
+    `,
+  },
 ];
 
 /** Any constant; two instances starting together take turns migrating. */

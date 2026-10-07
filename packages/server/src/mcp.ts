@@ -169,6 +169,36 @@ export function createMcpServer(ctx: McpContext): McpServer {
   );
 
   server.registerTool(
+    'list_review_requests',
+    {
+      description:
+        'List the open pull requests waiting for your review on GitHub, after your filters on the Settings page, '
+        + 'each with your newest session on it, if any. Review one with create_session { repo, pr }.',
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+    },
+    guarded(async () => {
+      const found = await service.reviewRequests(userId);
+      if (!found) {
+        throw new ServiceError(`Connect GitHub first, at ${service.settingsUrl()}`);
+      }
+      return json({
+        requests: found.requests.map(request => ({
+          repo: `${request.owner}/${request.repo}`,
+          pr: request.number,
+          title: request.title,
+          author: request.author,
+          draft: request.draft,
+          updatedAt: request.updatedAt,
+          url: request.url,
+          session: request.session ? { ...request.session, url: service.sessionUrl(request.session.id) } : null,
+        })),
+        hidden: found.hidden,
+      });
+    }),
+  );
+
+  server.registerTool(
     'get_diff',
     {
       description: "The session's unified diff; line numbers are in the @@ hunk headers.",

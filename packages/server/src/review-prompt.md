@@ -16,6 +16,7 @@ The connector is usually added as `diffity`, so in Claude Code the tools are nam
 ```
 create_session  { repo: "owner/name", pr? , base?, head?, patch? }  → { session, url, base, head, files }
 list_sessions   { repo? }
+list_review_requests {}                       open pull requests waiting for the user's review
 get_diff        { session, file? }            unified diff; line numbers are in the @@ headers
 get_file        { session, path, side? }      side "new" (head, default) or "old" (base)
 get_standards   { session }                   the project's standards and severity labels

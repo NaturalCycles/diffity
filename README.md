@@ -32,6 +32,14 @@ The first tool call opens the browser to sign in and allow the connection. Then:
   pull request has moved past the session's head. GitHub is reached as the user: through the GitHub
   App they connect on **Settings**, or a token pasted there when no App is configured.
 
+The **Sessions** page also lists the open pull requests that ask for the user's review, asked of
+GitHub's search with the user's own access (cached for a minute). Each row links the user's newest
+session on that pull request, or has a button that creates one; the first session on a repository
+clones it, which can take half a minute. On **Settings** the user filters the list: titles
+containing any of a list of patterns (one per line, ignoring case) are left out, and drafts are
+unless they tick **List drafts too**. The `list_review_requests` tool answers the same list, so an
+agent can be asked to review what is waiting.
+
 ### Live questions
 
 A reader can ask the agent that wrote the review about a finding: **Ask Claude** on a comment or

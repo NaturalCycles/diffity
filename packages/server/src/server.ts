@@ -57,7 +57,7 @@ export async function startServer(
       })
     : null;
   const access = overrides.gitHubAccess ?? githubApp ?? new StoredTokenAccess(users, config.devGitHubToken);
-  const service = new ReviewService(reviews, mirrors, api, access, config.publicUrl);
+  const service = new ReviewService(reviews, mirrors, api, access, config.publicUrl, users);
   const live = new Live(db);
 
   const app = createApp({

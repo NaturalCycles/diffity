@@ -123,7 +123,7 @@ describe('a review through the tools', () => {
     const { tools } = await alice.listTools();
     expect(tools.map(tool => tool.name).sort()).toEqual([
       'amend', 'comment', 'create_session', 'dismiss', 'general_comment', 'get_diff', 'get_file', 'get_standards',
-      'list_comments', 'list_sessions', 'live_token', 'reply', 'resolve', 'review_done', 'review_start', 'tour_delete', 'tour_done',
+      'list_comments', 'list_review_requests', 'list_sessions', 'live_token', 'reply', 'resolve', 'review_done', 'review_start', 'tour_delete', 'tour_done',
       'tour_start', 'tour_step',
     ]);
   });
@@ -195,6 +195,28 @@ describe('a review through the tools', () => {
   it('reviews a pull request', async () => {
     const created = await ok<{ pr: number; base: string; head: string; title: string }>(alice, 'create_session', { repo: 'acme/widgets', pr: 1 });
     expect(created).toMatchObject({ pr: 1, base: fixture.base, head: fixture.head1, title: 'Change line ten' });
+  });
+
+  it('lists the pull requests waiting for the user’s review, with the session on each', async () => {
+    github.reviewRequests['alice-token'] = [
+      { owner: 'acme', repo: 'widgets', number: 1, title: 'Change line ten', author: 'octocat', updatedAt: '2026-10-03T09:00:00Z' },
+      { owner: 'acme', repo: 'widgets', number: 5, title: 'WIP', author: 'octocat', draft: true, updatedAt: '2026-10-02T09:00:00Z' },
+    ];
+    const created = await ok<{ session: string }>(alice, 'create_session', { repo: 'acme/widgets', pr: 1 });
+    expect(await ok(alice, 'list_review_requests', {})).toEqual({
+      requests: [{
+        repo: 'acme/widgets',
+        pr: 1,
+        title: 'Change line ten',
+        author: 'octocat',
+        draft: false,
+        updatedAt: '2026-10-03T09:00:00Z',
+        url: 'https://github.com/acme/widgets/pull/1',
+        session: expect.objectContaining({ id: created.session, headSha: fixture.head1, url: `${server.base}/s/${created.session}/` }),
+      }],
+      hidden: 1,
+    });
+    expect(await ok(bob, 'list_review_requests', {})).toEqual({ requests: [], hidden: 0 });
   });
 
   it('turns every mistake into a readable error result', async () => {

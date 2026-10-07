@@ -9,6 +9,13 @@ export interface User {
   githubLogin: string | null;
 }
 
+/** What the Sessions page lists of the pull requests waiting for the user's review. */
+export interface UserSettings {
+  /** A pull request whose title contains any of these, ignoring case, is not listed. */
+  skipTitles: string[];
+  includeDrafts: boolean;
+}
+
 interface UserRow {
   id: string;
   email: string;
@@ -47,6 +54,19 @@ export class Users {
       token ? login : null,
       userId,
     ]);
+  }
+
+  async settings(userId: string): Promise<UserSettings> {
+    const row = await this.db.one<{ settings: Partial<UserSettings> | null }>('SELECT settings FROM users WHERE id = $1', [userId]);
+    const stored = row?.settings ?? {};
+    return {
+      skipTitles: Array.isArray(stored.skipTitles) ? stored.skipTitles.filter((entry): entry is string => typeof entry === 'string') : [],
+      includeDrafts: stored.includeDrafts === true,
+    };
+  }
+
+  async setSettings(userId: string, settings: UserSettings): Promise<void> {
+    await this.db.query('UPDATE users SET settings = $1::jsonb WHERE id = $2', [JSON.stringify(settings), userId]);
   }
 
   /** Null as well when the token was sealed with a key this process no longer has. */

@@ -10,7 +10,7 @@ import { GENERAL_THREAD_FILE_PATH } from '@diffity/api';
 import type { Config } from './config.js';
 import { WEB_SESSION_MAX_AGE_SECONDS, type Users, type User, type WebSessions } from './users.js';
 import { hashPresentedClientSecret, type OAuthProvider } from './oauth.js';
-import { describeSession, type ReviewService } from './service.js';
+import { ServiceError, describeSession, type ReviewRequests, type ReviewService } from './service.js';
 import type { DevLoginProvider, IapLogin } from './login.js';
 import { GitHubConnectError, type GitHubAppAccess } from './github-app.js';
 import { createMcpServer } from './mcp.js';
@@ -392,10 +392,20 @@ export function createApp(deps: AppDeps): express.Express {
       notSignedIn(res, req.originalUrl);
       return;
     }
+    const settings = await users.settings(user.id);
     sendPage(res, 200, 'Settings', `
       <h1>Settings</h1>
       <h2>GitHub access</h2>
       ${await gitHubSection(user)}
+      <h2>Pull requests awaiting your review</h2>
+      <p>The Sessions page lists the open pull requests that ask for your review. Drafts and titles containing any of
+        these lines, ignoring case, are left out.</p>
+      <form method="post" action="/settings/review-requests">
+        <p><label>Skip titles containing, one per line<br>
+          <textarea name="skipTitles" rows="4" cols="50">${escapeHtml(settings.skipTitles.join('\n'))}</textarea></label></p>
+        <p><label><input type="checkbox" name="includeDrafts" value="1"${settings.includeDrafts ? ' checked' : ''}> List drafts too</label></p>
+        <button type="submit">Save</button>
+      </form>
       <h2>Connect an agent</h2>
       <p>Add this server to Claude Code as an MCP connector; it signs you in through this page the first time.
         Its <code>review</code> prompt holds the review method.</p>
@@ -414,6 +424,20 @@ export function createApp(deps: AppDeps): express.Express {
     }
     const token = req.body?.clear === '1' ? null : (typeof req.body?.token === 'string' ? req.body.token.trim() : '') || null;
     await users.setGitHubToken(user.id, token, token ? await service.github.viewerLogin(token) : null);
+    res.redirect(303, '/settings');
+  });
+
+  app.post('/settings/review-requests', sameOrigin, forms, async (req, res) => {
+    const user = await userFor(req);
+    if (!user) {
+      notSignedIn(res, '/settings');
+      return;
+    }
+    const raw: string = typeof req.body?.skipTitles === 'string' ? req.body.skipTitles : '';
+    await users.setSettings(user.id, {
+      skipTitles: [...new Set(raw.split(/\r?\n/).map(line => line.trim()).filter(Boolean))],
+      includeDrafts: req.body?.includeDrafts === '1',
+    });
     res.redirect(303, '/settings');
   });
 
@@ -462,23 +486,80 @@ export function createApp(deps: AppDeps): express.Express {
     res.redirect(303, '/settings');
   });
 
+  const reviewRequestsSection = async (user: User): Promise<string> => {
+    let found: ReviewRequests | null;
+    try {
+      found = await service.reviewRequests(user.id);
+    } catch (err) {
+      return `<h2>Awaiting your review</h2>
+        <p class="error">GitHub could not be asked: ${escapeHtml(err instanceof Error ? err.message : String(err))}</p>`;
+    }
+    if (!found) {
+      return `<h2>Awaiting your review</h2>
+        <p class="muted"><a href="/settings">Connect GitHub on Settings</a> to see pull requests waiting for your review.</p>`;
+    }
+    const hidden = found.hidden > 0 ? ` <span class="muted">(${found.hidden} hidden by your <a href="/settings">filters</a>)</span>` : '';
+    if (found.requests.length === 0) {
+      return `<h2>Awaiting your review</h2><p>Nothing is waiting for your review.${hidden}</p>`;
+    }
+    const rows = found.requests.map(request => {
+      const slug = `${request.owner}/${request.repo}`;
+      const action = request.session
+        ? `<a href="/s/${escapeHtml(request.session.id)}/">open · ${escapeHtml(request.session.headSha.slice(0, 7))}</a>`
+        : `<form class="inline" method="post" action="/sessions">
+             <input type="hidden" name="repo" value="${escapeHtml(slug)}">
+             <input type="hidden" name="pr" value="${request.number}">
+             <button type="submit">Create session</button>
+           </form>`;
+      return `
+      <tr>
+        <td><a href="${escapeHtml(request.url)}">${escapeHtml(`${slug}#${request.number}`)}</a></td>
+        <td>${escapeHtml(request.title)}</td>
+        <td>${escapeHtml(request.author)}</td>
+        <td class="muted">${escapeHtml(request.updatedAt.slice(0, 16).replace('T', ' '))}</td>
+        <td>${action}</td>
+      </tr>`;
+    }).join('');
+    return `<h2>Awaiting your review</h2>
+      <table><tr><th>Pull request</th><th>Title</th><th>Author</th><th>Updated</th><th></th></tr>${rows}</table>
+      ${hidden ? `<p>${hidden}</p>` : ''}`;
+  };
+
   app.get('/', async (req, res) => {
     const user = await userFor(req);
     if (!user) {
       notSignedIn(res, req.originalUrl);
       return;
     }
-    const sessions = await reviews.listSessions(user.id);
+    const [requests, sessions] = await Promise.all([reviewRequestsSection(user), reviews.listSessions(user.id)]);
     const rows = sessions.map(session => `
       <tr>
         <td><a href="/s/${session.id}/">${escapeHtml(`${session.owner}/${session.repo}`)}</a></td>
         <td>${escapeHtml(describeSession(session))}</td>
         <td class="muted">${escapeHtml(session.createdAt.slice(0, 16).replace('T', ' '))}</td>
       </tr>`).join('');
-    sendPage(res, 200, 'Sessions', sessions.length > 0
-      ? `<h1>Your review sessions</h1><table><tr><th>Repository</th><th>Change</th><th>Created</th></tr>${rows}</table>`
-      : `<h1>No review sessions yet</h1><p>Ask your agent to <code>create_session</code> through the diffity MCP connector.
-         See <a href="/settings">settings</a> for how to add it.</p>`, user);
+    sendPage(res, 200, 'Sessions', requests + (sessions.length > 0
+      ? `<h2>Your review sessions</h2><table><tr><th>Repository</th><th>Change</th><th>Created</th></tr>${rows}</table>`
+      : `<h2>No review sessions yet</h2><p>Ask your agent to <code>create_session</code> through the diffity MCP connector.
+         See <a href="/settings">settings</a> for how to add it.</p>`), user);
+  });
+
+  app.post('/sessions', sameOrigin, forms, async (req, res) => {
+    const user = await userFor(req);
+    if (!user) {
+      notSignedIn(res, '/');
+      return;
+    }
+    const repo = typeof req.body?.repo === 'string' ? req.body.repo : '';
+    try {
+      const { session } = await service.createSession(user.id, { repo, pr: Number(req.body?.pr) });
+      res.redirect(303, `/s/${session.id}/`);
+    } catch (err) {
+      sendPage(res, err instanceof ServiceError ? err.status : 500, 'No session', `
+        <h1>No session was created</h1>
+        <p class="error">${escapeHtml(err instanceof Error ? err.message : String(err))}</p>
+        <p><a href="/">Back to your sessions</a></p>`, user);
+    }
   });
 
   app.use('/s/:sid/api', requireSameOrigin(publicUrl), (_req, res, next) => {

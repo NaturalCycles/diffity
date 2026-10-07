@@ -139,6 +139,16 @@ export interface FakeComment {
   review_id: number | null;
 }
 
+export interface FakeReviewRequest {
+  owner: string;
+  repo: string;
+  number: number;
+  title: string;
+  author: string;
+  draft?: boolean;
+  updatedAt: string;
+}
+
 export interface FakeGitHub {
   url: string;
   requests: string[];
@@ -154,6 +164,12 @@ export interface FakeGitHub {
   tokenEndpoint: (params: URLSearchParams) => unknown;
   /** Makes `POST .../reviews` answer this status instead. */
   failReviewWith: number | null;
+  /** What `GET /search/issues` finds waiting for each token's review. */
+  reviewRequests: Record<string, FakeReviewRequest[]>;
+  /** The `q` of every search. */
+  searches: string[];
+  /** Makes `GET /search/issues` answer this status instead. */
+  failSearchWith: number | null;
   close(): Promise<void>;
 }
 
@@ -172,6 +188,9 @@ export async function startFakeGitHub(repos: FakeRepo[]): Promise<FakeGitHub> {
     logins: {},
     tokenEndpoint: () => ({ error: 'bad_verification_code' }),
     failReviewWith: null,
+    reviewRequests: {},
+    searches: [],
+    failSearchWith: null,
     close: async () => {},
   };
   const server: Server = createServer((req, res) => {
@@ -199,6 +218,25 @@ export async function startFakeGitHub(repos: FakeRepo[]): Promise<FakeGitHub> {
       if (url.pathname === '/user') {
         const login = token ? fake.logins[token] : undefined;
         send(login ? 200 : 401, login ? { login } : { message: 'Bad credentials' });
+        return;
+      }
+      if (url.pathname === '/search/issues') {
+        fake.searches.push(url.searchParams.get('q') ?? '');
+        if (fake.failSearchWith) {
+          send(fake.failSearchWith, { message: 'Validation Failed' });
+          return;
+        }
+        const items = (token ? fake.reviewRequests[token] ?? [] : []).map(pr => ({
+          number: pr.number,
+          title: pr.title,
+          html_url: `https://github.com/${pr.owner}/${pr.repo}/pull/${pr.number}`,
+          repository_url: `${fake.url}/repos/${pr.owner}/${pr.repo}`,
+          updated_at: pr.updatedAt,
+          draft: pr.draft ?? false,
+          user: { login: pr.author },
+          pull_request: { url: `${fake.url}/repos/${pr.owner}/${pr.repo}/pulls/${pr.number}` },
+        }));
+        send(200, { total_count: items.length, incomplete_results: false, items });
         return;
       }
       if (url.pathname === '/graphql' && req.method === 'POST') {

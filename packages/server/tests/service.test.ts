@@ -1,9 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Db } from '../src/db.js';
 import { Mirrors } from '../src/git.js';
-import { GitHubApi, StoredTokenAccess } from '../src/github.js';
+import { GitHubApi, StoredTokenAccess, type ReviewRequest } from '../src/github.js';
 import { Reviews } from '../src/reviews.js';
-import { ReviewService, ServiceError, describeSession, gitHubDetailsFor, parseRepoSlug } from '../src/service.js';
+import {
+  ReviewService,
+  ServiceError,
+  describeSession,
+  filterReviewRequests,
+  gitHubDetailsFor,
+  parseRepoSlug,
+} from '../src/service.js';
 import { Users } from '../src/users.js';
 import { git, makeFixture, memoryDb, removeDir, startFakeGitHub, tempDir, type FakeGitHub, type Fixture } from './helpers.js';
 import { randomBytes } from 'node:crypto';
@@ -45,6 +52,7 @@ beforeAll(async () => {
     new GitHubApi(github.url),
     new StoredTokenAccess(users, null),
     new URL('http://localhost:5390'),
+    users,
   );
 });
 
@@ -206,5 +214,83 @@ describe('reading a session', () => {
     const { session } = await service.createSession(alice, { repo: 'acme/widgets', base: fixture.base, head: fixture.head1 });
     await expect(service.assertInDiff(session, 'src.ts', 'new')).resolves.toBeUndefined();
     await expect(service.assertInDiff(session, 'README.md', 'new')).rejects.toThrow(/not on the new side[\s\S]*src\.ts/);
+  });
+});
+
+describe('review requests', () => {
+  const request = (title: string, draft = false): ReviewRequest => ({
+    owner: 'acme', repo: 'widgets', number: 1, title, author: 'octocat', draft, updatedAt: '2026-10-01T10:00:00Z', url: 'u',
+  });
+
+  it('leaves out drafts unless asked, and titles containing a pattern, ignoring case', () => {
+    const all = [request('Bump lodash'), request('Fix the login'), request('WIP: sketch', true), request('Chore: deps')];
+    expect(filterReviewRequests(all, { skipTitles: [], includeDrafts: false }).map(r => r.title))
+      .toEqual(['Bump lodash', 'Fix the login', 'Chore: deps']);
+    expect(filterReviewRequests(all, { skipTitles: ['bump', ' CHORE ', '  '], includeDrafts: true }).map(r => r.title))
+      .toEqual(['Fix the login', 'WIP: sketch']);
+  });
+
+  it('keeps each user’s filters, with defaults until they are set', async () => {
+    const carol = (await users.findOrCreate('carol@example.com')).id;
+    expect(await users.settings(carol)).toEqual({ skipTitles: [], includeDrafts: false });
+    await users.setSettings(carol, { skipTitles: ['Bump', 'release'], includeDrafts: true });
+    expect(await users.settings(carol)).toEqual({ skipTitles: ['Bump', 'release'], includeDrafts: true });
+    expect(await users.settings(alice)).toEqual({ skipTitles: [], includeDrafts: false });
+  });
+
+  it('asks GitHub’s search for open pull requests requesting the token’s review, and maps what it finds', async () => {
+    github.reviewRequests['search-token'] = [
+      { owner: 'acme', repo: 'widgets', number: 7, title: 'Seven', author: 'dave', draft: true, updatedAt: '2026-10-02T08:30:00Z' },
+    ];
+    const api = new GitHubApi(github.url);
+    expect(await api.reviewRequests('search-token')).toEqual([{
+      owner: 'acme', repo: 'widgets', number: 7, title: 'Seven', author: 'dave', draft: true,
+      updatedAt: '2026-10-02T08:30:00Z', url: 'https://github.com/acme/widgets/pull/7',
+    }]);
+    expect(github.searches.at(-1)).toBe('is:pr is:open archived:false review-requested:@me');
+
+    github.failSearchWith = 422;
+    try {
+      expect(await api.reviewRequests('search-token')).toEqual([]);
+      github.failSearchWith = 500;
+      await expect(api.reviewRequests('search-token')).rejects.toThrow('GitHub answered 500');
+    } finally {
+      github.failSearchWith = null;
+    }
+  });
+
+  it('lists them for the user with their newest session on each, filtered, and asks GitHub once a minute', async () => {
+    github.reviewRequests['bob-token'] = [
+      { owner: 'acme', repo: 'widgets', number: 1, title: 'Change line ten', author: 'octocat', updatedAt: '2026-10-03T09:00:00Z' },
+      { owner: 'acme', repo: 'widgets', number: 2, title: 'Bump lodash', author: 'dependabot', updatedAt: '2026-10-02T09:00:00Z' },
+      { owner: 'acme', repo: 'widgets', number: 3, title: 'Sketch', author: 'octocat', draft: true, updatedAt: '2026-10-01T09:00:00Z' },
+    ];
+    await service.createSession(bob, { repo: 'acme/widgets', pr: 1 });
+    const newest = (await reviews.listSessions(bob)).find(s => s.prNumber === 1)!;
+    const now = Date.now();
+    const searches = github.searches.length;
+
+    const found = await service.reviewRequests(bob, now);
+    expect(found?.hidden).toBe(1);
+    expect(found?.requests.map(r => [r.number, r.session?.id ?? null])).toEqual([[1, newest.id], [2, null]]);
+    expect(found?.requests[0].session).toEqual({ id: newest.id, headSha: newest.headSha, createdAt: newest.createdAt });
+
+    await users.setSettings(bob, { skipTitles: ['bump'], includeDrafts: true });
+    expect((await service.reviewRequests(bob, now + 30_000))?.requests.map(r => r.number)).toEqual([1, 3]);
+    expect(github.searches.length).toBe(searches + 1);
+    await service.reviewRequests(bob, now + 61_000);
+    expect(github.searches.length).toBe(searches + 2);
+    await users.setSettings(bob, { skipTitles: [], includeDrafts: false });
+  });
+
+  it('never links another user’s session, and answers null without GitHub access', async () => {
+    github.reviewRequests['alice-token'] = [
+      { owner: 'acme', repo: 'widgets', number: 1, title: 'Change line ten', author: 'octocat', updatedAt: '2026-10-03T09:00:00Z' },
+    ];
+    const dora = (await users.findOrCreate('dora@example.com')).id;
+    expect(await service.reviewRequests(dora)).toBeNull();
+    const alices = (await reviews.listSessions(alice)).filter(s => s.prNumber === 1).map(s => s.id);
+    const found = await service.reviewRequests(alice);
+    expect(alices).toContain(found?.requests[0].session?.id);
   });
 });

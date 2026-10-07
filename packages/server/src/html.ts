@@ -20,6 +20,7 @@ const STYLE = `
   table { border-collapse: collapse; width: 100%; }
   td, th { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
   input[type=email], input[type=password], input[type=text] { font: inherit; padding: 6px 8px; min-width: 280px; }
+  textarea { font: inherit; padding: 6px 8px; max-width: 100%; }
   button { font: inherit; padding: 6px 12px; cursor: pointer; }
   form.inline { display: inline; }
   code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }

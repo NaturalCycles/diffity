@@ -64,6 +64,27 @@ export interface ReviewCommentPayload {
   start_side?: string;
 }
 
+export interface ReviewRequest {
+  owner: string;
+  repo: string;
+  number: number;
+  title: string;
+  author: string;
+  draft: boolean;
+  updatedAt: string;
+  url: string;
+}
+
+interface RawSearchIssue {
+  number: number;
+  title: string;
+  html_url: string;
+  repository_url: string;
+  updated_at: string;
+  draft?: boolean;
+  user?: { login?: string } | null;
+}
+
 export class GitHubApiError extends Error {
   constructor(message: string, readonly status: number) {
     super(message);
@@ -74,6 +95,8 @@ type Fetch = typeof fetch;
 
 const PAGE_SIZE = 100;
 const MAX_PAGES = 30;
+
+const REVIEW_REQUESTS_QUERY = 'is:pr is:open archived:false review-requested:@me';
 
 const REVIEW_THREADS_QUERY = `query($owner:String!,$repo:String!,$number:Int!){
   repository(owner:$owner,name:$repo){
@@ -250,6 +273,38 @@ export class GitHubApi {
       this.logins.set(token, login);
     }
     return login;
+  }
+
+  /** Open pull requests waiting for the token's own review, most recently updated first. */
+  async reviewRequests(token: string): Promise<ReviewRequest[]> {
+    const query = new URLSearchParams({ q: REVIEW_REQUESTS_QUERY, sort: 'updated', order: 'desc', per_page: '50' });
+    let result: { items?: RawSearchIssue[] };
+    try {
+      result = await this.json(token, `/search/issues?${query.toString()}`);
+    } catch (err) {
+      // A search GitHub refuses (rate limit, an App without access) leaves the list empty, not the page broken.
+      if (err instanceof GitHubApiError && (err.status === 422 || err.status === 403)) {
+        console.warn(`Listing review requests failed: ${err.message}`);
+        return [];
+      }
+      throw err;
+    }
+    return (result.items ?? []).flatMap(item => {
+      const repo = /\/repos\/([^/]+)\/([^/]+)$/.exec(item.repository_url);
+      if (!repo) {
+        return [];
+      }
+      return [{
+        owner: decodeURIComponent(repo[1]),
+        repo: decodeURIComponent(repo[2]),
+        number: item.number,
+        title: item.title,
+        author: item.user?.login ?? '',
+        draft: !!item.draft,
+        updatedAt: item.updated_at,
+        url: item.html_url,
+      }];
+    });
   }
 
   async pullComments(token: string, owner: string, repo: string, prNumber: number): Promise<ReviewComment[]> {
