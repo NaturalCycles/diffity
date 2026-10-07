@@ -4,6 +4,21 @@ import { PencilIcon } from '../icons/pencil-icon';
 import { TrashIcon } from '../icons/trash-icon';
 import { MarkdownContent } from '../layout/markdown-content';
 import { clampEditHeight, MIN_EDIT_ROWS } from '../../lib/edit-box-size';
+import { Spinner } from '../icons/spinner';
+
+type AskState = NonNullable<Comment['ask']>;
+
+const ASK_LABELS: Record<AskState, string> = {
+  pending: 'asked',
+  working: 'agent working…',
+  answered: 'answered',
+};
+
+const ASK_TITLES: Record<AskState, string> = {
+  pending: 'Sent to the agent; not picked up yet.',
+  working: 'The agent has picked this up and is working on an answer.',
+  answered: 'The agent has answered in this thread.',
+};
 
 interface CommentBubbleProps {
   comment: Comment;
@@ -127,10 +142,11 @@ export function CommentBubble(props: CommentBubbleProps) {
           )}
           {comment.ask && (
             <span
-              className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${comment.ask === 'answered' ? 'bg-added/15 text-added' : 'bg-modified/15 text-modified'}`}
-              title={comment.ask === 'answered' ? 'The agent has answered in this thread.' : 'Sent to the agent; no answer yet.'}
+              className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full font-medium ${comment.ask === 'answered' ? 'bg-added/15 text-added' : 'bg-modified/15 text-modified'}`}
+              title={ASK_TITLES[comment.ask]}
             >
-              {comment.ask === 'answered' ? 'answered' : 'asked'}
+              {comment.ask === 'working' && <Spinner className="w-2.5 h-2.5" />}
+              {ASK_LABELS[comment.ask]}
             </span>
           )}
           {!isEditing && (

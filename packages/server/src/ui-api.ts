@@ -14,6 +14,7 @@ import {
   type LiveStatusResponse,
   type ParseResult,
   type RepoInfoResponse,
+  type ReviewRun,
 } from '@diffity/api';
 import type { ReviewSessionRecord } from './reviews.js';
 import { describeSession, ServiceError, type ReviewService } from './service.js';
@@ -246,6 +247,11 @@ export function uiApiRouter(deps: UiApiDeps): Router {
 
   router.get('/live/status', handle(async ({ user, session }, _req, res) => {
     res.json((await live.status(user.id, session.id)) satisfies LiveStatusResponse);
+  }));
+
+  router.post('/review-request', handle(async ({ user, session }, _req, res) => {
+    await live.queueReview(user.id, session.id);
+    res.json((await reviews.getSession(user.id, session.id))!.review satisfies ReviewRun);
   }));
 
   router.get('/github/details', handle(async ({ session }, _req, res) => {

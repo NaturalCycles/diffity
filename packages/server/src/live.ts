@@ -78,13 +78,16 @@ export interface LiveListener {
 export interface LiveStatus {
   listening: boolean;
   lastPollAt: string | null;
+  working: number;
 }
 
-function liveStatus(polls: (number | null | undefined)[], now: number): LiveStatus {
+/** An agent that holds a request has stopped polling to work on it, and still counts as listening. */
+function liveStatus(polls: (number | null | undefined)[], working: number, now: number): LiveStatus {
   const latest = Math.max(...polls.map(poll => poll ?? -Infinity));
   return {
-    listening: now - latest < LISTENING_WINDOW_MS,
+    listening: now - latest < LISTENING_WINDOW_MS || working > 0,
     lastPollAt: Number.isFinite(latest) ? new Date(latest).toISOString() : null,
+    working,
   };
 }
 
@@ -229,6 +232,15 @@ export class Live {
     return { done, cancel };
   }
 
+  /** The agent is still at work on the session, so what it holds there stays its own for another while. */
+  async extendClaims(userId: string, sessionId: string, now = Date.now()): Promise<void> {
+    await this.db.query(
+      `UPDATE live_requests SET claim_expires_at = $4
+        WHERE user_id = $1 AND session_id = $2 AND answered_at IS NULL AND claim_expires_at > $3`,
+      [userId, sessionId, now, now + CLAIM_TTL_MS],
+    );
+  }
+
   /** An agent's reply settles every question still open in the thread. */
   async answer(userId: string, threadId: string, now = Date.now()): Promise<void> {
     await this.db.query('UPDATE live_requests SET answered_at = $1 WHERE user_id = $2 AND thread_id = $3 AND answered_at IS NULL', [
@@ -261,13 +273,28 @@ export class Live {
          FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = $1 AND s.user_id = $2`,
       [sessionId, userId],
     );
-    return liveStatus([row?.session_poll, row?.user_poll], now);
+    return liveStatus([row?.session_poll, row?.user_poll], row ? await this.working(userId, sessionId, now) : 0, now);
   }
 
   /** Whether an agent waits on the user's whole queue, which is what a new session's review needs. */
   async userStatus(userId: string, now = Date.now()): Promise<LiveStatus> {
     const row = await this.db.one<{ live_polled_at: number | null }>('SELECT live_polled_at FROM users WHERE id = $1', [userId]);
-    return liveStatus([row?.live_polled_at], now);
+    return liveStatus([row?.live_polled_at], await this.working(userId, null, now), now);
+  }
+
+  /**
+   * Requests an agent holds and has not answered yet, plus reviews it has started and not finished,
+   * on one session or across the user's. A review outlasts its claim, so it counts on its own.
+   */
+  private async working(userId: string, sessionId: string | null, now: number): Promise<number> {
+    const row = await this.db.one<{ n: number | string }>(
+      `SELECT (SELECT count(*) FROM live_requests
+                WHERE user_id = $1 AND ($2::text IS NULL OR session_id = $2) AND answered_at IS NULL AND claim_expires_at > $3)
+            + (SELECT count(*) FROM sessions
+                WHERE user_id = $1 AND ($2::text IS NULL OR id = $2) AND review_started_at IS NOT NULL AND review_finished_at IS NULL) AS n`,
+      [userId, sessionId, now],
+    );
+    return Number(row?.n ?? 0);
   }
 
   async purgeExpired(now = Date.now()): Promise<void> {

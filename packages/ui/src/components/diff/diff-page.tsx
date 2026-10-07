@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useLoaderData } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useDiff } from '../../hooks/use-diff';
-import { useInfo } from '../../hooks/use-info';
+import { useInfo, useRequestReview } from '../../hooks/use-info';
 import { useTheme } from '../../hooks/use-theme';
 import { useWrapLines } from '../../hooks/use-wrap-lines';
 import { useKeyboard } from '../../hooks/use-keyboard';
@@ -79,7 +79,9 @@ export function DiffPage() {
   const { data: serverThreads, isFetched: threadsFetched } = useReviewThreads(reviewsEnabled ? sessionId : null);
   const threads = reviewsEnabled && serverThreads ? serverThreads : [];
   const commentActions = useCommentActions(sessionId, reviewsEnabled);
-  const agentListening = !!useQuery(liveStatusOptions(sessionId)).data?.listening;
+  const liveStatus = useQuery(liveStatusOptions(sessionId)).data;
+  const agentListening = !!liveStatus?.listening;
+  const requestReview = useRequestReview();
 
   const commentCountsByFile = useMemo(() => buildThreadCountsByFile(threads), [threads]);
 
@@ -491,12 +493,20 @@ export function DiffPage() {
           githubDetails={githubDetails}
           reviewInProgress={info?.review?.state === 'reviewing'}
           agentListening={agentListening}
+          agentWorking={liveStatus?.working ?? 0}
           sessionId={sessionId}
           onGitHubPulled={() => queryClient.invalidateQueries({ queryKey: ['threads'] })}
         />
         <PullRequestPanel details={githubDetails} hasPullRequest={!!info?.github} repoRoot={repoRoot} />
         {info?.review && (
-          <ReviewBanner review={info.review} findings={threads.length} ready={arrival.ready} onReload={arrival.reload} />
+          <ReviewBanner
+            review={info.review}
+            findings={threads.length}
+            ready={arrival.ready}
+            onReload={arrival.reload}
+            agentListening={agentListening}
+            onRequestReview={() => requestReview.mutate()}
+          />
         )}
         {activeTour && (
           <TourStepper

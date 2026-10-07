@@ -175,8 +175,14 @@ describe('a review’s state', () => {
   it('is queued while it waits, and stale once nobody held it for too long', () => {
     expect(row({ review_queued_at: at(1000) })).toMatchObject({ state: 'queued', queuedAt: at(1000) });
     expect(row({ review_queued_at: at(REVIEW_STALE_MS) }).state).toBe('stale');
-    expect(row({ review_queued_at: at(REVIEW_STALE_MS), review_claim_expires_at: now + 1000 }).state).toBe('queued');
     expect(row({ review_queued_at: at(REVIEW_STALE_MS), review_claim_expires_at: now }).state).toBe('stale');
+  });
+
+  it('is claimed while an agent holds it without having started, and back to waiting when the claim runs out', () => {
+    expect(row({ review_queued_at: at(1000), review_claim_expires_at: now + 1000 }).state).toBe('claimed');
+    expect(row({ review_queued_at: at(REVIEW_STALE_MS), review_claim_expires_at: now + 1000 }).state).toBe('claimed');
+    expect(row({ review_queued_at: at(1000), review_claim_expires_at: now }).state).toBe('queued');
+    expect(row({ review_queued_at: at(1000), review_claim_expires_at: now + 1000, review_started_at: at(500) }).state).toBe('reviewing');
   });
 
   it('is reviewing once an agent started, queued or not, and a new request after a finished review is queued again', () => {

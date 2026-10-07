@@ -22,6 +22,8 @@ import { isThreadResolved } from '../comments/types';
 interface ToolbarProps {
   reviewInProgress?: boolean;
   agentListening?: boolean;
+  /** Requests the agent has taken and not answered yet. */
+  agentWorking?: number;
   viewMode: ViewMode;
   onViewModeChange: (mode: ViewMode) => void;
   hideWhitespace: boolean;
@@ -131,6 +133,7 @@ export function Toolbar(props: ToolbarProps) {
     githubDetails,
     reviewInProgress,
     agentListening,
+    agentWorking = 0,
     sessionId,
     onGitHubPulled,
   } = props;
@@ -178,7 +181,15 @@ export function Toolbar(props: ToolbarProps) {
         )}
       </div>
       <div className="flex items-center gap-2 ml-auto shrink-0">
-        {agentListening && (
+        {agentWorking > 0 ? (
+          <span
+            className="flex items-center gap-1.5 px-2 py-1 text-xs text-accent"
+            title={`The agent is working on ${agentWorking} request${agentWorking === 1 ? '' : 's'}.`}
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-added animate-pulse" />
+            Agent working
+          </span>
+        ) : agentListening && (
           <span
             className="flex items-center gap-1.5 px-2 py-1 text-xs text-accent"
             title="An agent is waiting: Ask Claude on a comment reaches it."

@@ -125,8 +125,9 @@ const SESSION_SELECT = `
     LEFT JOIN live_requests q ON q.session_id = s.id AND q.kind = 'review' AND q.answered_at IS NULL`;
 
 /**
- * A review under way wins over a queued one, since only an agent starts it. A queued review nobody
- * holds goes stale after a while, so the page can stop waiting for it.
+ * A review under way wins over a queued one, since only an agent starts it. A queued review an
+ * agent holds is claimed until the claim runs out; one nobody holds goes stale after a while, so
+ * the page can stop waiting for it.
  */
 export function reviewRun(row: Pick<SessionRow, 'review_started_at' | 'review_finished_at' | 'review_note' | 'review_queued_at' | 'review_claim_expires_at'>, now = Date.now()): ReviewRun {
   return {
@@ -143,8 +144,10 @@ function reviewState(row: Parameters<typeof reviewRun>[0], now: number): ReviewS
     return 'reviewing';
   }
   if (row.review_queued_at !== null) {
-    const held = row.review_claim_expires_at !== null && row.review_claim_expires_at > now;
-    return !held && now - Date.parse(row.review_queued_at) >= REVIEW_STALE_MS ? 'stale' : 'queued';
+    if (row.review_claim_expires_at !== null && row.review_claim_expires_at > now) {
+      return 'claimed';
+    }
+    return now - Date.parse(row.review_queued_at) >= REVIEW_STALE_MS ? 'stale' : 'queued';
   }
   return row.review_finished_at !== null ? 'done' : 'none';
 }
@@ -435,16 +438,17 @@ export class Reviews {
     return (await this.getThread(input.userId, threadId))!;
   }
 
-  private async commentsFor(threadIds: string[]): Promise<Map<string, Comment[]>> {
+  private async commentsFor(threadIds: string[], now = Date.now()): Promise<Map<string, Comment[]>> {
     const map = new Map<string, Comment[]>();
     if (threadIds.length === 0) {
       return map;
     }
     const rows = await this.db.query<CommentRow>(
-      `SELECT c.*, CASE WHEN r.id IS NULL THEN NULL WHEN r.answered_at IS NULL THEN 'pending' ELSE 'answered' END AS ask
+      `SELECT c.*, CASE WHEN r.id IS NULL THEN NULL WHEN r.answered_at IS NOT NULL THEN 'answered'
+                         WHEN r.claim_expires_at > $2 THEN 'working' ELSE 'pending' END AS ask
          FROM comments c LEFT JOIN live_requests r ON r.comment_id = c.id
         WHERE c.thread_id = ANY($1) ORDER BY c.seq ASC`,
-      [threadIds],
+      [threadIds, now],
     );
     for (const row of rows) {
       const list = map.get(row.thread_id) ?? [];

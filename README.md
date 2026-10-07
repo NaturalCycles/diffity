@@ -50,18 +50,23 @@ in a claude.ai cloud session, where nothing of diffity is installed). The comman
 `GET /live/await?session=<id>&wait=25` — held up to 25 s, under the load balancer's 30 s timeout —
 and exits only when a question arrives, printing it as JSON. The agent answers with `reply`, which
 marks the question answered on the page, and runs the command again. A handed-out question that
-gets no answer within 10 minutes is handed out again. The page's toolbar shows **Agent listening**
-while the session, or the user's queue, was polled in the last minute; without it, Ask Claude is
-disabled.
+gets no answer within 10 minutes is handed out again; a `reply` or `review_start` on the session
+gives what the agent holds there another 10 minutes. While the agent holds a question its badge
+reads *agent working…* and the toolbar **Agent working**; otherwise the toolbar shows **Agent
+listening** while the session, or the user's queue, was polled in the last minute, and without
+either, Ask Claude is disabled.
 
 One agent can also attend the user's whole queue. `live_token {}`, without a session, returns the
 same command polling `GET /live/await?wait=25`; it hands out the user's oldest request across every
 session: questions from any review page, and sessions handed over for review. While an agent polls
 the queue, the **Sessions** page says **Agent listening** and each waiting pull request's button
 becomes **Create and review**: it creates the session, queues it for the agent, and opens the page,
-whose banner follows the review from *Queued for your agent* through *Reviewing… n findings so far*
-to **Review ready · Reload**, which takes in the findings and the reading order. An agent hands a
-session over the same way with `create_session { …, review: true }`. One review waits per session;
+whose banner follows the review from *Queued for your agent* and *Your agent picked this up…*
+through *Reviewing… n findings so far* to **Review ready · Reload**, which takes in the findings and
+the reading order. An existing session goes to the agent from its banner's **Ask your agent to
+review**, or from the **review** button beside it on the Sessions page; an agent hands a session
+over with `create_session { …, review: true }`. While the agent works on requests, the Sessions
+page says **Agent working on n requests**. One review waits per session;
 `review_done` settles it, a review an agent has started is not handed to another, and one nobody
 holds 15 minutes after it was queued shows as not picked up. The `review` prompt's **Attend**
 section is the agent's side of it.

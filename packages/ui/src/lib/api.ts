@@ -11,6 +11,7 @@ import type {
   RepoInfoResponse,
   ReplyRequest,
   ReviewResult,
+  ReviewRun,
   ReviewSubmission,
   ThreadStatus,
   Tour,
@@ -159,6 +160,10 @@ export function pullCommentsFromGitHub(sessionId: string): Promise<PullCommentsR
 
 export function fetchLiveStatus(): Promise<LiveStatusResponse> {
   return apiFetch('/api/live/status');
+}
+
+export function requestReview(): Promise<ReviewRun> {
+  return apiFetch('/api/review-request', { method: 'POST' });
 }
 
 export function fetchTours(sessionId: string): Promise<Tour[]> {

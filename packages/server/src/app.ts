@@ -526,7 +526,9 @@ export function createApp(deps: AppDeps): express.Express {
     const rows = found.requests.map(request => {
       const slug = `${request.owner}/${request.repo}`;
       const action = request.session
-        ? `<a href="/s/${escapeHtml(request.session.id)}/">open · ${escapeHtml(request.session.headSha.slice(0, 7))}</a>`
+        ? `<a href="/s/${escapeHtml(request.session.id)}/">open · ${escapeHtml(request.session.headSha.slice(0, 7))}</a>${listening
+          ? ` <form class="inline" method="post" action="/sessions/${escapeHtml(request.session.id)}/review-request"><button type="submit">review</button></form>`
+          : ''}`
         : `<form class="inline" method="post" action="/sessions">
              <input type="hidden" name="repo" value="${escapeHtml(slug)}">
              <input type="hidden" name="pr" value="${request.number}">
@@ -554,7 +556,8 @@ export function createApp(deps: AppDeps): express.Express {
       notSignedIn(res, req.originalUrl);
       return;
     }
-    const listening = (await live.userStatus(user.id)).listening;
+    const status = await live.userStatus(user.id);
+    const listening = status.listening;
     const [requests, sessions] = await Promise.all([reviewRequestsSection(user, listening), reviews.listSessions(user.id)]);
     const rows = sessions.map(session => `
       <tr>
@@ -562,9 +565,11 @@ export function createApp(deps: AppDeps): express.Express {
         <td>${escapeHtml(describeSession(session))}</td>
         <td class="muted">${escapeHtml(session.createdAt.slice(0, 16).replace('T', ' '))}</td>
       </tr>`).join('');
-    const agent = listening
-      ? '<p><strong>Agent listening</strong> <span class="muted">· Create and review hands a pull request to it</span></p>'
-      : '';
+    const agent = status.working > 0
+      ? `<p><strong>Agent working on ${status.working} request${status.working === 1 ? '' : 's'}</strong></p>`
+      : listening
+        ? '<p><strong>Agent listening</strong> <span class="muted">· Create and review hands a pull request to it</span></p>'
+        : '';
     sendPage(res, 200, 'Sessions', agent + requests + (sessions.length > 0
       ? `<h2>Your review sessions</h2><table><tr><th>Repository</th><th>Change</th><th>Created</th></tr>${rows}</table>`
       : `<h2>No review sessions yet</h2><p>Ask your agent to <code>create_session</code> through the diffity MCP connector.
@@ -590,6 +595,22 @@ export function createApp(deps: AppDeps): express.Express {
         <p class="error">${escapeHtml(err instanceof Error ? err.message : String(err))}</p>
         <p><a href="/">Back to your sessions</a></p>`, user);
     }
+  });
+
+  app.post('/sessions/:id/review-request', sameOrigin, async (req, res) => {
+    const user = await userFor(req);
+    if (!user) {
+      notSignedIn(res, '/');
+      return;
+    }
+    const id = String(req.params.id);
+    const session = await reviews.getSession(user.id, id);
+    if (!session || session.id !== id) {
+      sendPage(res, 404, 'Not found', '<h1>No such session</h1><p><a href="/">Your sessions</a></p>', user);
+      return;
+    }
+    await live.queueReview(user.id, session.id);
+    res.redirect(303, '/');
   });
 
   app.get('/api/live/status', async (req, res) => {

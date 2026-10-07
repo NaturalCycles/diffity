@@ -1,12 +1,16 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, cleanup, screen, fireEvent } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import type { ReviewRun, ReviewState } from '@diffity/api';
 import { ReviewBanner } from '../src/components/layout/review-banner';
 import { ARRIVAL_QUERY_KEYS, useHeld, useReviewArrival } from '../src/hooks/use-review-arrival';
 import { repoInfoOptions } from '../src/queries/info';
+import { useRequestReview } from '../src/hooks/use-info';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 function run(state: ReviewState, fields: Partial<ReviewRun> = {}): ReviewRun {
   return { state, queuedAt: null, startedAt: null, doneAt: null, note: '', ...fields };
@@ -22,6 +26,13 @@ describe('the review banner', () => {
     expect(screen.getByTestId('review-banner').textContent).toContain('Queued for your agent');
   });
 
+  it('says the agent picked it up before it starts', () => {
+    banner(run('claimed', { queuedAt: new Date().toISOString() }));
+    const shown = screen.getByTestId('review-banner');
+    expect(shown.dataset.state).toBe('claimed');
+    expect(shown.textContent).toContain('Your agent picked this up…');
+  });
+
   it('counts the findings while the agent reviews', () => {
     banner(run('reviewing', { note: 'first pass' }), false, 3);
     const text = screen.getByTestId('review-banner').textContent;
@@ -35,6 +46,34 @@ describe('the review banner', () => {
     const text = screen.getByTestId('review-banner').textContent;
     expect(text).toContain('No agent picked this up');
     expect(text).toContain('review prompt');
+  });
+
+  it('offers a review to a listening agent when none is under way, and again on a stale one', () => {
+    const onRequestReview = vi.fn();
+    const offered = (review: ReviewRun, agentListening: boolean) => render(
+      <ReviewBanner review={review} findings={0} ready={false} onReload={() => {}} agentListening={agentListening} onRequestReview={onRequestReview} />,
+    );
+
+    for (const state of ['none', 'done'] as const) {
+      offered(run(state), true);
+      fireEvent.click(screen.getByRole('button', { name: 'Ask your agent to review' }));
+      cleanup();
+      offered(run(state), false);
+      expect(screen.queryByTestId('review-banner')).toBeNull();
+      cleanup();
+    }
+    offered(run('stale'), true);
+    fireEvent.click(screen.getByRole('button', { name: 'Ask again' }));
+    cleanup();
+    offered(run('stale'), false);
+    expect(screen.queryByRole('button', { name: 'Ask again' })).toBeNull();
+    cleanup();
+    for (const state of ['queued', 'claimed', 'reviewing'] as const) {
+      offered(run(state), true);
+      expect(screen.queryByRole('button')).toBeNull();
+      cleanup();
+    }
+    expect(onRequestReview).toHaveBeenCalledTimes(3);
   });
 
   it('offers the reload only for a review that finished while the page was open', () => {
@@ -96,11 +135,45 @@ describe('a review arriving on an open page', () => {
   });
 });
 
+function RequestHarness() {
+  const { data } = useQuery(repoInfoOptions());
+  const request = useRequestReview();
+  return data?.review
+    ? <ReviewBanner review={data.review} findings={0} ready={false} onReload={() => {}} agentListening onRequestReview={() => request.mutate()} />
+    : null;
+}
+
+describe('asking for a review from the page', () => {
+  it('posts the request and shows the review queued', async () => {
+    const posted: string[] = [];
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/review-request')) {
+        posted.push(init?.method ?? 'GET');
+        return Response.json(run('queued', { queuedAt: new Date().toISOString() }));
+      }
+      return Response.json({ sessionId: 's', review: run('done') });
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <RequestHarness />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Ask your agent to review' }));
+    await waitFor(() => expect(screen.getByTestId('review-banner').dataset.state).toBe('queued'));
+    expect(posted).toEqual(['POST']);
+    client.clear();
+  });
+});
+
 describe('the info poll', () => {
-  it('runs every 3 s while a review is queued or under way, and every 30 s otherwise', () => {
+  it('runs every 3 s while a review is queued, taken or under way, and every 30 s otherwise', () => {
     const interval = repoInfoOptions().refetchInterval as (query: { state: { data: unknown } }) => number;
     const pollFor = (state: ReviewState) => interval({ state: { data: { review: run(state) } } });
     expect(pollFor('queued')).toBe(3000);
+    expect(pollFor('claimed')).toBe(3000);
     expect(pollFor('reviewing')).toBe(3000);
     expect(pollFor('done')).toBe(30_000);
     expect(pollFor('stale')).toBe(30_000);

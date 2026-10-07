@@ -248,7 +248,9 @@ export function createMcpServer(ctx: McpContext): McpServer {
       inputSchema: { session: sessionArg, note: z.string().optional() },
     },
     guarded(async args => {
-      await reviews.startReview(userId, (await session(args.session)).id, args.note ?? '');
+      const record = await session(args.session);
+      await reviews.startReview(userId, record.id, args.note ?? '');
+      await ctx.live.extendClaims(userId, record.id);
       return text('Review marked as in progress');
     }),
   );
@@ -352,6 +354,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
     guarded(async args => {
       const found = await thread(args.id, args.session);
       const reply = await reviews.addReply(userId, found.id, args.body, agent, args.aside ? 'aside' : 'review');
+      await ctx.live.extendClaims(userId, found.sessionId);
       await ctx.live.answer(userId, found.id);
       return json({ thread: found.id, comment: reply.id });
     }),

@@ -75,6 +75,7 @@ describe('Ask Claude on the comment box', () => {
 describe('a question’s badge', () => {
   it.each([
     ['pending', 'asked'],
+    ['working', 'agent working…'],
     ['answered', 'answered'],
   ] as const)('shows a %s question as "%s"', (ask, label) => {
     render(
@@ -87,4 +88,23 @@ describe('a question’s badge', () => {
     );
     expect(screen.getByText(label)).toBeTruthy();
   });
+
+  it('spins only while the agent works on it', () => {
+    const badge = (ask: 'pending' | 'working' | 'answered') => {
+      render(
+        <ThreadCard
+          thread={makeThread({ comments: [makeComment({ id: 'q', body: 'why?', kind: 'aside', ask, author: { name: 'You', type: 'user' } })] })}
+          onEditComment={() => {}}
+          onDeleteComment={() => {}}
+          onDeleteThread={() => {}}
+        />,
+      );
+      const spins = !!screen.getByText(ASK_TEXT[ask]).querySelector('.animate-spin');
+      cleanup();
+      return spins;
+    };
+    expect([badge('pending'), badge('working'), badge('answered')]).toEqual([false, true, false]);
+  });
 });
+
+const ASK_TEXT = { pending: 'asked', working: 'agent working…', answered: 'answered' } as const;

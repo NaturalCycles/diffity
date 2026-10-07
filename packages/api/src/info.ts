@@ -2,9 +2,10 @@ import type { GitHubRemote } from './github.js';
 
 /**
  * Where a session's review stands. `queued` waits for an agent to take it, `stale` waited too long
- * for one, `reviewing` is an agent part-way through writing findings.
+ * for one, `claimed` is taken by an agent that has not started, `reviewing` is an agent part-way
+ * through writing findings.
  */
-export type ReviewState = 'none' | 'queued' | 'stale' | 'reviewing' | 'done';
+export type ReviewState = 'none' | 'queued' | 'stale' | 'claimed' | 'reviewing' | 'done';
 
 export interface ReviewRun {
   state: ReviewState;
@@ -32,4 +33,6 @@ export interface RepoInfoResponse {
 export interface LiveStatusResponse {
   listening: boolean;
   lastPollAt: string | null;
+  /** Requests an agent has taken and not answered yet; it counts as listening while it works on them. */
+  working: number;
 }

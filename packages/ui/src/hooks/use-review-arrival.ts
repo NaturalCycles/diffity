@@ -5,7 +5,7 @@ import type { ReviewState } from '../lib/api';
 export const ARRIVAL_QUERY_KEYS = [['diff'], ['threads'], ['tours'], ['repo-info']];
 
 export function isReviewPending(state: ReviewState | undefined): boolean {
-  return state === 'queued' || state === 'reviewing';
+  return state === 'queued' || state === 'claimed' || state === 'reviewing';
 }
 
 /**
