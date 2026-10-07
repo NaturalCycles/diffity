@@ -1,9 +1,16 @@
 import type { GitHubRemote } from './github.js';
 
-/** Whether an agent is part-way through writing findings, and since when. */
+/**
+ * Where a session's review stands. `queued` waits for an agent to take it, `stale` waited too long
+ * for one, `reviewing` is an agent part-way through writing findings.
+ */
+export type ReviewState = 'none' | 'queued' | 'stale' | 'reviewing' | 'done';
+
 export interface ReviewRun {
-  inProgress: boolean;
+  state: ReviewState;
+  queuedAt: string | null;
   startedAt: string | null;
+  doneAt: string | null;
   note: string;
 }
 
@@ -18,7 +25,10 @@ export interface RepoInfoResponse {
   github: GitHubRemote | null;
 }
 
-/** What `/api/live/status` answers: whether an agent is waiting for questions on this session. */
+/**
+ * What `/api/live/status` answers: whether an agent is waiting for questions on this session, or,
+ * on the Sessions page, for anything of the user's.
+ */
 export interface LiveStatusResponse {
   listening: boolean;
   lastPollAt: string | null;

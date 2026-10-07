@@ -2,8 +2,8 @@ import { execFile } from 'node:child_process';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import type { CommentThread } from '@diffity/api';
-import { CLAIM_TTL_MS, LIVE_TOKEN_TTL_MS, Live } from '../src/live.js';
+import type { CommentThread, RepoInfoResponse } from '@diffity/api';
+import { CLAIM_TTL_MS, LISTENING_WINDOW_MS, LIVE_TOKEN_TTL_MS, Live, REVIEW_STALE_MS } from '../src/live.js';
 import { Reviews } from '../src/reviews.js';
 import { Users } from '../src/users.js';
 import type { Db } from '../src/db.js';
@@ -93,10 +93,10 @@ describe('the request queue', () => {
 
   it('wakes a waiting poll when a request is asked, and gives up at the deadline', async () => {
     const started = Date.now();
-    expect(await live.next(alice, sessionId, 200, new AbortController().signal)).toBeNull();
+    expect(await live.next({ userId: alice, sessionId }, 200, new AbortController().signal)).toBeNull();
     expect(Date.now() - started).toBeGreaterThanOrEqual(190);
 
-    const waiting = live.next(alice, sessionId, 10_000, new AbortController().signal);
+    const waiting = live.next({ userId: alice, sessionId }, 10_000, new AbortController().signal);
     await new Promise(resolve => setTimeout(resolve, 50));
     const thread = await question();
     const woken = Date.now();
@@ -107,7 +107,7 @@ describe('the request queue', () => {
 
   it('stops waiting when the poller leaves', async () => {
     const gone = new AbortController();
-    const waiting = live.next(alice, sessionId, 10_000, gone.signal);
+    const waiting = live.next({ userId: alice, sessionId }, 10_000, gone.signal);
     gone.abort();
     expect(await waiting).toBeNull();
   });
@@ -118,6 +118,84 @@ describe('the request queue', () => {
     expect(await live.verifyToken(token, otherSessionId)).toBeNull();
     expect(await live.verifyToken(token, sessionId, Date.now() + LIVE_TOKEN_TTL_MS + 1)).toBeNull();
     expect(await live.verifyToken('made-up', sessionId)).toBeNull();
+  });
+
+  it('lets a user token wait on the whole queue or on any of the user’s sessions, and on nothing of anyone else’s', async () => {
+    const { token } = await live.issueToken(alice, null);
+    const bobs = await session(bob, 'd'.repeat(40));
+    expect(await live.verifyToken(token, null)).toBe(alice);
+    expect(await live.verifyToken(token, sessionId)).toBe(alice);
+    expect(await live.verifyToken(token, otherSessionId)).toBe(alice);
+    expect(await live.verifyToken(token, bobs)).toBeNull();
+    expect(await live.verifyToken(token, null, Date.now() + LIVE_TOKEN_TTL_MS + 1)).toBeNull();
+
+    const scoped = await live.issueToken(alice, sessionId);
+    expect(await live.verifyToken(scoped.token, null)).toBeNull();
+  });
+
+  it('queues one review per session at a time, and review_done settles it', async () => {
+    expect(await live.queueReview(alice, otherSessionId)).toBe(true);
+    expect(await live.queueReview(alice, otherSessionId)).toBe(false);
+    await live.answerReview(alice, otherSessionId);
+    expect(await live.queueReview(alice, otherSessionId)).toBe(true);
+    await live.answerReview(bob, otherSessionId);
+    expect(await live.queueReview(alice, otherSessionId)).toBe(false);
+    await live.answerReview(alice, otherSessionId);
+  });
+
+  it('hands the user’s queue out first come, across sessions, and keeps reviews from a session’s own poller', async () => {
+    expect(await live.queueReview(alice, otherSessionId)).toBe(true);
+    const asked = await question(sessionId);
+
+    expect(await live.claim(bob, null)).toBeNull();
+    expect((await live.claim(alice, otherSessionId))).toBeNull();
+    const first = await live.claim(alice, null);
+    expect(first).toMatchObject({ kind: 'review', sessionId: otherSessionId, threadId: null });
+    expect((await live.claim(alice, null))?.threadId).toBe(asked.id);
+    expect(await live.claim(alice, null)).toBeNull();
+
+    await live.answer(alice, asked.id);
+    await live.answerReview(alice, otherSessionId);
+  });
+
+  it('does not hand out again a review an agent has started, however long it takes', async () => {
+    await live.queueReview(alice, otherSessionId);
+    const now = Date.now();
+    expect((await live.claim(alice, null, now))?.kind).toBe('review');
+    expect((await live.claim(alice, null, now + CLAIM_TTL_MS))?.kind).toBe('review');
+    await reviews.startReview(alice, otherSessionId, '');
+    expect(await live.claim(alice, null, now + 3 * CLAIM_TTL_MS)).toBeNull();
+    await reviews.finishReview(alice, otherSessionId);
+    await live.answerReview(alice, otherSessionId);
+    expect(await live.claim(alice, null, now + 5 * CLAIM_TTL_MS)).toBeNull();
+  });
+
+  it('wakes a poller on the user’s queue for a question or a review on any session', async () => {
+    const waiting = live.next({ userId: alice, sessionId: null }, 10_000, new AbortController().signal);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    await live.queueReview(alice, otherSessionId);
+    expect((await waiting)?.kind).toBe('review');
+    await live.answerReview(alice, otherSessionId);
+
+    const again = live.next({ userId: alice, sessionId: null }, 10_000, new AbortController().signal);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    const thread = await question(sessionId);
+    expect((await again)?.threadId).toBe(thread.id);
+    await live.answer(alice, thread.id);
+  });
+
+  it('counts a poll on the user’s queue as listening on every session, and only that one on the Sessions page', async () => {
+    const now = Date.now();
+    await live.recordPoll({ userId: alice, sessionId }, now);
+    expect((await live.status(alice, sessionId, now)).listening).toBe(true);
+    expect((await live.status(alice, otherSessionId, now)).listening).toBe(false);
+    expect((await live.userStatus(alice, now)).listening).toBe(false);
+
+    await live.recordPoll({ userId: alice, sessionId: null }, now);
+    expect(await live.status(alice, otherSessionId, now)).toEqual({ listening: true, lastPollAt: new Date(now).toISOString() });
+    expect((await live.userStatus(alice, now)).listening).toBe(true);
+    expect((await live.userStatus(alice, now + LISTENING_WINDOW_MS)).listening).toBe(false);
+    expect((await live.userStatus(bob, now)).listening).toBe(false);
   });
 });
 
@@ -305,5 +383,205 @@ describe('over HTTP', () => {
     const refused = await run(command.replace(/Bearer [^']+/, 'Bearer nope'));
     expect(refused.code).toBe(1);
     expect(refused.stderr).toContain('live token was refused');
+  });
+});
+
+describe('the attendant over HTTP', () => {
+  let fixture: Fixture;
+  let github: FakeGitHub;
+  let dataDir: string;
+  let server: TestServer;
+  let aliceCookie: string;
+  let bobCookie: string;
+  let alice: Client;
+  let bob: Client;
+  let aliceId: string;
+
+  const mcpClient = async (accessToken: string): Promise<Client> => {
+    const client = new Client({ name: 'test', version: '1.0.0' });
+    await client.connect(new StreamableHTTPClientTransport(new URL(`${server.base}/mcp`), {
+      requestInit: { headers: { Authorization: `Bearer ${accessToken}` } },
+    }));
+    return client;
+  };
+
+  const tool = async <T>(client: Client, name: string, args: Record<string, unknown>): Promise<T> => {
+    const result = (await client.callTool({ name, arguments: args })) as { isError?: boolean; content: { text: string }[] };
+    if (result.isError) {
+      throw new Error(result.content[0].text);
+    }
+    const text = result.content[0].text;
+    return (text.startsWith('{') || text.startsWith('[') ? JSON.parse(text) : text) as T;
+  };
+
+  const userToken = async (client = alice) =>
+    tool<{ token: string; command: string; pollUrl: string; session: string | null }>(client, 'live_token', {});
+
+  const poll = (token: string, session?: string, wait = 0) =>
+    fetch(`${server.base}/live/await?${session ? `session=${session}&` : ''}wait=${wait}`, { headers: { Authorization: `Bearer ${token}` } });
+
+  const createAndReview = (cookie: string, pr: number) => fetch(`${server.base}/sessions`, {
+    method: 'POST',
+    redirect: 'manual',
+    headers: { cookie, 'Content-Type': 'application/x-www-form-urlencoded', 'Sec-Fetch-Site': 'same-origin' },
+    body: new URLSearchParams({ repo: 'acme/widgets', pr: String(pr), review: '1' }).toString(),
+  });
+
+  const sessionFrom = (res: Response) => /^\/s\/([^/]+)\/$/.exec(res.headers.get('location') ?? '')![1];
+
+  const info = async (session: string): Promise<RepoInfoResponse> =>
+    (await fetch(`${server.base}/s/${session}/api/info`, { headers: { cookie: aliceCookie } })).json() as Promise<RepoInfoResponse>;
+
+  const reviewRequests = (session: string) =>
+    server.db.query<{ answered_at: number | null; created_at: string }>(
+      "SELECT answered_at, created_at FROM live_requests WHERE session_id = $1 AND kind = 'review' ORDER BY seq",
+      [session],
+    );
+
+  const run = (command: string) => new Promise<{ code: number; stdout: string }>(resolve => {
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/proxy/i.test(key)));
+    execFile('sh', ['-c', command], { env, timeout: 20_000 }, (err, stdout) => {
+      resolve({ code: err ? (typeof err.code === 'number' ? err.code : -1) : 0, stdout });
+    });
+  });
+
+  beforeAll(async () => {
+    fixture = makeFixture();
+    github = await startFakeGitHub([
+      {
+        owner: 'acme',
+        name: 'widgets',
+        private: false,
+        tokens: [],
+        pulls: { 1: { title: 'Change line ten', baseSha: fixture.mainTip, headSha: fixture.head1 } },
+      },
+    ]);
+    dataDir = tempDir('attendant');
+    server = await startTestServer(dataDir, github.url, { remoteUrl: fixture.remoteUrl, uiDir: fakeUiDir(dataDir) });
+    aliceCookie = await login(server.base, 'alice@example.com');
+    bobCookie = await login(server.base, 'bob@example.com');
+    aliceId = (await server.users.findOrCreate('alice@example.com')).id;
+    alice = await mcpClient((await connectAgent(server.base, aliceCookie)).accessToken);
+    bob = await mcpClient((await connectAgent(server.base, bobCookie)).accessToken);
+  });
+
+  afterAll(async () => {
+    await alice?.close();
+    await bob?.close();
+    await server.close();
+    await github.close();
+    removeDir(fixture.root);
+    removeDir(dataDir);
+  });
+
+  it('issues a token for the user’s queue, polled without a session', async () => {
+    const issued = await userToken();
+    expect(issued.session).toBeNull();
+    expect(issued.pollUrl).toBe(`${server.base}/live/await?wait=25`);
+    expect(issued.command).toContain(`'${issued.pollUrl}'`);
+    expect((await poll(issued.token)).status).toBe(204);
+
+    const bobs = (await tool<{ session: string }>(bob, 'create_session', { repo: 'acme/widgets', base: fixture.base, head: fixture.head2 })).session;
+    expect((await poll(issued.token, bobs)).status).toBe(401);
+    const mine = (await tool<{ session: string }>(alice, 'create_session', { repo: 'acme/widgets', base: fixture.base, head: fixture.head2 })).session;
+    expect((await poll(issued.token, mine)).status).toBe(204);
+
+    const scoped = await tool<{ token: string }>(alice, 'live_token', { session: mine });
+    const refused = await poll(scoped.token);
+    expect(refused.status).toBe(401);
+    expect((await refused.json()).error).toContain('live_token {}');
+  });
+
+  it('says on the Sessions page and its status whether an agent waits on the queue', async () => {
+    github.reviewRequests['alice-token'] = [
+      { owner: 'acme', repo: 'widgets', number: 7, title: 'Something new', author: 'carol', updatedAt: '2026-10-03T09:15:00Z' },
+    ];
+    await server.users.setGitHubToken(aliceId, 'alice-token');
+    await server.db.query('UPDATE users SET live_polled_at = NULL');
+    try {
+      const status = () => fetch(`${server.base}/api/live/status`, { headers: { cookie: aliceCookie } }).then(res => res.json());
+      expect((await fetch(`${server.base}/api/live/status`)).status).toBe(401);
+      expect(await status()).toEqual({ listening: false, lastPollAt: null });
+      const before = await (await fetch(`${server.base}/`, { headers: { cookie: aliceCookie } })).text();
+      expect(before).not.toContain('Agent listening');
+      expect(before).toContain('<button type="submit">Create session</button>');
+
+      await poll((await userToken()).token);
+      expect((await status()).listening).toBe(true);
+      const after = await (await fetch(`${server.base}/`, { headers: { cookie: aliceCookie } })).text();
+      expect(after).toContain('<strong>Agent listening</strong>');
+      expect(after).toContain('<input type="hidden" name="review" value="1"><button type="submit">Create and review</button>');
+      expect((await fetch(`${server.base}/api/live/status`, { headers: { cookie: bobCookie } }).then(res => res.json())).listening).toBe(false);
+    } finally {
+      await server.users.setGitHubToken(aliceId, null);
+    }
+  });
+
+  it('hands a session created with review=1 to the waiting agent, and the page follows it to done', async () => {
+    const { token, command } = await userToken();
+    const waiting = run(command);
+    await new Promise(resolve => setTimeout(resolve, 300));
+
+    const created = await createAndReview(aliceCookie, 1);
+    expect(created.status).toBe(303);
+    const session = sessionFrom(created);
+    const delivered = await waiting;
+    expect(delivered.code).toBe(0);
+    const request = JSON.parse(delivered.stdout);
+    expect(request).toMatchObject({ session, kind: 'review', repo: 'acme/widgets', pr: 1, url: `${server.base}/s/${session}/` });
+    expect(request.hint).toContain('review_start');
+    expect((await info(session)).review).toMatchObject({ state: 'queued', startedAt: null });
+
+    expect(sessionFrom(await createAndReview(aliceCookie, 1))).toBe(session);
+    expect(await reviewRequests(session)).toHaveLength(1);
+    expect((await poll(token)).status).toBe(204);
+
+    await tool(alice, 'review_start', { session });
+    expect((await info(session)).review?.state).toBe('reviewing');
+    await tool(alice, 'comment', { session, file: 'src.ts', line: 10, body: 'P2: untested' });
+    await tool(alice, 'review_done', { session });
+    const done = (await info(session)).review!;
+    expect(done.state).toBe('done');
+    expect(done.doneAt).not.toBeNull();
+    expect((await reviewRequests(session))[0].answered_at).not.toBeNull();
+  });
+
+  it('queues from create_session { review: true } once, keeps it from other users, and lets it go stale unclaimed', async () => {
+    const first = await tool<{ session: string; review: string }>(alice, 'create_session', { repo: 'acme/widgets', base: fixture.base, head: fixture.head1, review: true });
+    expect(first.review).toBe('queued');
+    const again = await tool<{ review: string }>(alice, 'create_session', { repo: 'acme/widgets', base: fixture.base, head: fixture.head1, review: true });
+    expect(again.review).toBe('already queued');
+    expect((await reviewRequests(first.session)).filter(request => request.answered_at === null)).toHaveLength(1);
+
+    expect((await poll((await userToken(bob)).token)).status).toBe(204);
+    expect((await info(first.session)).review?.state).toBe('queued');
+    await server.db.query("UPDATE live_requests SET created_at = $1 WHERE session_id = $2 AND kind = 'review'", [
+      new Date(Date.now() - REVIEW_STALE_MS - 1000).toISOString(),
+      first.session,
+    ]);
+    expect((await info(first.session)).review?.state).toBe('stale');
+
+    const res = await poll((await userToken()).token);
+    expect(await res.json()).toMatchObject({ kind: 'review', session: first.session });
+    expect((await info(first.session)).review?.state).toBe('queued');
+    await tool(alice, 'review_start', { session: first.session });
+    await tool(alice, 'review_done', { session: first.session });
+  });
+
+  it('brings questions from any session to the queue’s agent, and counts it as listening there', async () => {
+    const session = (await tool<{ session: string }>(alice, 'create_session', { repo: 'acme/widgets', base: fixture.base, head: fixture.head2 })).session;
+    const { token } = await userToken();
+    const held = poll(token, undefined, 10);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const thread = (await (await fetch(`${server.base}/s/${session}/api/threads`, {
+      method: 'POST',
+      headers: { cookie: aliceCookie, 'Sec-Fetch-Site': 'same-origin', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: session, filePath: 'src.ts', side: 'new', startLine: 10, endLine: 10, body: 'Why?', author: { name: 'You', type: 'user' }, ask: true }),
+    })).json()) as CommentThread;
+    expect(await (await held).json()).toMatchObject({ kind: 'ask', session, thread: thread.id, question: 'Why?' });
+    await tool(alice, 'reply', { id: thread.id, body: 'Because.', aside: true });
+
+    const status = await (await fetch(`${server.base}/s/${session}/api/live/status`, { headers: { cookie: aliceCookie } })).json();
+    expect(status.listening).toBe(true);
   });
 });

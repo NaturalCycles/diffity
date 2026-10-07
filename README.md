@@ -40,7 +40,7 @@ containing any of a list of patterns (one per line, ignoring case) are left out,
 unless they tick **List drafts too**. The `list_review_requests` tool answers the same list, so an
 agent can be asked to review what is waiting.
 
-### Live questions
+### Live questions and the attendant
 
 A reader can ask the agent that wrote the review about a finding: **Ask Claude** on a comment or
 reply sends it as an aside and queues it for that session. The agent waits without blocking its
@@ -51,11 +51,25 @@ in a claude.ai cloud session, where nothing of diffity is installed). The comman
 and exits only when a question arrives, printing it as JSON. The agent answers with `reply`, which
 marks the question answered on the page, and runs the command again. A handed-out question that
 gets no answer within 10 minutes is handed out again. The page's toolbar shows **Agent listening**
-while the session was polled in the last minute; without it, Ask Claude is disabled.
+while the session, or the user's queue, was polled in the last minute; without it, Ask Claude is
+disabled.
+
+One agent can also attend the user's whole queue. `live_token {}`, without a session, returns the
+same command polling `GET /live/await?wait=25`; it hands out the user's oldest request across every
+session: questions from any review page, and sessions handed over for review. While an agent polls
+the queue, the **Sessions** page says **Agent listening** and each waiting pull request's button
+becomes **Create and review**: it creates the session, queues it for the agent, and opens the page,
+whose banner follows the review from *Queued for your agent* through *Reviewing… n findings so far*
+to **Review ready · Reload**, which takes in the findings and the reading order. An agent hands a
+session over the same way with `create_session { …, review: true }`. One review waits per session;
+`review_done` settles it, a review an agent has started is not handed to another, and one nobody
+holds 15 minutes after it was queued shows as not picked up. The `review` prompt's **Attend**
+section is the agent's side of it.
 
 `/live/await` bypasses IAP on the load balancer and takes only the live token as a bearer: no
-cookie, no MCP token. A live token is stored hashed, expires after 12 hours, and allows waiting on
-its one session and nothing else; once it is refused (401), the command exits with status 1.
+cookie, no MCP token. A live token is stored hashed, expires after 12 hours, and allows waiting and
+nothing else: on its one session, or for a queue token on the user's queue and any of the user's
+sessions. Once it is refused (401), the command exits with status 1.
 
 A repository can name its review standards in a `.diffity.json` at its root, which the
 `get_standards` tool reads:

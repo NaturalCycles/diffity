@@ -8,6 +8,7 @@ import { useWrapLines } from '../../hooks/use-wrap-lines';
 import { useKeyboard } from '../../hooks/use-keyboard';
 import { useReviewThreads } from '../../hooks/use-review-threads';
 import { useTours } from '../../hooks/use-tours';
+import { useHeld, useReviewArrival } from '../../hooks/use-review-arrival';
 import { useHideWhitespace } from '../../hooks/use-hide-whitespace';
 import { pickActiveTour, orderPathsByTour, stopsByPath } from '../../lib/tour-order';
 import { TOUR_NOT_STARTED, clampTourStep } from '../../lib/tour-navigation';
@@ -19,7 +20,7 @@ import { Toolbar } from '../layout/toolbar';
 import { DiffView, type DiffViewHandle } from './diff-view';
 import { Sidebar } from '../layout/sidebar';
 import { ShortcutModal } from '../layout/shortcut-modal';
-import { ReviewProgressBanner } from '../layout/review-progress-banner';
+import { ReviewBanner } from '../layout/review-banner';
 import { PullRequestPanel } from '../layout/pull-request-panel';
 import { CheckCircleIcon } from '../icons/check-circle-icon';
 import { PageLoader } from '../layout/skeleton';
@@ -82,7 +83,10 @@ export function DiffPage() {
 
   const commentCountsByFile = useMemo(() => buildThreadCountsByFile(threads), [threads]);
 
-  const { data: tours } = useTours(reviewsEnabled ? sessionId : null);
+  const arrival = useReviewArrival(info?.review?.state ?? 'none');
+  const { data: liveTours } = useTours(reviewsEnabled ? sessionId : null);
+  // A review's reading order arrives while it is written; it is applied when the reader reloads.
+  const tours = useHeld(liveTours, arrival.watching);
   const activeTour = useMemo(() => pickActiveTour(tours), [tours]);
   const [reviewOrderEnabled, setReviewOrderEnabled] = useState(true);
   const [tourStepIndex, setTourStepIndex] = useState(TOUR_NOT_STARTED);
@@ -485,14 +489,14 @@ export function DiffPage() {
           branch={info?.branch || null}
           description={whitespaceNotice ?? info?.description ?? null}
           githubDetails={githubDetails}
-          reviewInProgress={!!info?.review?.inProgress}
+          reviewInProgress={info?.review?.state === 'reviewing'}
           agentListening={agentListening}
           sessionId={sessionId}
           onGitHubPulled={() => queryClient.invalidateQueries({ queryKey: ['threads'] })}
         />
         <PullRequestPanel details={githubDetails} hasPullRequest={!!info?.github} repoRoot={repoRoot} />
-        {info?.review?.inProgress && (
-          <ReviewProgressBanner review={info.review} findings={threads.length} />
+        {info?.review && (
+          <ReviewBanner review={info.review} findings={threads.length} ready={arrival.ready} onReload={arrival.reload} />
         )}
         {activeTour && (
           <TourStepper

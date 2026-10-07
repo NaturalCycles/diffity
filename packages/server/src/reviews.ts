@@ -12,12 +12,14 @@ import {
   type CommentSide,
   type CommentThread,
   type ReviewRun,
+  type ReviewState,
   type ThreadStatus,
   type Tour,
   type TourStatus,
   type TourStep,
 } from '@diffity/api';
 import type { Db, Queryable } from './db.js';
+import { REVIEW_STALE_MS } from './live.js';
 
 export type SessionKind = 'pr' | 'shas' | 'patch';
 
@@ -63,6 +65,8 @@ interface SessionRow {
   review_finished_at: string | null;
   review_note: string;
   created_at: string;
+  review_queued_at: string | null;
+  review_claim_expires_at: number | null;
 }
 
 interface ThreadRow {
@@ -116,7 +120,34 @@ interface TourStepRow {
 }
 
 const SESSION_SELECT = `
-  SELECT s.*, r.owner, r.name FROM sessions s JOIN repos r ON r.id = s.repo_id`;
+  SELECT s.*, r.owner, r.name, q.created_at AS review_queued_at, q.claim_expires_at AS review_claim_expires_at
+    FROM sessions s JOIN repos r ON r.id = s.repo_id
+    LEFT JOIN live_requests q ON q.session_id = s.id AND q.kind = 'review' AND q.answered_at IS NULL`;
+
+/**
+ * A review under way wins over a queued one, since only an agent starts it. A queued review nobody
+ * holds goes stale after a while, so the page can stop waiting for it.
+ */
+export function reviewRun(row: Pick<SessionRow, 'review_started_at' | 'review_finished_at' | 'review_note' | 'review_queued_at' | 'review_claim_expires_at'>, now = Date.now()): ReviewRun {
+  return {
+    state: reviewState(row, now),
+    queuedAt: row.review_queued_at,
+    startedAt: row.review_started_at,
+    doneAt: row.review_finished_at,
+    note: row.review_note,
+  };
+}
+
+function reviewState(row: Parameters<typeof reviewRun>[0], now: number): ReviewState {
+  if (row.review_started_at !== null && row.review_finished_at === null) {
+    return 'reviewing';
+  }
+  if (row.review_queued_at !== null) {
+    const held = row.review_claim_expires_at !== null && row.review_claim_expires_at > now;
+    return !held && now - Date.parse(row.review_queued_at) >= REVIEW_STALE_MS ? 'stale' : 'queued';
+  }
+  return row.review_finished_at !== null ? 'done' : 'none';
+}
 
 function rowToSession(row: SessionRow): ReviewSessionRecord {
   let prMeta: PrMeta | null = null;
@@ -138,11 +169,7 @@ function rowToSession(row: SessionRow): ReviewSessionRecord {
     prMeta,
     baseSha: row.base_sha,
     headSha: row.head_sha,
-    review: {
-      inProgress: row.review_started_at !== null && row.review_finished_at === null,
-      startedAt: row.review_started_at,
-      note: row.review_note,
-    },
+    review: reviewRun(row),
     createdAt: row.created_at,
   };
 }

@@ -203,6 +203,22 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE users ADD COLUMN settings JSONB NOT NULL DEFAULT '{}';
     `,
   },
+  {
+    version: 4,
+    sql: `
+      ALTER TABLE live_requests ALTER COLUMN thread_id DROP NOT NULL;
+      ALTER TABLE live_requests ALTER COLUMN comment_id DROP NOT NULL;
+      ALTER TABLE live_requests DROP CONSTRAINT live_requests_kind_check;
+      ALTER TABLE live_requests ADD CONSTRAINT live_requests_kind_check CHECK (
+        (kind = 'ask' AND thread_id IS NOT NULL AND comment_id IS NOT NULL)
+        OR (kind = 'review' AND thread_id IS NULL AND comment_id IS NULL));
+      CREATE UNIQUE INDEX idx_live_requests_open_review ON live_requests(session_id) WHERE kind = 'review' AND answered_at IS NULL;
+      CREATE INDEX idx_live_requests_user ON live_requests(user_id, seq);
+
+      ALTER TABLE live_tokens ALTER COLUMN session_id DROP NOT NULL;
+      ALTER TABLE users ADD COLUMN live_polled_at BIGINT;
+    `,
+  },
 ];
 
 /** Any constant; two instances starting together take turns migrating. */

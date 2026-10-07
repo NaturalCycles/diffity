@@ -6,7 +6,7 @@ import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middlew
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { AuthorizationParams } from '@modelcontextprotocol/sdk/server/auth/provider.js';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
-import { GENERAL_THREAD_FILE_PATH } from '@diffity/api';
+import { GENERAL_THREAD_FILE_PATH, type LiveStatusResponse } from '@diffity/api';
 import type { Config } from './config.js';
 import { WEB_SESSION_MAX_AGE_SECONDS, type Users, type User, type WebSessions } from './users.js';
 import { hashPresentedClientSecret, type OAuthProvider } from './oauth.js';
@@ -252,25 +252,45 @@ export function createApp(deps: AppDeps): express.Express {
   app.get('/live/await', async (req, res) => {
     res.set('Cache-Control', 'no-store');
     const token = /^Bearer (\S+)$/.exec(req.headers.authorization ?? '')?.[1];
-    const sessionId = typeof req.query.session === 'string' ? req.query.session : '';
-    const userId = token && sessionId ? await live.verifyToken(token, sessionId) : null;
+    const sessionId = typeof req.query.session === 'string' && req.query.session ? req.query.session : null;
+    const userId = token ? await live.verifyToken(token, sessionId) : null;
     if (!userId) {
-      res.status(401).json({ error: 'The live token is missing, expired or for another session; get a new one with live_token' });
+      res.status(401).json({
+        error: sessionId
+          ? 'The live token is missing, expired or for another session; get a new one with live_token'
+          : 'The live token is missing, expired or for one session only; get one for your queue with live_token {}',
+      });
       return;
     }
     const asked = Number(req.query.wait ?? MAX_WAIT_SECONDS);
     const wait = Number.isFinite(asked) ? Math.min(Math.max(asked, 0), MAX_WAIT_SECONDS) : MAX_WAIT_SECONDS;
-    await live.recordPoll(userId, sessionId);
+    const listener = { userId, sessionId };
+    await live.recordPoll(listener);
     const gone = new AbortController();
     res.on('close', () => gone.abort());
-    const request = await live.next(userId, sessionId, wait * 1000, gone.signal);
+    const request = await live.next(listener, wait * 1000, gone.signal);
     if (gone.signal.aborted) {
       if (request) {
         await live.release(request.id);
       }
       return;
     }
-    const thread = request ? await reviews.getThread(userId, request.threadId) : null;
+    if (request?.kind === 'review') {
+      const session = await reviews.getSession(userId, request.sessionId);
+      if (session) {
+        res.json({
+          request: request.id,
+          session: session.id,
+          kind: 'review',
+          repo: `${session.owner}/${session.repo}`,
+          pr: session.prNumber,
+          url: service.sessionUrl(session.id),
+          hint: 'Review this session with the method in the review prompt (review_start … review_done), then run the command again.',
+        });
+        return;
+      }
+    }
+    const thread = request?.threadId ? await reviews.getThread(userId, request.threadId) : null;
     const question = thread?.comments.find(comment => comment.id === request!.commentId);
     if (!request || !thread || !question) {
       res.status(204).end();
@@ -278,7 +298,8 @@ export function createApp(deps: AppDeps): express.Express {
     }
     res.json({
       request: request.id,
-      session: sessionId,
+      session: request.sessionId,
+      kind: 'ask',
       thread: thread.id,
       file: thread.filePath === GENERAL_THREAD_FILE_PATH ? null : thread.filePath,
       side: thread.side,
@@ -486,7 +507,7 @@ export function createApp(deps: AppDeps): express.Express {
     res.redirect(303, '/settings');
   });
 
-  const reviewRequestsSection = async (user: User): Promise<string> => {
+  const reviewRequestsSection = async (user: User, listening: boolean): Promise<string> => {
     let found: ReviewRequests | null;
     try {
       found = await service.reviewRequests(user.id);
@@ -509,7 +530,9 @@ export function createApp(deps: AppDeps): express.Express {
         : `<form class="inline" method="post" action="/sessions">
              <input type="hidden" name="repo" value="${escapeHtml(slug)}">
              <input type="hidden" name="pr" value="${request.number}">
-             <button type="submit">Create session</button>
+             ${listening
+               ? '<input type="hidden" name="review" value="1"><button type="submit">Create and review</button>'
+               : '<button type="submit">Create session</button>'}
            </form>`;
       return `
       <tr>
@@ -531,14 +554,18 @@ export function createApp(deps: AppDeps): express.Express {
       notSignedIn(res, req.originalUrl);
       return;
     }
-    const [requests, sessions] = await Promise.all([reviewRequestsSection(user), reviews.listSessions(user.id)]);
+    const listening = (await live.userStatus(user.id)).listening;
+    const [requests, sessions] = await Promise.all([reviewRequestsSection(user, listening), reviews.listSessions(user.id)]);
     const rows = sessions.map(session => `
       <tr>
         <td><a href="/s/${session.id}/">${escapeHtml(`${session.owner}/${session.repo}`)}</a></td>
         <td>${escapeHtml(describeSession(session))}</td>
         <td class="muted">${escapeHtml(session.createdAt.slice(0, 16).replace('T', ' '))}</td>
       </tr>`).join('');
-    sendPage(res, 200, 'Sessions', requests + (sessions.length > 0
+    const agent = listening
+      ? '<p><strong>Agent listening</strong> <span class="muted">· Create and review hands a pull request to it</span></p>'
+      : '';
+    sendPage(res, 200, 'Sessions', agent + requests + (sessions.length > 0
       ? `<h2>Your review sessions</h2><table><tr><th>Repository</th><th>Change</th><th>Created</th></tr>${rows}</table>`
       : `<h2>No review sessions yet</h2><p>Ask your agent to <code>create_session</code> through the diffity MCP connector.
          See <a href="/settings">settings</a> for how to add it.</p>`), user);
@@ -553,6 +580,9 @@ export function createApp(deps: AppDeps): express.Express {
     const repo = typeof req.body?.repo === 'string' ? req.body.repo : '';
     try {
       const { session } = await service.createSession(user.id, { repo, pr: Number(req.body?.pr) });
+      if (req.body?.review === '1') {
+        await live.queueReview(user.id, session.id);
+      }
       res.redirect(303, `/s/${session.id}/`);
     } catch (err) {
       sendPage(res, err instanceof ServiceError ? err.status : 500, 'No session', `
@@ -560,6 +590,16 @@ export function createApp(deps: AppDeps): express.Express {
         <p class="error">${escapeHtml(err instanceof Error ? err.message : String(err))}</p>
         <p><a href="/">Back to your sessions</a></p>`, user);
     }
+  });
+
+  app.get('/api/live/status', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    const user = await userFor(req);
+    if (!user) {
+      res.status(401).json({ error: 'Sign in first' });
+      return;
+    }
+    res.json((await live.userStatus(user.id)) satisfies LiveStatusResponse);
   });
 
   app.use('/s/:sid/api', requireSameOrigin(publicUrl), (_req, res, next) => {

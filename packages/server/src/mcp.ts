@@ -131,6 +131,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
         'Open a review session on pushed code. Give the repository and exactly one of: `pr` (a pull request number); '
         + '`base` and `head` (full commit shas); or `base` and `patch` (a unified diff applied to base, for work that is not pushed). '
         + 'Returns the session id, the URL the user opens to read the review, and the changed files. '
+        + 'With `review: true` the session is queued for the agent waiting on the user\'s queue (live_token {}) to review. '
         + 'The `review` prompt of this server holds the method for reviewing through these tools.',
       inputSchema: {
         repo: z.string().describe('"owner/name" on GitHub'),
@@ -138,12 +139,15 @@ export function createMcpServer(ctx: McpContext): McpServer {
         base: z.string().optional().describe('Full 40-character commit sha'),
         head: z.string().optional().describe('Full 40-character commit sha'),
         patch: z.string().optional().describe('Unified diff (git diff output) against base'),
+        review: z.boolean().optional().describe('Queue the session for the agent waiting on your queue to review'),
       },
     },
-    guarded(async args => {
-      const created = await service.createSession(userId, args);
+    guarded(async ({ review, ...input }) => {
+      const created = await service.createSession(userId, input);
+      const queued = review ? await ctx.live.queueReview(userId, created.session.id) : false;
       return json({
         ...describe(created.session),
+        ...(review ? { review: queued ? 'queued' : 'already queued' } : {}),
         created: created.created,
         carriedThreads: created.carried,
         files: created.files.map(file => ({
@@ -256,7 +260,9 @@ export function createMcpServer(ctx: McpContext): McpServer {
       inputSchema: { session: sessionArg },
     },
     guarded(async args => {
-      await reviews.finishReview(userId, (await session(args.session)).id);
+      const record = await session(args.session);
+      await reviews.finishReview(userId, record.id);
+      await ctx.live.answerReview(userId, record.id);
       return text('Review marked as finished');
     }),
   );
@@ -495,23 +501,27 @@ export function createMcpServer(ctx: McpContext): McpServer {
     'live_token',
     {
       description:
-        'Wait for the reader\'s questions on a session. Returns a shell command to run in the background: it exits when '
-        + 'the reader asks something, printing the question and its thread. Answer with `reply`, then run the command again. '
-        + 'The token only waits on this session and expires after 12 hours; the command exits non-zero once it is refused.',
-      inputSchema: { session: sessionArg },
+        'Wait for work from the reader. Returns a shell command to run in the background: it exits when something arrives, '
+        + 'printing it as JSON. With `session` it waits for questions on that session; without, for everything of yours: '
+        + 'questions on any session (`kind: "ask"`) and sessions handed over for review (`kind: "review"`). '
+        + 'Answer a question with `reply`, review a session with the review prompt\'s method, then run the command again. '
+        + 'The token only waits and expires after 12 hours; the command exits non-zero once it is refused.',
+      inputSchema: { session: sessionArg.optional() },
     },
     guarded(async args => {
-      const record = await session(args.session);
-      const { token, expiresAt } = await ctx.live.issueToken(userId, record.id);
-      const pollUrl = new URL(`/live/await?session=${record.id}&wait=${MAX_WAIT_SECONDS}`, service.publicUrl).href;
+      const record = args.session === undefined ? null : await session(args.session);
+      const { token, expiresAt } = await ctx.live.issueToken(userId, record?.id ?? null);
+      const query = record ? `session=${record.id}&wait=${MAX_WAIT_SECONDS}` : `wait=${MAX_WAIT_SECONDS}`;
+      const pollUrl = new URL(`/live/await?${query}`, service.publicUrl).href;
       return json({
-        session: record.id,
+        session: record?.id ?? null,
         token,
         expiresAt: new Date(expiresAt).toISOString(),
         pollUrl,
         command: awaitCommand(token, pollUrl),
         run: 'Run `command` as a background command (Claude Code: Bash with run_in_background). When it exits 0 its output '
-          + 'is the question; answer it with `reply`, then run the same command again. Exit 1 means the token is no longer valid.',
+          + 'is the request: a question to answer with `reply`, or a session to review. Then run the same command again. '
+          + 'Exit 1 means the token is no longer valid.',
       });
     }),
   );

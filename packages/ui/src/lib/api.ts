@@ -22,6 +22,7 @@ export type {
   PrComment,
   ReviewEvent,
   ReviewRun,
+  ReviewState,
   Tour,
   TourStep,
 } from '@diffity/api';

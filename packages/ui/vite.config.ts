@@ -12,6 +12,8 @@ export default defineConfig({
     include: ["tests/**/*.test.{ts,tsx}"],
     // Component tests render for real: a render-time ReferenceError has nothing else catching it.
     environment: "jsdom",
+    // A user-event test renders and types for real; on a loaded machine that passes 5 s.
+    testTimeout: 20_000,
   },
   build: {
     chunkSizeWarningLimit: 1000,

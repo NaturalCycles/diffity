@@ -14,7 +14,7 @@ The connector is usually added as `diffity`, so in Claude Code the tools are nam
 `mcp__diffity__<tool>`.
 
 ```
-create_session  { repo: "owner/name", pr? , base?, head?, patch? }  → { session, url, base, head, files }
+create_session  { repo: "owner/name", pr? , base?, head?, patch?, review? }  → { session, url, base, head, files }
 list_sessions   { repo? }
 list_review_requests {}                       open pull requests waiting for the user's review
 get_diff        { session, file? }            unified diff; line numbers are in the @@ headers
@@ -33,11 +33,14 @@ tour_start      { session, topic, body? }     → { tour }
 tour_step       { tour, file, line, endLine?, body, annotation? }
 tour_done       { tour }
 tour_delete     { tour }
-live_token      { session }                   → { command }: waits for the reader's questions
+live_token      { session? }                  → { command }: waits for the reader's questions; without
+                                              a session, for everything of the user's (see Attend)
 ```
 
 - `create_session` takes the repository and **exactly one** of: `pr`; `base` and `head` (full
   40-character shas, both pushed); or `base` and `patch` (a unified diff against a pushed base).
+- `create_session { …, review: true }` also hands the session to the agent attending the user's queue
+  (see Attend), as the Sessions page's **Create and review** button does.
 - `session`, thread and tour ids accept the full id or its first 8 characters.
 - Every tool reports a mistake as an error result with a message. Read it and correct the call; do
   not retry blindly.
@@ -189,3 +192,28 @@ Answer what was asked; do not change code from here.
 Stop when the user says so, or when the command exits with status 1: the token has expired or was
 refused. Tell the user the page no longer reaches you, and offer to start again with a new
 `live_token`.
+
+## Attend: wait on the user's queue
+
+When the user asks you to attend — wait for whatever they hand you rather than review one change —
+call `live_token {}` with no session, and run the `command` it returns **as a background command**
+(in Claude Code: Bash with `run_in_background`). It waits on everything of the user's: the sessions
+they hand over with **Create and review** on the Sessions page (or with `create_session { review:
+true }`), and the questions they ask on any of their review pages.
+
+When it exits with status 0, its output is one request as JSON:
+
+- `kind: "review"` — a session to review: `session`, `repo`, `pr` and `url`. The session exists
+  already; review it with Steps 2–5 above, from `review_start` to `review_done`. The page shows the
+  review arriving, and `review_done` tells it the review is ready. Work from `get_diff` and
+  `get_file` when your checkout is not of that repository.
+- `kind: "ask"` — a question on a finding: answer it with `reply { id: <thread>, body, aside: true }`
+  as in Step 7.
+
+Then run the same command again in the background. Claude Code stops a background command after a
+while; when it was stopped rather than exiting with a request, run it again too, so the page keeps
+showing that an agent is listening.
+
+Stop when the user says so, or when the command exits with status 1: the token has expired or was
+refused. Tell the user the queue no longer reaches you, and offer to start again with a new
+`live_token {}`.
