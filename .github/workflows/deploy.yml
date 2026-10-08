@@ -120,7 +120,9 @@ jobs:
             --set-secrets "$secrets"
 
       - name: announce deploy outcome in Slack
-        if: always()
+        if: always() && env.SLACK_API_TOKEN != ''
+        env:
+          SLACK_API_TOKEN: ${{ secrets.SLACK_API_TOKEN }}
         uses: NaturalCycles/ci-typescript/actions/slack-deployment-outcome@v2
         with:
           PROJECT_NAME: diffity
