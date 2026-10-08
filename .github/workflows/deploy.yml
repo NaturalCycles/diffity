@@ -119,13 +119,16 @@ jobs:
             --set-env-vars "$env_vars" \
             --set-secrets "$secrets"
 
+      # A plain API call: this repository is public, and actions in the org's private
+      # ci-typescript repository cannot be used from a public one.
       - name: announce deploy outcome in Slack
         if: always() && env.SLACK_API_TOKEN != ''
         env:
           SLACK_API_TOKEN: ${{ secrets.SLACK_API_TOKEN }}
-        uses: NaturalCycles/ci-typescript/actions/slack-deployment-outcome@v2
-        with:
-          PROJECT_NAME: diffity
-          SLACK_API_TOKEN: ${{ secrets.SLACK_API_TOKEN }}
           OUTCOME: ${{ steps.deploy.outcome }}
-          FAILURE_MSG: 'diffity deployment failed — check the Actions run for the failing step.'
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ "$OUTCOME" = success ]; then text="diffity deployed to Cloud Run"; else text="diffity deployment failed: $RUN_URL"; fi
+          curl -sS -X POST https://slack.com/api/chat.postMessage \
+            -H "Authorization: Bearer $SLACK_API_TOKEN" -H 'Content-Type: application/json; charset=utf-8' \
+            -d "$(printf '{"channel":"%s","text":"%s"}' "${{ vars.DIFFITY_SLACK_CHANNEL || '#deployments' }}" "$text")" > /dev/null
