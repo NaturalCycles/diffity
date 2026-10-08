@@ -10,6 +10,9 @@ import { useReviewThreads } from '../../hooks/use-review-threads';
 import { useTours } from '../../hooks/use-tours';
 import { useHeld, useReviewArrival } from '../../hooks/use-review-arrival';
 import { useHideWhitespace } from '../../hooks/use-hide-whitespace';
+import { useAnswerAlerts } from '../../hooks/use-answer-alerts';
+import { useTabBadge } from '../../hooks/use-tab-badge';
+import { isThreadOnScreen, type AnswerAlert } from '../../lib/answer-alerts';
 import { pickActiveTour, orderPathsByTour, stopsByPath } from '../../lib/tour-order';
 import { TOUR_NOT_STARTED, clampTourStep } from '../../lib/tour-navigation';
 import { readReadingPosition, writeReadingPosition } from '../../lib/reading-position';
@@ -22,6 +25,7 @@ import { Sidebar } from '../layout/sidebar';
 import { ShortcutModal } from '../layout/shortcut-modal';
 import { ReviewBanner } from '../layout/review-banner';
 import { PullRequestPanel } from '../layout/pull-request-panel';
+import { AnswerBubble } from '../layout/answer-bubble';
 import { CheckCircleIcon } from '../icons/check-circle-icon';
 import { PageLoader } from '../layout/skeleton';
 import { type ViewMode, getFilePath, getAutoCollapsedPaths } from '../../lib/diff-utils';
@@ -79,6 +83,8 @@ export function DiffPage() {
   const { data: serverThreads, isFetched: threadsFetched } = useReviewThreads(reviewsEnabled ? sessionId : null);
   const threads = reviewsEnabled && serverThreads ? serverThreads : [];
   const commentActions = useCommentActions(sessionId, reviewsEnabled);
+  const answerAlerts = useAnswerAlerts(reviewsEnabled ? serverThreads : undefined, isThreadOnScreen);
+  useTabBadge(answerAlerts.unseenWhileHidden);
   const liveStatus = useQuery(liveStatusOptions(sessionId)).data;
   const agentListening = !!liveStatus?.listening;
   const requestReview = useRequestReview();
@@ -426,6 +432,12 @@ export function DiffPage() {
     diffViewRef.current?.scrollToThread(threadId, filePath);
   }, []);
 
+  const { clear: clearAnswerAlert } = answerAlerts;
+  const handleGoToAnswer = useCallback((alert: AnswerAlert) => {
+    clearAnswerAlert(alert.threadId);
+    handleScrollToThread(alert.threadId, alert.filePath);
+  }, [clearAnswerAlert, handleScrollToThread]);
+
   const handleSidebarCommentedFileClick = useCallback((path: string) => {
     const threadId = firstOpenThreadByFile.get(path);
     if (!threadId) {
@@ -557,6 +569,7 @@ export function DiffPage() {
               onTourMarkClick={handleTourStepChange}
             />
           ) : null}
+          <AnswerBubble alerts={answerAlerts.alerts} onGo={handleGoToAnswer} onDismiss={answerAlerts.dismiss} />
           </div>
         </div>
         {showHelp && <ShortcutModal onClose={() => setShowHelp(false)} />}
