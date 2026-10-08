@@ -10,6 +10,15 @@ repository it has been asked about.
 
 Grown from Kamran Ahmed's [nilbuild/diffity](https://github.com/nilbuild/diffity).
 
+## Branches
+
+- `develop`, the default branch, is this server. It deploys to Cloud Run through `deploy.yml` and
+  never publishes to npm.
+- `cli` is the local tool, `@naturalcycles/diffity` on npm: a single-user diffity with a working
+  tree, an inbox daemon and the `diffity agent` commands. Its releases run from that branch alone.
+  The two share the `parser` and `api` packages by history, not by merges; a fix wanted on both is
+  made twice.
+
 ## Using it
 
 Add the connector to Claude Code (or any MCP client that does OAuth):
