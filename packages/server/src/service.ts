@@ -1,15 +1,17 @@
 import { parseDiff } from '@diffity/parser';
-import type {
-  CommentThread,
-  DiffResponse,
-  GitHubDetails,
-  PullCommentsResult,
-  ReviewResult,
-  ReviewSubmission,
-  Suppressed,
+import {
+  GENERAL_THREAD_FILE_PATH,
+  type CommentThread,
+  type DiffResponse,
+  type GitHubDetails,
+  type PullCommentsResult,
+  type ReviewResult,
+  type ReviewSubmission,
+  type Suppressed,
 } from '@diffity/api';
 import { isSha, isSafeRepoPath, isRepoName, keyedSerializer, type Mirrors, type NameStatus } from './git.js';
 import type { GitHubAccess, GitHubApi, ReviewCommentPayload, ReviewRequest } from './github.js';
+import type { GitHubAppBot } from './github-app.js';
 import { prKey, type PrMeta, type ReviewSessionRecord, type Reviews } from './reviews.js';
 import type { Users, UserSettings } from './users.js';
 import { followRename, reanchor, splitLines } from './anchor.js';
@@ -153,6 +155,7 @@ export class ReviewService {
     private readonly access: GitHubAccess,
     readonly publicUrl: URL,
     private readonly users: Users,
+    private readonly bot: GitHubAppBot | null = null,
   ) {}
 
   settingsUrl(): string {
@@ -471,6 +474,61 @@ export class ReviewService {
     if (submission.event === 'COMMENT' && submission.comments.length === 0 && !submission.body.trim()) {
       throw new ServiceError('A comment review needs a summary or at least one comment');
     }
+    return this.submitReview(session, submission, { token, login: this.github.viewerLogin(token), footer: '' });
+  }
+
+  /**
+   * The session's open findings, posted by the GitHub App as itself rather than as anyone, with a
+   * footer naming who asked for it. A general comment is posted once, as the summary; findings
+   * already on the pull request are skipped, so a second run on the same head adds only what is new.
+   */
+  async postReviewAsBot(
+    session: ReviewSessionRecord,
+    input: { event: 'COMMENT' | 'REQUEST_CHANGES'; body?: string },
+  ): Promise<ReviewResult> {
+    if (!this.bot) {
+      throw new ServiceError('Bot posting is not configured on this server');
+    }
+    if (session.prNumber === null) {
+      throw new ServiceError('Only a pull request session can be posted to or pulled from GitHub');
+    }
+    const threads = await this.reviews.threadsForSession(session.userId, session.id, 'open');
+    const general = threads.filter(thread => thread.filePath === GENERAL_THREAD_FILE_PATH && !thread.submittedAt && findingOf(thread));
+    const comments = threads.flatMap(thread => {
+      const finding = findingOf(thread);
+      return thread.filePath === GENERAL_THREAD_FILE_PATH || !finding ? [] : [{
+        threadId: thread.id,
+        filePath: thread.filePath,
+        side: thread.side === 'old' ? 'LEFT' as const : 'RIGHT' as const,
+        startLine: thread.startLine !== thread.endLine ? thread.startLine : null,
+        endLine: thread.endLine,
+        body: finding,
+      }];
+    });
+    const body = input.body ?? general.map(findingOf).join('\n\n');
+    const requester = (await this.users.get(session.userId))?.githubLogin;
+    const token = await this.bot.installationToken(session.owner, session.repo);
+    const result = await this.submitReview(session, { event: input.event, body, comments }, {
+      token,
+      login: Promise.resolve(this.bot.login),
+      footer: `— diffity review, requested by ${requester ? `@${requester}` : 'a diffity user'}`,
+    });
+    if (result.reviewUrl && input.body === undefined && general.length > 0) {
+      await this.reviews.markThreadsSubmitted(
+        session.userId,
+        general.map(thread => ({ threadId: thread.id, body: findingOf(thread) })),
+        { reviewUrl: result.reviewUrl, headSha: session.headSha },
+      );
+    }
+    return result;
+  }
+
+  private async submitReview(
+    session: ReviewSessionRecord,
+    submission: ReviewSubmission,
+    as: { token: string; login: Promise<string | null>; footer: string },
+  ): Promise<ReviewResult> {
+    const { token } = as;
     const { owner, repo } = session;
     const prNumber = session.prNumber!;
     return this.githubLock(session.userId)(async () => {
@@ -488,7 +546,7 @@ export class ReviewService {
       const [patch, existing, viewerLogin] = await Promise.all([
         this.diffText(session),
         this.github.pullComments(token, owner, repo, prNumber),
-        this.github.viewerLogin(token),
+        as.login,
       ]);
       const commentable = commentableLines(patch);
       const threadIds = await this.reviews.threadsOnTheForge(
@@ -540,7 +598,7 @@ export class ReviewService {
         review = await this.github.createReview(token, owner, repo, prNumber, {
           commit_id: session.headSha,
           event: submission.event,
-          body,
+          body: [body, as.footer].filter(Boolean).join('\n\n'),
           comments: payload,
         });
       } catch (err) {
@@ -639,6 +697,11 @@ export class ReviewService {
       return { pulled, skipped, resolved: settled.length, resolutionUnavailable: remoteState === null, unmapped: unmappable.size };
     });
   }
+}
+
+/** Only the finding travels, never the conversation that followed it. */
+function findingOf(thread: CommentThread): string | undefined {
+  return thread.comments.find(comment => comment.kind === 'review')?.body;
 }
 
 function sessionMode(input: CreateSessionInput): 'pr' | 'shas' | 'patch' {

@@ -219,6 +219,19 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE users ADD COLUMN live_polled_at BIGINT;
     `,
   },
+  {
+    version: 5,
+    sql: `
+      CREATE TABLE automation_tokens (
+        token_hash TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        last_used_at TEXT,
+        UNIQUE (user_id, name)
+      );
+    `,
+  },
 ];
 
 /** Any constant; two instances starting together take turns migrating. */

@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createPrivateKey, randomBytes } from 'node:crypto';
 
 export interface Config {
   publicUrl: URL;
@@ -34,6 +34,13 @@ export interface GitHubAppConfig {
   clientSecret: string;
   /** For the install link; the app's name in its github.com URL. */
   slug: string | null;
+  /** Lets agents post reviews as the App itself; null without the App id and private key. */
+  bot: GitHubBotConfig | null;
+}
+
+export interface GitHubBotConfig {
+  appId: number;
+  privateKey: string;
 }
 
 export class ConfigError extends Error {}
@@ -114,12 +121,36 @@ function parseGitHubApp(env: NodeJS.ProcessEnv): GitHubAppConfig | null {
   const clientId = env.DIFFITY_GITHUB_APP_CLIENT_ID?.trim();
   const clientSecret = env.DIFFITY_GITHUB_APP_CLIENT_SECRET?.trim();
   if (!clientId && !clientSecret) {
+    if (env.DIFFITY_GITHUB_APP_ID?.trim() || env.DIFFITY_GITHUB_APP_PRIVATE_KEY?.trim()) {
+      throw new ConfigError('DIFFITY_GITHUB_APP_ID needs the App configured: DIFFITY_GITHUB_APP_CLIENT_ID and DIFFITY_GITHUB_APP_CLIENT_SECRET');
+    }
     return null;
   }
   if (!clientId || !clientSecret) {
     throw new ConfigError('DIFFITY_GITHUB_APP_CLIENT_ID and DIFFITY_GITHUB_APP_CLIENT_SECRET go together');
   }
-  return { clientId, clientSecret, slug: env.DIFFITY_GITHUB_APP_SLUG?.trim() || null };
+  return { clientId, clientSecret, slug: env.DIFFITY_GITHUB_APP_SLUG?.trim() || null, bot: parseGitHubBot(env) };
+}
+
+function parseGitHubBot(env: NodeJS.ProcessEnv): GitHubBotConfig | null {
+  const appId = env.DIFFITY_GITHUB_APP_ID?.trim();
+  // A secret pasted as one line keeps its line breaks as literal \n.
+  const privateKey = env.DIFFITY_GITHUB_APP_PRIVATE_KEY?.trim().replace(/\\n/g, '\n');
+  if (!appId && !privateKey) {
+    return null;
+  }
+  if (!appId || !privateKey) {
+    throw new ConfigError('DIFFITY_GITHUB_APP_ID and DIFFITY_GITHUB_APP_PRIVATE_KEY go together');
+  }
+  if (!/^\d+$/.test(appId)) {
+    throw new ConfigError(`DIFFITY_GITHUB_APP_ID must be the App's numeric id, got ${appId}`);
+  }
+  try {
+    createPrivateKey(privateKey);
+  } catch {
+    throw new ConfigError('DIFFITY_GITHUB_APP_PRIVATE_KEY is not a PEM private key');
+  }
+  return { appId: Number(appId), privateKey };
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {

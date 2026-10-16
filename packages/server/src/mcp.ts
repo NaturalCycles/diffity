@@ -7,10 +7,12 @@ import { AmbiguousIdError, type ReviewSessionRecord } from './reviews.js';
 import { ServiceError, describeSession, type ReviewService } from './service.js';
 import { clampToFile, readAnchor, splitLines } from './anchor.js';
 import { MAX_WAIT_SECONDS, awaitCommand, type Live } from './live.js';
+import type { AutomationTokens } from './automation.js';
 
 export interface McpContext {
   service: ReviewService;
   live: Live;
+  automationTokens: AutomationTokens;
   userId: string;
   /** Who the comments are from, as the connecting client named itself when it registered. */
   agentName: string;
@@ -526,6 +528,77 @@ export function createMcpServer(ctx: McpContext): McpServer {
           + 'is the request: a question to answer with `reply`, or a session to review. Then run the same command again. '
           + 'Exit 1 means the token is no longer valid.',
       });
+    }),
+  );
+
+  server.registerTool(
+    'post_review',
+    {
+      description:
+        "Post the session's open findings to its pull request as one review by the diffity GitHub App, never as the user; "
+        + 'the review names who asked for it. Findings already on the pull request are skipped. Without `body`, the '
+        + "session's general comments are the review's summary. For automated runs; in an interactive review the reader posts from the page.",
+      inputSchema: {
+        session: sessionArg,
+        event: z.enum(['COMMENT', 'REQUEST_CHANGES']),
+        body: z.string().optional().describe('The review summary'),
+      },
+    },
+    guarded(async args => {
+      const result = await service.postReviewAsBot(await session(args.session), args);
+      if (!result.reviewUrl && result.failed > 0) {
+        throw new ServiceError(`Nothing was posted:\n${result.errors.join('\n')}`);
+      }
+      return json({
+        posted: result.submitted,
+        skipped: result.skipped,
+        url: result.reviewUrl,
+        ...(result.errors.length > 0 ? { errors: result.errors } : {}),
+      });
+    }),
+  );
+
+  const tokenName = z.string().trim().min(1).max(100).describe('What the token is for, e.g. "pr-review routine"');
+
+  server.registerTool(
+    'automation_token',
+    {
+      description:
+        'Mint a bearer token for an agent that cannot sign in, such as a scheduled routine: it reaches this MCP endpoint '
+        + 'as you, with every tool, until revoked. Shown once; store it as a secret.',
+      inputSchema: { name: tokenName },
+    },
+    guarded(async args => {
+      const token = await ctx.automationTokens.mint(userId, args.name);
+      return json({
+        name: args.name,
+        token,
+        use: `Send it as "Authorization: Bearer <token>" to ${new URL('/mcp', service.publicUrl).href}. It is not shown again.`,
+      });
+    }),
+  );
+
+  server.registerTool(
+    'automation_tokens',
+    {
+      description: 'List your automation tokens, without the tokens themselves.',
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+    },
+    guarded(async () => json(await ctx.automationTokens.list(userId))),
+  );
+
+  server.registerTool(
+    'automation_token_revoke',
+    {
+      description: 'Revoke one of your automation tokens by name.',
+      inputSchema: { name: tokenName },
+    },
+    guarded(async args => {
+      if (!(await ctx.automationTokens.revoke(userId, args.name))) {
+        throw new ServiceError(`You have no automation token named "${args.name}"`);
+      }
+      return text(`Revoked automation token "${args.name}"`);
     }),
   );
 

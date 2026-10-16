@@ -7,7 +7,8 @@ import { OAuthProvider } from './oauth.js';
 import { Reviews } from './reviews.js';
 import { Mirrors, githubRemoteUrl, type RemoteUrlBuilder } from './git.js';
 import { GitHubApi, StoredTokenAccess, type GitHubAccess } from './github.js';
-import { GitHubAppAccess } from './github-app.js';
+import { GitHubAppAccess, GitHubAppBot } from './github-app.js';
+import { AutomationTokens } from './automation.js';
 import { ReviewService } from './service.js';
 import { DevLoginProvider, IapLogin } from './login.js';
 import { Live } from './live.js';
@@ -56,8 +57,9 @@ export async function startServer(
         fallbackToken: config.devGitHubToken,
       })
     : null;
+  const bot = config.githubApp?.bot ? new GitHubAppBot(config.githubApp.bot, { api, slug: config.githubApp.slug }) : null;
   const access = overrides.gitHubAccess ?? githubApp ?? new StoredTokenAccess(users, config.devGitHubToken);
-  const service = new ReviewService(reviews, mirrors, api, access, config.publicUrl, users);
+  const service = new ReviewService(reviews, mirrors, api, access, config.publicUrl, users, bot);
   const live = new Live(db);
 
   const app = createApp({
@@ -65,6 +67,7 @@ export async function startServer(
     users,
     webSessions,
     oauth,
+    automationTokens: new AutomationTokens(db),
     service,
     live,
     devLogin: config.devLogin ? new DevLoginProvider(config) : null,

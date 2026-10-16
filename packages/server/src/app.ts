@@ -10,6 +10,7 @@ import { GENERAL_THREAD_FILE_PATH, type LiveStatusResponse } from '@diffity/api'
 import type { Config } from './config.js';
 import { WEB_SESSION_MAX_AGE_SECONDS, type Users, type User, type WebSessions } from './users.js';
 import { hashPresentedClientSecret, type OAuthProvider } from './oauth.js';
+import type { AutomationTokens } from './automation.js';
 import { ServiceError, describeSession, type ReviewRequests, type ReviewService } from './service.js';
 import type { DevLoginProvider, IapLogin } from './login.js';
 import { GitHubConnectError, type GitHubAppAccess } from './github-app.js';
@@ -33,6 +34,7 @@ export interface AppDeps {
   users: Users;
   webSessions: WebSessions;
   oauth: OAuthProvider;
+  automationTokens: AutomationTokens;
   service: ReviewService;
   live: Live;
   devLogin: DevLoginProvider | null;
@@ -203,7 +205,22 @@ export function createApp(deps: AppDeps): express.Express {
   });
 
   const bearer = requireBearerAuth({
-    verifier: oauth,
+    verifier: {
+      verifyAccessToken: async token => {
+        const automation = await deps.automationTokens.verify(token);
+        if (!automation) {
+          return oauth.verifyAccessToken(token);
+        }
+        return {
+          token,
+          clientId: `automation:${automation.name}`,
+          scopes: [],
+          // The SDK requires an expiry; an automation token lasts until it is revoked.
+          expiresAt: Number.MAX_SAFE_INTEGER,
+          extra: { userId: automation.userId, automation: true, automationName: automation.name },
+        };
+      },
+    },
     resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(mcpUrl),
   });
 
@@ -213,11 +230,13 @@ export function createApp(deps: AppDeps): express.Express {
       res.status(401).json({ error: 'The token belongs to no user' });
       return;
     }
+    const automationName = req.auth!.extra!.automation === true ? String(req.auth!.extra!.automationName) : null;
     const server = createMcpServer({
       service,
       live,
+      automationTokens: deps.automationTokens,
       userId,
-      agentName: (await oauth.clientsStore.clientName(req.auth!.clientId)) ?? 'Claude',
+      agentName: automationName ?? (await oauth.clientsStore.clientName(req.auth!.clientId)) ?? 'Claude',
       version: deps.version,
     });
     // Stateless: every request is complete in itself, so nothing is held between them.

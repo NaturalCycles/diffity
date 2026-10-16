@@ -1,4 +1,7 @@
+import { generateKeyPairSync, verify } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { GitHubApi } from '../src/github.js';
+import { GitHubAppBot, appJwt } from '../src/github-app.js';
 import { login, removeDir, startFakeGitHub, startTestServer, tempDir, type FakeGitHub, type TestServer } from './helpers.js';
 
 let github: FakeGitHub;
@@ -44,7 +47,7 @@ beforeAll(async () => {
   };
   dataDir = tempDir('github-app');
   server = await startTestServer(dataDir, github.url, {}, {
-    githubApp: { clientId: 'Iv1.client', clientSecret: 'app-secret', slug: 'diffity-nc' },
+    githubApp: { clientId: 'Iv1.client', clientSecret: 'app-secret', slug: 'diffity-nc', bot: null },
   });
   aliceCookie = await login(server.base, 'alice@example.com');
   bobCookie = await login(server.base, 'bob@example.com');
@@ -138,5 +141,56 @@ describe('connecting GitHub through the app', () => {
     expect(res.status).toBe(303);
     expect(await server.githubApp!.tokenFor(aliceId)).toBeNull();
     expect(await (await get('/settings', aliceCookie)).text()).toContain('Not connected');
+  });
+});
+
+describe('the App acting as itself', () => {
+  const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const bot = { appId: 5312078, privateKey: privateKey.export({ type: 'pkcs1', format: 'pem' }).toString() };
+
+  function decode(part: string): Record<string, unknown> {
+    return JSON.parse(Buffer.from(part, 'base64url').toString('utf8')) as Record<string, unknown>;
+  }
+
+  it('signs a JWT that verifies against the App key, issued a minute back and good for nine minutes', () => {
+    const jwt = appJwt(bot, 1_700_000_000_500);
+    const [header, claims, signature] = jwt.split('.');
+    expect(decode(header)).toEqual({ alg: 'RS256', typ: 'JWT' });
+    expect(decode(claims)).toEqual({ iat: 1_700_000_000 - 60, exp: 1_700_000_000 + 540, iss: 5312078 });
+    expect(verify('RSA-SHA256', Buffer.from(`${header}.${claims}`), publicKey, Buffer.from(signature, 'base64url'))).toBe(true);
+    const other = generateKeyPairSync('rsa', { modulusLength: 2048 }).publicKey;
+    expect(verify('RSA-SHA256', Buffer.from(`${header}.${claims}`), other, Buffer.from(signature, 'base64url'))).toBe(false);
+  });
+
+  it('mints an installation token once however many ask, keeps it, and mints again shortly before it expires', async () => {
+    github.installations['acme/widgets'] = 42;
+    let now = Date.now();
+    const app = new GitHubAppBot(bot, { api: new GitHubApi(github.url), slug: 'diffity', now: () => now });
+    expect(app.login).toBe('diffity[bot]');
+    const before = github.installationTokenRequests.length;
+
+    const [first, second] = await Promise.all([app.installationToken('acme', 'widgets'), app.installationToken('Acme', 'Widgets')]);
+    expect(second).toBe(first);
+    expect(await app.installationToken('acme', 'widgets')).toBe(first);
+    const minted = github.installationTokenRequests.slice(before);
+    expect(minted).toHaveLength(1);
+    expect(minted[0].installationId).toBe(42);
+    const [header, claims, signature] = minted[0].jwt!.split('.');
+    expect(verify('RSA-SHA256', Buffer.from(`${header}.${claims}`), publicKey, Buffer.from(signature, 'base64url'))).toBe(true);
+
+    now += 30 * 60 * 1000;
+    expect(await app.installationToken('acme', 'widgets')).toBe(first);
+    expect(github.installationTokenRequests.length).toBe(before + 1);
+
+    now += 30 * 60 * 1000;
+    const renewed = await app.installationToken('acme', 'widgets');
+    expect(renewed).not.toBe(first);
+    expect(github.installationTokenRequests.length).toBe(before + 2);
+  });
+
+  it('says what GitHub answered when the App is not installed on the repository', async () => {
+    const app = new GitHubAppBot(bot, { api: new GitHubApi(github.url), slug: null });
+    expect(app.login).toBeNull();
+    await expect(app.installationToken('acme', 'elsewhere')).rejects.toThrow(/404 for GET \/repos\/acme\/elsewhere\/installation: Not Found/);
   });
 });

@@ -257,6 +257,20 @@ export class GitHubApi {
     };
   }
 
+  /** Asked with the App's JWT; GitHub answers 404 when the App is not installed on the repository. */
+  async repoInstallationId(appJwt: string, owner: string, repo: string): Promise<number> {
+    return (await this.json<{ id: number }>(appJwt, `${repoPath(owner, repo)}/installation`)).id;
+  }
+
+  async createInstallationToken(appJwt: string, installationId: number): Promise<{ token: string; expiresAt: string }> {
+    const json = await this.json<{ token: string; expires_at: string }>(
+      appJwt,
+      `/app/installations/${installationId}/access_tokens`,
+      { method: 'POST' },
+    );
+    return { token: json.token, expiresAt: json.expires_at };
+  }
+
   /** The token's own account; asked once per token. */
   viewerLogin(token: string): Promise<string | null> {
     let login = this.logins.get(token);

@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { randomBytes } from 'node:crypto';
+import { generateKeyPairSync, randomBytes } from 'node:crypto';
 import { ConfigError, isAllowedEmail, loadConfig } from '../src/config.js';
 import { decrypt, encrypt, randomToken, safeEqual, sha256 } from '../src/crypto.js';
 
 const key = randomBytes(32).toString('base64');
+const pem = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs1', format: 'pem' }).toString();
+const app = { DIFFITY_DATA_DIR: '/d', DIFFITY_GITHUB_APP_CLIENT_ID: 'Iv1.x', DIFFITY_GITHUB_APP_CLIENT_SECRET: 's' };
 
 describe('loadConfig', () => {
   it('fills in the localhost defaults', () => {
@@ -42,6 +44,8 @@ describe('loadConfig', () => {
       DIFFITY_GITHUB_APP_CLIENT_ID: 'Iv1.x',
       DIFFITY_GITHUB_APP_CLIENT_SECRET: 's3cret',
       DIFFITY_GITHUB_APP_SLUG: 'diffity-nc',
+      DIFFITY_GITHUB_APP_ID: '5312078',
+      DIFFITY_GITHUB_APP_PRIVATE_KEY: pem,
       DATABASE_URL: 'postgresql://u:p@10.0.0.3/diffity',
       DIFFITY_PG_CA: '-----BEGIN CERTIFICATE-----',
       DIFFITY_TRUST_PROXY: '1',
@@ -56,7 +60,7 @@ describe('loadConfig', () => {
     expect(config.devGitHubToken).toBe('ghp_x');
     expect(config.githubApiUrl).toBe('http://127.0.0.1:1');
     expect(config.githubUrl).toBe('http://127.0.0.1:2');
-    expect(config.githubApp).toEqual({ clientId: 'Iv1.x', clientSecret: 's3cret', slug: 'diffity-nc' });
+    expect(config.githubApp).toEqual({ clientId: 'Iv1.x', clientSecret: 's3cret', slug: 'diffity-nc', bot: { appId: 5312078, privateKey: pem.trim() } });
     expect(config.databaseUrl).toBe('postgresql://u:p@10.0.0.3/diffity');
     expect(config.pgCa).toBe('-----BEGIN CERTIFICATE-----');
     expect(config.trustProxy).toBe(1);
@@ -75,6 +79,14 @@ describe('loadConfig', () => {
     expect(proxy('0')).toBe(false);
     expect(proxy('2')).toBe(2);
     expect(proxy('loopback, 10.0.0.0/8')).toBe('loopback, 10.0.0.0/8');
+  });
+
+  it('takes the App private key as one line with literal \\n, and leaves bot posting off without it', () => {
+    const oneLine = pem.trim().replace(/\n/g, '\\n');
+    expect(oneLine).not.toContain('\n');
+    expect(loadConfig({ ...app, DIFFITY_GITHUB_APP_ID: '1', DIFFITY_GITHUB_APP_PRIVATE_KEY: oneLine }).githubApp?.bot)
+      .toEqual({ appId: 1, privateKey: pem.trim() });
+    expect(loadConfig(app).githubApp?.bot).toBeNull();
   });
 
   it('binds every interface for a public URL, or where told to', () => {
@@ -102,6 +114,11 @@ describe('loadConfig', () => {
     ],
     [{ DIFFITY_DATA_DIR: '/d', DIFFITY_GITHUB_APP_CLIENT_ID: 'Iv1.x' }, 'go together'],
     [{ DIFFITY_DATA_DIR: '/d', DIFFITY_GITHUB_APP_CLIENT_SECRET: 's' }, 'go together'],
+    [{ ...app, DIFFITY_GITHUB_APP_ID: '1' }, 'DIFFITY_GITHUB_APP_ID and DIFFITY_GITHUB_APP_PRIVATE_KEY go together'],
+    [{ ...app, DIFFITY_GITHUB_APP_PRIVATE_KEY: pem }, 'go together'],
+    [{ ...app, DIFFITY_GITHUB_APP_ID: 'diffity', DIFFITY_GITHUB_APP_PRIVATE_KEY: pem }, 'numeric id'],
+    [{ ...app, DIFFITY_GITHUB_APP_ID: '1', DIFFITY_GITHUB_APP_PRIVATE_KEY: 'not a key' }, 'not a PEM private key'],
+    [{ DIFFITY_DATA_DIR: '/d', DIFFITY_GITHUB_APP_ID: '1', DIFFITY_GITHUB_APP_PRIVATE_KEY: pem }, 'needs the App configured'],
     [{ DIFFITY_DATA_DIR: '/d', DIFFITY_DEV_LOGIN: '1', DIFFITY_IAP_AUDIENCE: '/projects/1/global/backendServices/2' }, 'set one'],
   ])('rejects %j', (env, message) => {
     expect(() => loadConfig(env)).toThrow(ConfigError);

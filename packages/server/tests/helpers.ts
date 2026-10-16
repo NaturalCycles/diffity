@@ -170,6 +170,14 @@ export interface FakeGitHub {
   searches: string[];
   /** Makes `GET /search/issues` answer this status instead. */
   failSearchWith: number | null;
+  /** The GitHub App's installation id per lowercased "owner/repo"; elsewhere it is not installed. */
+  installations: Record<string, number>;
+  /** Every `POST /app/installations/:id/access_tokens`, with the App JWT it carried. */
+  installationTokenRequests: { installationId: number; jwt: string | null }[];
+  /** How long a minted installation token lives. */
+  installationTokenTtlMs: number;
+  /** The bearer of each `POST .../reviews`, in order. */
+  reviewTokens: (string | null)[];
   close(): Promise<void>;
 }
 
@@ -191,6 +199,10 @@ export async function startFakeGitHub(repos: FakeRepo[]): Promise<FakeGitHub> {
     reviewRequests: {},
     searches: [],
     failSearchWith: null,
+    installations: {},
+    installationTokenRequests: [],
+    installationTokenTtlMs: 60 * 60 * 1000,
+    reviewTokens: [],
     close: async () => {},
   };
   const server: Server = createServer((req, res) => {
@@ -263,6 +275,24 @@ export async function startFakeGitHub(repos: FakeRepo[]): Promise<FakeGitHub> {
         return;
       }
 
+      const installation = /^\/repos\/([^/]+)\/([^/]+)\/installation$/.exec(url.pathname);
+      if (installation) {
+        const id = fake.installations[`${installation[1]}/${installation[2]}`.toLowerCase()];
+        send(id ? 200 : 404, id ? { id } : { message: 'Not Found' });
+        return;
+      }
+      const accessTokens = /^\/app\/installations\/(\d+)\/access_tokens$/.exec(url.pathname);
+      if (accessTokens && req.method === 'POST') {
+        fake.installationTokenRequests.push({ installationId: Number(accessTokens[1]), jwt: token });
+        const minted = `ghs_${fake.installationTokenRequests.length}`;
+        // Installed on every repository here, so the token reads them all.
+        for (const repo of repos) {
+          repo.tokens.push(minted);
+        }
+        send(201, { token: minted, expires_at: new Date(Date.now() + fake.installationTokenTtlMs).toISOString() });
+        return;
+      }
+
       const match = /^\/repos\/([^/]+)\/([^/]+)(?:\/pulls\/(\d+)(\/.*)?)?$/.exec(url.pathname);
       const repo = match
         ? repos.find(r => r.owner.toLowerCase() === match[1].toLowerCase() && r.name.toLowerCase() === match[2].toLowerCase())
@@ -294,6 +324,7 @@ export async function startFakeGitHub(repos: FakeRepo[]): Promise<FakeGitHub> {
         }
         const review = JSON.parse(raw) as FakeGitHub['postedReviews'][number];
         fake.postedReviews.push(review);
+        fake.reviewTokens.push(token);
         const reviewId = nextId++;
         for (const comment of review.comments) {
           fake.comments.push({

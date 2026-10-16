@@ -35,6 +35,10 @@ tour_done       { tour }
 tour_delete     { tour }
 live_token      { session? }                  → { command }: waits for the reader's questions; without
                                               a session, for everything of the user's (see Attend)
+post_review     { session, event, body? }     automated runs only: posts the findings as the diffity App
+automation_token { name }                     → { token }: a bearer for an agent that cannot sign in
+automation_tokens {}                          the user's automation tokens, without the tokens
+automation_token_revoke { name }
 ```
 
 - `create_session` takes the repository and **exactly one** of: `pr`; `base` and `head` (full
@@ -175,7 +179,11 @@ Give the user the session `url` and the counts, using the labels you used:
 > Found: 1 P1, 2 P2. The file list is in reading order; the P1 is on the last stop.
 
 The page is where they are read; the user posts them to the pull request from there once they have
-been through them. Never post to GitHub yourself.
+been through them. In an interactive review, never post to GitHub yourself.
+
+An automated run — you were asked to post, or you run under an automation token with nobody reading
+along — ends with `post_review { session, event: "COMMENT" }` and then `review_done { session }`. The
+review goes out as the diffity GitHub App, naming the user it runs for, never as the user.
 
 ### Step 7: Stay for questions
 
