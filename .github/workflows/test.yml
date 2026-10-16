@@ -3,7 +3,7 @@ name: test
 on:
   pull_request:
   push:
-    branches: [hosted-server]
+    branches: [develop]
 
 permissions:
   contents: read
@@ -13,7 +13,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: NaturalCycles/ci-typescript/actions/setup-node-pnpm@v2
+      # The shared NaturalCycles/ci-typescript actions live in a private repository, which a public
+      # repository cannot use; these are the public equivalents (pnpm's version comes from packageManager).
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       # Typecheck resolves workspace imports through built dists, so the build comes first.
       - run: pnpm build
       - run: pnpm test
