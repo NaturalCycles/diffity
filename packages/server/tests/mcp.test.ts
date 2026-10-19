@@ -321,6 +321,24 @@ describe('automation tokens', () => {
     }
   });
 
+  it('cannot mint, list or revoke automation tokens themselves', async () => {
+    const { token } = await ok<{ token: string }>(alice, 'automation_token', { name: 'locked out' });
+    const routine = await mcpClient(token);
+    try {
+      for (const [name, args] of [
+        ['automation_token', { name: 'another' }],
+        ['automation_tokens', {}],
+        ['automation_token_revoke', { name: 'locked out' }],
+      ] as const) {
+        expect(await failed(routine, name, args)).toBe('Automation tokens are managed by a signed-in agent, not by an automation token');
+      }
+      expect((await ok<{ name: string }[]>(alice, 'automation_tokens', {})).map(t => t.name)).toEqual(['locked out']);
+      await ok(alice, 'automation_token_revoke', { name: 'locked out' });
+    } finally {
+      await routine.close();
+    }
+  });
+
   it('refuses a made-up one, and leaves OAuth tokens to OAuth', async () => {
     expect(await mcpStatus(`dfa_${'x'.repeat(43)}`)).toBe(401);
     expect(await mcpStatus('dfa_')).toBe(401);
@@ -388,7 +406,69 @@ describe('post_review', () => {
       expect(github.reviewTokens.at(-1)).toMatch(/^ghs_/);
 
       expect(await ok(routine, 'post_review', { session, event: 'COMMENT' })).toEqual({ posted: 0, skipped: 1, url: null });
+      expect(await ok(routine, 'post_review', { session, event: 'REQUEST_CHANGES' })).toEqual({ posted: 0, skipped: 1, url: null });
       expect(github.postedReviews.length).toBe(before + 1);
+    });
+
+    it('skips a finding the App already left in the same words on the same line', async () => {
+      const { session } = await ok<{ session: string }>(routine, 'create_session', { repo: 'acme/widgets', pr: 1 });
+      const finding = { session, file: 'src.ts', line: 10, body: 'P3: say why line ten changed' };
+      await ok(routine, 'comment', finding);
+      expect(await ok<{ posted: number }>(routine, 'post_review', { session, event: 'COMMENT' })).toMatchObject({ posted: 1 });
+      expect(github.comments.at(-1)?.user).toEqual({ login: 'diffity[bot]', type: 'Bot' });
+
+      const before = github.postedReviews.length;
+      const again = await ok<{ thread: string }>(routine, 'comment', finding);
+      const result = await ok<{ posted: number; skipped: number; url: string | null }>(routine, 'post_review', { session, event: 'COMMENT' });
+      expect(result).toMatchObject({ posted: 0, url: null });
+      expect(result.skipped).toBeGreaterThanOrEqual(2);
+      expect(github.postedReviews.length).toBe(before);
+      await ok(routine, 'dismiss', { id: again.thread });
+    });
+
+    it('posts the summary once when two runs post at the same time', async () => {
+      const { session } = await ok<{ session: string }>(routine, 'create_session', { repo: 'acme/widgets', pr: 1 });
+      await ok(routine, 'comment', { session, file: 'src.ts', line: 9, body: 'P3: line nine deserves a look' });
+      await ok(routine, 'general_comment', { session, body: 'Posted once.' });
+
+      const before = github.postedReviews.length;
+      const results = await Promise.all([
+        ok<{ url: string | null }>(routine, 'post_review', { session, event: 'COMMENT' }),
+        ok<{ url: string | null }>(routine, 'post_review', { session, event: 'COMMENT' }),
+      ]);
+      expect(github.postedReviews.length).toBe(before + 1);
+      expect(github.postedReviews.at(-1)?.body).toContain('Posted once.');
+      expect(results.filter(result => result.url !== null)).toHaveLength(1);
+    });
+
+    it('answers with an error when GitHub rejects a review of only a summary', async () => {
+      const { session } = await ok<{ session: string }>(routine, 'create_session', { repo: 'acme/widgets', pr: 1 });
+      const { thread } = await ok<{ thread: string }>(routine, 'general_comment', { session, body: 'Only a summary.' });
+      github.failReviewWith = 422;
+      try {
+        expect(await failed(routine, 'post_review', { session, event: 'COMMENT' })).toContain('Nothing was posted');
+      } finally {
+        github.failReviewWith = null;
+        await ok(routine, 'dismiss', { id: thread });
+      }
+    });
+
+    it('forgets the installation GitHub refused the token of, and says when the App is not installed', async () => {
+      const { session } = await ok<{ session: string }>(routine, 'create_session', { repo: 'acme/widgets', pr: 1 });
+      const { thread } = await ok<{ thread: string }>(routine, 'general_comment', { session, body: 'Refused.' });
+      try {
+        github.failReviewWith = 401;
+        expect(await failed(routine, 'post_review', { session, event: 'COMMENT' })).toContain('401');
+        github.failReviewWith = null;
+        delete github.installations['acme/widgets'];
+        expect(await failed(routine, 'post_review', { session, event: 'COMMENT' })).toBe(
+          `The diffity GitHub App is not installed on acme/widgets; install it at ${github.url}/apps/diffity/installations/new`,
+        );
+      } finally {
+        github.failReviewWith = null;
+        github.installations['acme/widgets'] = 7;
+        await ok(routine, 'dismiss', { id: thread });
+      }
     });
 
     it('refuses once the pull request has moved past the session', async () => {

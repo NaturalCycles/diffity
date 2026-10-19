@@ -14,6 +14,8 @@ export interface McpContext {
   live: Live;
   automationTokens: AutomationTokens;
   userId: string;
+  /** Reached with an automation token rather than through OAuth. */
+  automation: boolean;
   /** Who the comments are from, as the connecting client named itself when it registered. */
   agentName: string;
   version: string;
@@ -546,7 +548,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
     },
     guarded(async args => {
       const result = await service.postReviewAsBot(await session(args.session), args);
-      if (!result.reviewUrl && result.failed > 0) {
+      if (!result.reviewUrl && result.errors.length > 0) {
         throw new ServiceError(`Nothing was posted:\n${result.errors.join('\n')}`);
       }
       return json({
@@ -557,6 +559,12 @@ export function createMcpServer(ctx: McpContext): McpServer {
       });
     }),
   );
+
+  const requireSignedIn = () => {
+    if (ctx.automation) {
+      throw new ServiceError('Automation tokens are managed by a signed-in agent, not by an automation token');
+    }
+  };
 
   const tokenName = z.string().trim().min(1).max(100).describe('What the token is for, e.g. "pr-review routine"');
 
@@ -569,6 +577,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
       inputSchema: { name: tokenName },
     },
     guarded(async args => {
+      requireSignedIn();
       const token = await ctx.automationTokens.mint(userId, args.name);
       return json({
         name: args.name,
@@ -585,7 +594,10 @@ export function createMcpServer(ctx: McpContext): McpServer {
       inputSchema: {},
       annotations: { readOnlyHint: true },
     },
-    guarded(async () => json(await ctx.automationTokens.list(userId))),
+    guarded(async () => {
+      requireSignedIn();
+      return json(await ctx.automationTokens.list(userId));
+    }),
   );
 
   server.registerTool(
@@ -595,6 +607,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
       inputSchema: { name: tokenName },
     },
     guarded(async args => {
+      requireSignedIn();
       if (!(await ctx.automationTokens.revoke(userId, args.name))) {
         throw new ServiceError(`You have no automation token named "${args.name}"`);
       }

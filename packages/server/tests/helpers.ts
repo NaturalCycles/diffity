@@ -335,7 +335,7 @@ export async function startFakeGitHub(repos: FakeRepo[]): Promise<FakeGitHub> {
             side: comment.side,
             body: comment.body,
             in_reply_to_id: null,
-            user: { login: fake.logins[token!] ?? 'someone', type: 'User' },
+            user: token?.startsWith('ghs_') ? { login: 'diffity[bot]', type: 'Bot' } : { login: fake.logins[token!] ?? 'someone', type: 'User' },
             created_at: '2026-09-02T10:00:00Z',
             pull: number,
             review_id: reviewId,

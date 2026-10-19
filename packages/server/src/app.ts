@@ -172,7 +172,8 @@ export function createApp(deps: AppDeps): express.Express {
     sendPage(res, 200, 'Connect an agent', `
       <h1>Connect ${escapeHtml(clientName)}?</h1>
       <p>${escapeHtml(clientName)} will be able to create review sessions and comment on them as
-        <strong>${escapeHtml(user.email)}</strong>, with the GitHub access you have given this server.</p>
+        <strong>${escapeHtml(user.email)}</strong>, with the GitHub access you have given this server.
+        It can also mint automation tokens that act as you until you revoke them.</p>
       <p class="muted">After you allow it, you are sent back to <code>${escapeHtml(target.origin === 'null' ? target.protocol : target.origin)}</code>.</p>
       <form method="post" action="/oauth/consent">
         <input type="hidden" name="request" value="${escapeHtml(id)}">
@@ -236,6 +237,7 @@ export function createApp(deps: AppDeps): express.Express {
       live,
       automationTokens: deps.automationTokens,
       userId,
+      automation: automationName !== null,
       agentName: automationName ?? (await oauth.clientsStore.clientName(req.auth!.clientId)) ?? 'Claude',
       version: deps.version,
     });

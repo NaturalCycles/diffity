@@ -199,12 +199,13 @@ export function appJwt(bot: GitHubBotConfig, now: number): string {
  * private key. A token is good for an hour and kept per installation until shortly before then.
  */
 export class GitHubAppBot {
+  private readonly installations = new Map<string, number>();
   private readonly tokens = new Map<number, { token: string; expiresAt: number }>();
   private readonly lock = keyedSerializer();
 
   constructor(
     private readonly bot: GitHubBotConfig,
-    private readonly options: { api: GitHubApi; slug: string | null; now?: () => number },
+    private readonly options: { api: GitHubApi; slug: string | null; installUrl?: string | null; now?: () => number },
   ) {}
 
   private now(): number {
@@ -216,16 +217,39 @@ export class GitHubAppBot {
     return this.options.slug ? `${this.options.slug}[bot]` : null;
   }
 
+  get installUrl(): string | null {
+    return this.options.installUrl ?? null;
+  }
+
   async installationToken(owner: string, repo: string): Promise<string> {
-    const installationId = await this.options.api.repoInstallationId(appJwt(this.bot, this.now()), owner, repo);
-    return this.lock(String(installationId))(async () => {
-      const cached = this.tokens.get(installationId);
+    const key = installationKey(owner, repo);
+    let installationId = this.installations.get(key);
+    if (installationId === undefined) {
+      installationId = await this.options.api.repoInstallationId(appJwt(this.bot, this.now()), owner, repo);
+      this.installations.set(key, installationId);
+    }
+    const id = installationId;
+    return this.lock(String(id))(async () => {
+      const cached = this.tokens.get(id);
       if (cached && cached.expiresAt - EXPIRY_MARGIN_MS > this.now()) {
         return cached.token;
       }
-      const minted = await this.options.api.createInstallationToken(appJwt(this.bot, this.now()), installationId);
-      this.tokens.set(installationId, { token: minted.token, expiresAt: Date.parse(minted.expiresAt) });
+      const minted = await this.options.api.createInstallationToken(appJwt(this.bot, this.now()), id);
+      this.tokens.set(id, { token: minted.token, expiresAt: Date.parse(minted.expiresAt) });
       return minted.token;
     });
   }
+
+  invalidate(owner: string, repo: string): void {
+    const key = installationKey(owner, repo);
+    const installationId = this.installations.get(key);
+    this.installations.delete(key);
+    if (installationId !== undefined) {
+      this.tokens.delete(installationId);
+    }
+  }
+}
+
+function installationKey(owner: string, repo: string): string {
+  return `${owner}/${repo}`.toLowerCase();
 }

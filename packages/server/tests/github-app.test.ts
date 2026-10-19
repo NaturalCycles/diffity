@@ -188,6 +188,23 @@ describe('the App acting as itself', () => {
     expect(github.installationTokenRequests.length).toBe(before + 2);
   });
 
+  it('looks the installation up once per repository, and afresh once invalidated', async () => {
+    github.installations['acme/gadgets'] = 43;
+    const app = new GitHubAppBot(bot, { api: new GitHubApi(github.url), slug: 'diffity' });
+    const lookups = () => github.requests.filter(request => request === 'GET /repos/acme/gadgets/installation').length;
+    const before = { lookups: lookups(), minted: github.installationTokenRequests.length };
+
+    const first = await app.installationToken('acme', 'gadgets');
+    expect(await app.installationToken('acme', 'gadgets')).toBe(first);
+    expect(lookups()).toBe(before.lookups + 1);
+    expect(github.installationTokenRequests.length).toBe(before.minted + 1);
+
+    app.invalidate('acme', 'gadgets');
+    expect(await app.installationToken('acme', 'gadgets')).not.toBe(first);
+    expect(lookups()).toBe(before.lookups + 2);
+    expect(github.installationTokenRequests.length).toBe(before.minted + 2);
+  });
+
   it('says what GitHub answered when the App is not installed on the repository', async () => {
     const app = new GitHubAppBot(bot, { api: new GitHubApi(github.url), slug: null });
     expect(app.login).toBeNull();

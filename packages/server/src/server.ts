@@ -57,7 +57,9 @@ export async function startServer(
         fallbackToken: config.devGitHubToken,
       })
     : null;
-  const bot = config.githubApp?.bot ? new GitHubAppBot(config.githubApp.bot, { api, slug: config.githubApp.slug }) : null;
+  const bot = config.githubApp?.bot
+    ? new GitHubAppBot(config.githubApp.bot, { api, slug: config.githubApp.slug, installUrl: githubApp?.installUrl })
+    : null;
   const access = overrides.gitHubAccess ?? githubApp ?? new StoredTokenAccess(users, config.devGitHubToken);
   const service = new ReviewService(reviews, mirrors, api, access, config.publicUrl, users, bot);
   const live = new Live(db);

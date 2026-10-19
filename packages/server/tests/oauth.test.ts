@@ -121,6 +121,7 @@ describe('authorization code with PKCE', () => {
     const html = await page.text();
     expect(html).toContain('Connect Claude Code?');
     expect(html).toContain('alice@example.com');
+    expect(html).toContain('mint automation tokens that act as you until you revoke them');
     expect(page.headers.get('content-security-policy')).toContain("form-action 'self' http://127.0.0.1:9");
 
     const denied = await consent(aliceCookie, authorizePath(client.client_id, challenge), 'deny');

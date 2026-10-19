@@ -10,7 +10,7 @@ import {
   type Suppressed,
 } from '@diffity/api';
 import { isSha, isSafeRepoPath, isRepoName, keyedSerializer, type Mirrors, type NameStatus } from './git.js';
-import type { GitHubAccess, GitHubApi, ReviewCommentPayload, ReviewRequest } from './github.js';
+import { GitHubApiError, type GitHubAccess, type GitHubApi, type ReviewCommentPayload, type ReviewRequest } from './github.js';
 import type { GitHubAppBot } from './github-app.js';
 import { prKey, type PrMeta, type ReviewSessionRecord, type Reviews } from './reviews.js';
 import type { Users, UserSettings } from './users.js';
@@ -474,7 +474,8 @@ export class ReviewService {
     if (submission.event === 'COMMENT' && submission.comments.length === 0 && !submission.body.trim()) {
       throw new ServiceError('A comment review needs a summary or at least one comment');
     }
-    return this.submitReview(session, submission, { token, login: this.github.viewerLogin(token), footer: '' });
+    return this.githubLock(session.userId)(() =>
+      this.submitReview(session, submission, { token, login: this.github.viewerLogin(token), footer: '', skipEmpty: false }));
   }
 
   /**
@@ -486,145 +487,164 @@ export class ReviewService {
     session: ReviewSessionRecord,
     input: { event: 'COMMENT' | 'REQUEST_CHANGES'; body?: string },
   ): Promise<ReviewResult> {
-    if (!this.bot) {
+    const bot = this.bot;
+    if (!bot) {
       throw new ServiceError('Bot posting is not configured on this server');
     }
     if (session.prNumber === null) {
       throw new ServiceError('Only a pull request session can be posted to or pulled from GitHub');
     }
-    const threads = await this.reviews.threadsForSession(session.userId, session.id, 'open');
-    const general = threads.filter(thread => thread.filePath === GENERAL_THREAD_FILE_PATH && !thread.submittedAt && findingOf(thread));
-    const comments = threads.flatMap(thread => {
-      const finding = findingOf(thread);
-      return thread.filePath === GENERAL_THREAD_FILE_PATH || !finding ? [] : [{
-        threadId: thread.id,
-        filePath: thread.filePath,
-        side: thread.side === 'old' ? 'LEFT' as const : 'RIGHT' as const,
-        startLine: thread.startLine !== thread.endLine ? thread.startLine : null,
-        endLine: thread.endLine,
-        body: finding,
-      }];
+    const { owner, repo } = session;
+    return this.githubLock(session.userId)(async () => {
+      const threads = await this.reviews.threadsForSession(session.userId, session.id, 'open');
+      const general = threads.filter(thread => thread.filePath === GENERAL_THREAD_FILE_PATH && !thread.submittedAt && findingOf(thread));
+      const comments = threads.flatMap(thread => {
+        const finding = findingOf(thread);
+        return thread.filePath === GENERAL_THREAD_FILE_PATH || !finding ? [] : [{
+          threadId: thread.id,
+          filePath: thread.filePath,
+          side: thread.side === 'old' ? 'LEFT' as const : 'RIGHT' as const,
+          startLine: thread.startLine !== thread.endLine ? thread.startLine : null,
+          endLine: thread.endLine,
+          body: finding,
+        }];
+      });
+      const body = input.body ?? general.map(findingOf).join('\n\n');
+      const requester = (await this.users.get(session.userId))?.githubLogin;
+      let token: string;
+      try {
+        token = await bot.installationToken(owner, repo);
+      } catch (err) {
+        if (err instanceof GitHubApiError && err.status === 404) {
+          throw new ServiceError(
+            `The diffity GitHub App is not installed on ${owner}/${repo}${bot.installUrl ? `; install it at ${bot.installUrl}` : ''}`,
+          );
+        }
+        throw err;
+      }
+      const result = await this.submitReview(session, { event: input.event, body, comments }, {
+        token,
+        login: Promise.resolve(bot.login),
+        footer: `— diffity review, requested by ${requester ? `@${requester}` : 'a diffity user'}`,
+        skipEmpty: true,
+        onUnauthorized: () => bot.invalidate(owner, repo),
+      });
+      if (result.reviewUrl && input.body === undefined && general.length > 0) {
+        await this.reviews.markThreadsSubmitted(
+          session.userId,
+          general.map(thread => ({ threadId: thread.id, body: findingOf(thread) })),
+          { reviewUrl: result.reviewUrl, headSha: session.headSha },
+        );
+      }
+      return result;
     });
-    const body = input.body ?? general.map(findingOf).join('\n\n');
-    const requester = (await this.users.get(session.userId))?.githubLogin;
-    const token = await this.bot.installationToken(session.owner, session.repo);
-    const result = await this.submitReview(session, { event: input.event, body, comments }, {
-      token,
-      login: Promise.resolve(this.bot.login),
-      footer: `— diffity review, requested by ${requester ? `@${requester}` : 'a diffity user'}`,
-    });
-    if (result.reviewUrl && input.body === undefined && general.length > 0) {
-      await this.reviews.markThreadsSubmitted(
-        session.userId,
-        general.map(thread => ({ threadId: thread.id, body: findingOf(thread) })),
-        { reviewUrl: result.reviewUrl, headSha: session.headSha },
-      );
-    }
-    return result;
   }
 
+  /** Called holding `githubLock`. */
   private async submitReview(
     session: ReviewSessionRecord,
     submission: ReviewSubmission,
-    as: { token: string; login: Promise<string | null>; footer: string },
+    as: { token: string; login: Promise<string | null>; footer: string; skipEmpty: boolean; onUnauthorized?: () => void },
   ): Promise<ReviewResult> {
     const { token } = as;
     const { owner, repo } = session;
     const prNumber = session.prNumber!;
-    return this.githubLock(session.userId)(async () => {
-      const pull = await this.github.getPull(token, owner, repo, prNumber);
-      if (!pull) {
-        throw new ServiceError(`${owner}/${repo} has no pull request #${prNumber}`, 404);
-      }
-      if (pull.headSha !== session.headSha) {
-        throw new ServiceError(
-          `The pull request has moved on to ${pull.headSha.slice(0, 7)} since this session (${session.headSha.slice(0, 7)}). `
-          + 'Ask your agent for a new session on the pull request; open findings carry over to it.',
-          409,
-        );
-      }
-      const [patch, existing, viewerLogin] = await Promise.all([
-        this.diffText(session),
-        this.github.pullComments(token, owner, repo, prNumber),
-        as.login,
-      ]);
-      const commentable = commentableLines(patch);
-      const threadIds = await this.reviews.threadsOnTheForge(
-        session.userId,
-        submission.comments.map(comment => comment.threadId).filter((id): id is string => !!id),
+    const pull = await this.github.getPull(token, owner, repo, prNumber);
+    if (!pull) {
+      throw new ServiceError(`${owner}/${repo} has no pull request #${prNumber}`, 404);
+    }
+    if (pull.headSha !== session.headSha) {
+      throw new ServiceError(
+        `The pull request has moved on to ${pull.headSha.slice(0, 7)} since this session (${session.headSha.slice(0, 7)}). `
+        + 'Ask your agent for a new session on the pull request; open findings carry over to it.',
+        409,
       );
+    }
+    const [patch, existing, viewerLogin] = await Promise.all([
+      this.diffText(session),
+      this.github.pullComments(token, owner, repo, prNumber),
+      as.login,
+    ]);
+    const commentable = commentableLines(patch);
+    const threadIds = await this.reviews.threadsOnTheForge(
+      session.userId,
+      submission.comments.map(comment => comment.threadId).filter((id): id is string => !!id),
+    );
 
-      const errors: string[] = [];
-      const payload: ReviewCommentPayload[] = [];
-      const sent: SentComment[] = [];
-      let skipped = 0;
-      for (const comment of submission.comments) {
-        const sides = commentable.get(comment.filePath);
-        if (!sides) {
-          errors.push(`${comment.filePath} — not in the pull request's diff`);
-          continue;
-        }
-        if (!sides[comment.side].has(comment.endLine)) {
-          errors.push(`${comment.filePath}:${comment.endLine} — not a line of the pull request's diff, so GitHub will not take a comment there`);
-          continue;
-        }
-        if (isAlreadyCommented(existing, comment, { threadIds, viewerLogin })) {
-          skipped++;
-          continue;
-        }
-        payload.push(toReviewPayload(comment));
-        if (comment.threadId) {
-          sent.push({ threadId: comment.threadId, path: comment.filePath, body: comment.body, endLine: comment.endLine });
-        }
+    const errors: string[] = [];
+    const payload: ReviewCommentPayload[] = [];
+    const sent: SentComment[] = [];
+    let skipped = 0;
+    for (const comment of submission.comments) {
+      const sides = commentable.get(comment.filePath);
+      if (!sides) {
+        errors.push(`${comment.filePath} — not in the pull request's diff`);
+        continue;
       }
+      if (!sides[comment.side].has(comment.endLine)) {
+        errors.push(`${comment.filePath}:${comment.endLine} — not a line of the pull request's diff, so GitHub will not take a comment there`);
+        continue;
+      }
+      if (isAlreadyCommented(existing, comment, { threadIds, viewerLogin })) {
+        skipped++;
+        continue;
+      }
+      payload.push(toReviewPayload(comment));
+      if (comment.threadId) {
+        sent.push({ threadId: comment.threadId, path: comment.filePath, body: comment.body, endLine: comment.endLine });
+      }
+    }
 
-      const body = submission.body.trim();
-      const result: ReviewResult = {
-        submitted: 0,
-        submittedThreadIds: [],
-        commentIds: [],
-        skipped,
-        failed: errors.length,
-        errors,
-        reviewUrl: null,
-        commitSha: session.headSha,
-      };
-      if (payload.length === 0 && !body && submission.event === 'COMMENT') {
-        return result;
-      }
+    const body = submission.body.trim();
+    const result: ReviewResult = {
+      submitted: 0,
+      submittedThreadIds: [],
+      commentIds: [],
+      skipped,
+      failed: errors.length,
+      errors,
+      reviewUrl: null,
+      commitSha: session.headSha,
+    };
+    if (payload.length === 0 && !body && (submission.event === 'COMMENT' || as.skipEmpty)) {
+      return result;
+    }
 
-      let review: { id: number; htmlUrl: string | null };
-      try {
-        review = await this.github.createReview(token, owner, repo, prNumber, {
-          commit_id: session.headSha,
-          event: submission.event,
-          body: [body, as.footer].filter(Boolean).join('\n\n'),
-          comments: payload,
-        });
-      } catch (err) {
-        return {
-          ...result,
-          failed: errors.length + payload.length,
-          errors: [...errors, err instanceof Error ? err.message : 'GitHub rejected the review'],
-        };
+    let review: { id: number; htmlUrl: string | null };
+    try {
+      review = await this.github.createReview(token, owner, repo, prNumber, {
+        commit_id: session.headSha,
+        event: submission.event,
+        body: [body, as.footer].filter(Boolean).join('\n\n'),
+        comments: payload,
+      });
+    } catch (err) {
+      if (as.onUnauthorized && err instanceof GitHubApiError && err.status === 401) {
+        as.onUnauthorized();
+        throw err;
       }
-      // Without the ids a sent finding is still recognised by its wording later.
-      const created = await this.github.reviewComments(token, owner, repo, prNumber, review.id).catch(() => []);
-      const commentIds = matchCreatedComments(sent, created);
-      const ids = new Map(commentIds.map(entry => [entry.threadId, entry.githubCommentId]));
-      await this.reviews.markThreadsSubmitted(
-        session.userId,
-        sent.map(entry => ({ threadId: entry.threadId, body: entry.body, githubCommentId: ids.get(entry.threadId) })),
-        { reviewUrl: review.htmlUrl, headSha: session.headSha },
-      );
       return {
         ...result,
-        submitted: payload.length,
-        submittedThreadIds: sent.map(entry => entry.threadId),
-        commentIds,
-        reviewUrl: review.htmlUrl,
+        failed: errors.length + payload.length,
+        errors: [...errors, err instanceof Error ? err.message : 'GitHub rejected the review'],
       };
-    });
+    }
+    // Without the ids a sent finding is still recognised by its wording later.
+    const created = await this.github.reviewComments(token, owner, repo, prNumber, review.id).catch(() => []);
+    const commentIds = matchCreatedComments(sent, created);
+    const ids = new Map(commentIds.map(entry => [entry.threadId, entry.githubCommentId]));
+    await this.reviews.markThreadsSubmitted(
+      session.userId,
+      sent.map(entry => ({ threadId: entry.threadId, body: entry.body, githubCommentId: ids.get(entry.threadId) })),
+      { reviewUrl: review.htmlUrl, headSha: session.headSha },
+    );
+    return {
+      ...result,
+      submitted: payload.length,
+      submittedThreadIds: sent.map(entry => entry.threadId),
+      commentIds,
+      reviewUrl: review.htmlUrl,
+    };
   }
 
   /**
