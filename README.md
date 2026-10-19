@@ -39,7 +39,8 @@ The first tool call opens the browser to sign in and allow the connection. Then:
 - **Posting.** From the page the user posts the findings to the pull request as one review, and
   pulls GitHub's review threads in. Posting is only for pull request sessions, and refused once the
   pull request has moved past the session's head. GitHub is reached as the user: through the GitHub
-  App they connect on **Settings**, or a token pasted there when no App is configured.
+  App they connect on **Settings**, or a token pasted there when no App is configured. An agent
+  posts as the App instead (see Automated reviews).
 
 The **Sessions** page also lists the open pull requests that ask for the user's review, asked of
 GitHub's search with the user's own access (cached for a minute). Each row links the user's newest
@@ -84,6 +85,41 @@ section is the agent's side of it.
 cookie, no MCP token. A live token is stored hashed, expires after 12 hours, and allows waiting and
 nothing else: on its one session, or for a queue token on the user's queue and any of the user's
 sessions. Once it is refused (401), the command exits with status 1.
+
+### Automated reviews
+
+Humans post as themselves, from the page; agents only ever post as the bot, `diffity[bot]`, and the
+bot's review names the human whose token asked for it.
+
+An agent that cannot sign in, such as a scheduled routine on every new pull request, reaches the
+MCP endpoint with an automation token: a signed-in agent mints one with `automation_token { name }`,
+and the routine holds it as a secret. It acts as the user who minted it, with every tool, until
+revoked; its sessions are that user's and show in their list. It is stored as a sha256 hash.
+
+```bash
+claude mcp add --transport http diffity https://diffity.prod.naturalcycles.net/mcp \
+  --header "Authorization: Bearer ${DIFFITY_AUTOMATION_TOKEN}"
+```
+
+or in `.mcp.json`:
+
+```json
+{ "mcpServers": { "diffity": { "type": "http", "url": "https://diffity.prod.naturalcycles.net/mcp",
+  "headers": { "Authorization": "Bearer ${DIFFITY_AUTOMATION_TOKEN}" } } } }
+```
+
+The run is `create_session { repo, pr }`, the server's `review` prompt, `post_review { session,
+event: "COMMENT" }`, then `review_done`. `post_review` sends the session's open findings, with its
+general comments as the summary, as one review by the App, on an installation token the server
+mints from the App's private key; it takes `COMMENT` or `REQUEST_CHANGES`, never an approval. A
+second run on the same head finds the existing session, and what is already on GitHub is skipped.
+
+| Tool | |
+|---|---|
+| `post_review { session, event, body? }` | Post the open findings as the App; answers `{ posted, skipped, url }` |
+| `automation_token { name }` | Mint a token; it is shown once |
+| `automation_tokens {}` | The user's tokens: name, created, last used |
+| `automation_token_revoke { name }` | Revoke one |
 
 A repository can name its review standards in a `.diffity.json` at its root, which the
 `get_standards` tool reads:
@@ -130,6 +166,8 @@ environment runs the server from source and restarts it when that changes; after
 | `DIFFITY_ALLOWED_EMAILS` | — | Comma-separated addresses; replaces the domain rule when set |
 | `DIFFITY_GITHUB_APP_CLIENT_ID`, `DIFFITY_GITHUB_APP_CLIENT_SECRET` | — | The GitHub App users connect on **Settings**; without it, users paste a token there instead |
 | `DIFFITY_GITHUB_APP_SLUG` | — | The App's URL name, for the install link on **Settings** |
+| `DIFFITY_GITHUB_APP_ID` | — | The App's numeric id; with the private key, agents post reviews as the App (`post_review`) |
+| `DIFFITY_GITHUB_APP_PRIVATE_KEY` | — | The App's private key (PEM; one line with literal `\n` works too), for the App's own installation tokens |
 | `DIFFITY_DEV_GITHUB_TOKEN` | — | A token used for users who have not connected GitHub; localhost only |
 | `GITHUB_API_URL` | `https://api.github.com` | GitHub REST and GraphQL API |
 | `GITHUB_URL` | `https://github.com` | Where the App's authorization and token exchange happen |
@@ -159,7 +197,8 @@ Cloud Run service `diffity` in `nc-innovation-496314`. The infrastructure (IAP l
 `diffity.prod.naturalcycles.net`, Cloud SQL Postgres over the VPC connector, runtime service
 account, secrets) is in NaturalCycles/NCInfraIaC. On the load balancer, `/mcp`, `/token`,
 `/register`, `/revoke`, `/live/await` and the OAuth `/.well-known/*` metadata bypass IAP, since
-agents authenticate with diffity's own OAuth or a live token; everything else is behind IAP. The
+agents authenticate with diffity's own OAuth, an automation token or a live token; everything else
+is behind IAP. The
 service accepts unauthenticated invocations for those open paths, so the deploy limits its ingress
 to the load balancer and disables the `run.app` URL.
 
@@ -176,6 +215,8 @@ The deploy runs one instance (pending OAuth consents are held in memory), sets
   `DIFFITY_GITHUB_APP_SLUG`) for the GitHub App; with it, the secret
   `diffity-github-app-client-secret` is mounted as `DIFFITY_GITHUB_APP_CLIENT_SECRET`. Without it,
   users paste a GitHub token on **Settings**.
+- optionally the repository variable `DIFFITY_GITHUB_APP_ID`, for agents to post as the App; with
+  it, the secret `diffity-github-app-private-key` is mounted as `DIFFITY_GITHUB_APP_PRIVATE_KEY`.
 
 ## Access and isolation
 
@@ -185,8 +226,8 @@ The deploy runs one instance (pending OAuth consents are held in memory), sets
   request against Google's keys and `DIFFITY_IAP_AUDIENCE`; a request without it gets 401.
 - Before a session is created, GitHub is asked whether the user's token can read the repository.
   Mirror fetches use that token through the environment, never the mirror's config.
-- OAuth client secrets, codes, access and refresh tokens and the web session cookie are stored as
-  sha256 hashes; GitHub tokens (pasted, or the App's access and refresh tokens) are encrypted with
+- OAuth client secrets, codes, access and refresh tokens, automation tokens and the web session
+  cookie are stored as sha256 hashes; GitHub tokens (pasted, or the App's access and refresh tokens) are encrypted with
   `DIFFITY_SECRET_KEY`.
 - Posting is only for pull request sessions, and refused once the pull request has moved past the
   session's head: the user asks for a new session, which the open findings carry over to.

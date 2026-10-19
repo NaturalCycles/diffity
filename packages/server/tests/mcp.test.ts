@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -22,9 +23,10 @@ let dataDir: string;
 let server: TestServer;
 let alice: Client;
 let bob: Client;
+let pulls: Record<number, { title: string; baseSha: string; headSha: string }>;
 
-async function mcpClient(accessToken: string): Promise<Client> {
-  const transport = new StreamableHTTPClientTransport(new URL(`${server.base}/mcp`), {
+async function mcpClient(accessToken: string, base = server.base): Promise<Client> {
+  const transport = new StreamableHTTPClientTransport(new URL(`${base}/mcp`), {
     requestInit: { headers: { Authorization: `Bearer ${accessToken}` } },
   });
   const client = new Client({ name: 'test', version: '1.0.0' });
@@ -60,16 +62,20 @@ async function failed(client: Client, name: string, args: Record<string, unknown
   return result.content[0].text;
 }
 
+async function mcpStatus(token: string, base = server.base): Promise<number> {
+  const res = await fetch(`${base}/mcp`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+  });
+  return res.status;
+}
+
 beforeAll(async () => {
   fixture = makeFixture();
+  pulls = { 1: { title: 'Change line ten', baseSha: fixture.mainTip, headSha: fixture.head1 } };
   github = await startFakeGitHub([
-    {
-      owner: 'acme',
-      name: 'widgets',
-      private: true,
-      tokens: ['alice-token', 'bob-token'],
-      pulls: { 1: { title: 'Change line ten', baseSha: fixture.mainTip, headSha: fixture.head1 } },
-    },
+    { owner: 'acme', name: 'widgets', private: true, tokens: ['alice-token', 'bob-token'], pulls },
   ]);
   dataDir = tempDir('mcp');
   server = await startTestServer(dataDir, github.url, { remoteUrl: fixture.remoteUrl, uiDir: fakeUiDir(dataDir) });
@@ -122,9 +128,10 @@ describe('a review through the tools', () => {
   it('lists every tool', async () => {
     const { tools } = await alice.listTools();
     expect(tools.map(tool => tool.name).sort()).toEqual([
-      'amend', 'comment', 'create_session', 'dismiss', 'general_comment', 'get_diff', 'get_file', 'get_standards',
-      'list_comments', 'list_review_requests', 'list_sessions', 'live_token', 'reply', 'resolve', 'review_done', 'review_start', 'tour_delete', 'tour_done',
-      'tour_start', 'tour_step',
+      'amend', 'automation_token', 'automation_token_revoke', 'automation_tokens', 'comment', 'create_session', 'dismiss',
+      'general_comment', 'get_diff', 'get_file', 'get_standards', 'list_comments', 'list_review_requests', 'list_sessions',
+      'live_token', 'post_review', 'reply', 'resolve', 'review_done', 'review_start', 'tour_delete', 'tour_done', 'tour_start',
+      'tour_step',
     ]);
   });
 
@@ -240,6 +247,7 @@ describe('the review prompt', () => {
     expect(text).toMatch(/^Review pull request #7 of acme\/widgets: `create_session \{ repo: "acme\/widgets", pr: 7 \}`\./);
     expect(text).toContain('review_start');
     expect(text).toContain('### Step 6: Hand over the review');
+    expect(text).toContain('post_review');
     expect(text).not.toContain('user-invocable');
     const repoOnly = await alice.getPrompt({ name: 'review', arguments: { repo: 'acme/widgets' } });
     expect((repoOnly.messages[0].content as { text: string }).text).toMatch(/^Review a change in acme\/widgets\./);
@@ -273,5 +281,204 @@ describe('isolation', () => {
     expect(mine[0].comments.map(c => c.body)).toEqual(['Mine']);
     expect(await failed(alice, 'reply', { id: finding.thread, body: 'x', session: (await ok<{ session: string }>(alice, 'create_session', { repo: 'acme/widgets', pr: 1 })).session })).toContain('another session');
     await ok(alice, 'tour_delete', { tour: tour.tour });
+  });
+});
+
+describe('automation tokens', () => {
+  it('mint one shown once, list them without it, and keep names unique per user', async () => {
+    const minted = await ok<{ name: string; token: string; use: string }>(alice, 'automation_token', { name: 'pr routine' });
+    expect(minted.token).toMatch(/^dfa_[A-Za-z0-9_-]{43}$/);
+    expect(minted.use).toContain(`${server.base}/mcp`);
+    expect(await failed(alice, 'automation_token', { name: 'pr routine' })).toContain('already have an automation token named "pr routine"');
+    await ok(bob, 'automation_token', { name: 'pr routine' });
+
+    const listed = await ok<{ name: string; createdAt: string; lastUsedAt: string | null }[]>(alice, 'automation_tokens', {});
+    expect(listed).toEqual([{ name: 'pr routine', createdAt: expect.any(String), lastUsedAt: null }]);
+    expect(JSON.stringify(listed)).not.toContain(minted.token);
+    expect(JSON.stringify(await server.db.query('SELECT * FROM automation_tokens'))).not.toContain(minted.token);
+    await ok(alice, 'automation_token_revoke', { name: 'pr routine' });
+    await ok(bob, 'automation_token_revoke', { name: 'pr routine' });
+  });
+
+  it('reach /mcp as the user who minted them, until revoked', async () => {
+    const { token } = await ok<{ token: string }>(alice, 'automation_token', { name: 'routine' });
+    const routine = await mcpClient(token);
+    try {
+      const created = await ok<{ session: string }>(routine, 'create_session', { repo: 'acme/widgets', base: fixture.base, head: fixture.head1 });
+      expect((await ok<{ session: string }[]>(alice, 'list_sessions', {})).map(s => s.session)).toContain(created.session);
+      expect((await ok<{ session: string }[]>(bob, 'list_sessions', {})).map(s => s.session)).not.toContain(created.session);
+      const finding = await ok<{ thread: string }>(routine, 'comment', { session: created.session, file: 'added.ts', line: 1, body: 'From the routine' });
+      const [thread] = (await ok<{ id: string; comments: { author: { name: string; type: string } }[] }[]>(alice, 'list_comments', { session: created.session }))
+        .filter(t => t.id === finding.thread);
+      expect(thread.comments[0].author).toEqual({ name: 'routine', type: 'agent' });
+      expect((await ok<{ lastUsedAt: string | null }[]>(alice, 'automation_tokens', {}))[0].lastUsedAt).not.toBeNull();
+
+      await ok(alice, 'automation_token_revoke', { name: 'routine' });
+      expect(await mcpStatus(token)).toBe(401);
+      expect(await failed(alice, 'automation_token_revoke', { name: 'routine' })).toContain('no automation token named');
+    } finally {
+      await routine.close();
+    }
+  });
+
+  it('cannot mint, list or revoke automation tokens themselves', async () => {
+    const { token } = await ok<{ token: string }>(alice, 'automation_token', { name: 'locked out' });
+    const routine = await mcpClient(token);
+    try {
+      for (const [name, args] of [
+        ['automation_token', { name: 'another' }],
+        ['automation_tokens', {}],
+        ['automation_token_revoke', { name: 'locked out' }],
+      ] as const) {
+        expect(await failed(routine, name, args)).toBe('Automation tokens are managed by a signed-in agent, not by an automation token');
+      }
+      expect((await ok<{ name: string }[]>(alice, 'automation_tokens', {})).map(t => t.name)).toEqual(['locked out']);
+      await ok(alice, 'automation_token_revoke', { name: 'locked out' });
+    } finally {
+      await routine.close();
+    }
+  });
+
+  it('refuses a made-up one, and leaves OAuth tokens to OAuth', async () => {
+    expect(await mcpStatus(`dfa_${'x'.repeat(43)}`)).toBe(401);
+    expect(await mcpStatus('dfa_')).toBe(401);
+    expect((await alice.listTools()).tools.length).toBeGreaterThan(0);
+  });
+});
+
+describe('post_review', () => {
+  it('answers that bot posting is not configured on a server without the App key', async () => {
+    const { session } = await ok<{ session: string }>(alice, 'create_session', { repo: 'acme/widgets', pr: 1 });
+    expect(await failed(alice, 'post_review', { session, event: 'COMMENT' })).toContain('not configured on this server');
+  });
+
+  it('takes no approval', async () => {
+    const { session } = await ok<{ session: string }>(alice, 'create_session', { repo: 'acme/widgets', pr: 1 });
+    expect(await failed(alice, 'post_review', { session, event: 'APPROVE' })).toContain('Input validation error');
+    const tool = (await alice.listTools()).tools.find(t => t.name === 'post_review')!;
+    expect((tool.inputSchema.properties as Record<string, { enum?: string[] }>).event.enum).toEqual(['COMMENT', 'REQUEST_CHANGES']);
+  });
+
+  describe('on a server with the App key', () => {
+    let botDir: string;
+    let botServer: TestServer;
+    let routine: Client;
+
+    beforeAll(async () => {
+      const pem = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs1', format: 'pem' }).toString();
+      github.installations['acme/widgets'] = 7;
+      botDir = tempDir('mcp-bot');
+      botServer = await startTestServer(
+        botDir,
+        github.url,
+        { remoteUrl: fixture.remoteUrl, uiDir: fakeUiDir(botDir), gitHubAccess: { tokenFor: async () => 'alice-token' } },
+        { githubApp: { clientId: 'Iv1.client', clientSecret: 'secret', slug: 'diffity', bot: { appId: 1, privateKey: pem } } },
+      );
+      const cookie = await login(botServer.base, 'alice@example.com');
+      await botServer.users.setGitHubToken((await botServer.users.findOrCreate('alice@example.com')).id, 'alice-token', 'alice-gh');
+      const interactive = await mcpClient((await connectAgent(botServer.base, cookie)).accessToken, botServer.base);
+      const { token } = await ok<{ token: string }>(interactive, 'automation_token', { name: 'pr routine' });
+      await interactive.close();
+      routine = await mcpClient(token, botServer.base);
+    });
+
+    afterAll(async () => {
+      await routine?.close();
+      await botServer?.close();
+      removeDir(botDir);
+    });
+
+    it('posts the open findings as the App, with the summary and who asked, and only what is new the second time', async () => {
+      const { session } = await ok<{ session: string }>(routine, 'create_session', { repo: 'acme/widgets', pr: 1 });
+      await ok(routine, 'comment', { session, file: 'src.ts', line: 10, body: 'P2: line ten changed without a test' });
+      await ok(routine, 'general_comment', { session, body: 'One finding.' });
+
+      const before = github.postedReviews.length;
+      const posted = await ok<{ posted: number; skipped: number; url: string }>(routine, 'post_review', { session, event: 'COMMENT' });
+      expect(posted).toEqual({ posted: 1, skipped: 0, url: expect.stringContaining('#pullrequestreview-') });
+      expect(github.postedReviews.length).toBe(before + 1);
+      expect(github.postedReviews.at(-1)).toEqual({
+        commit_id: fixture.head1,
+        event: 'COMMENT',
+        body: 'One finding.\n\n— diffity review, requested by @alice-gh',
+        comments: [{ path: 'src.ts', side: 'RIGHT', line: 10, body: 'P2: line ten changed without a test' }],
+      });
+      expect(github.reviewTokens.at(-1)).toMatch(/^ghs_/);
+
+      expect(await ok(routine, 'post_review', { session, event: 'COMMENT' })).toEqual({ posted: 0, skipped: 1, url: null });
+      expect(await ok(routine, 'post_review', { session, event: 'REQUEST_CHANGES' })).toEqual({ posted: 0, skipped: 1, url: null });
+      expect(github.postedReviews.length).toBe(before + 1);
+    });
+
+    it('skips a finding the App already left in the same words on the same line', async () => {
+      const { session } = await ok<{ session: string }>(routine, 'create_session', { repo: 'acme/widgets', pr: 1 });
+      const finding = { session, file: 'src.ts', line: 10, body: 'P3: say why line ten changed' };
+      await ok(routine, 'comment', finding);
+      expect(await ok<{ posted: number }>(routine, 'post_review', { session, event: 'COMMENT' })).toMatchObject({ posted: 1 });
+      expect(github.comments.at(-1)?.user).toEqual({ login: 'diffity[bot]', type: 'Bot' });
+
+      const before = github.postedReviews.length;
+      const again = await ok<{ thread: string }>(routine, 'comment', finding);
+      const result = await ok<{ posted: number; skipped: number; url: string | null }>(routine, 'post_review', { session, event: 'COMMENT' });
+      expect(result).toMatchObject({ posted: 0, url: null });
+      expect(result.skipped).toBeGreaterThanOrEqual(2);
+      expect(github.postedReviews.length).toBe(before);
+      await ok(routine, 'dismiss', { id: again.thread });
+    });
+
+    it('posts the summary once when two runs post at the same time', async () => {
+      const { session } = await ok<{ session: string }>(routine, 'create_session', { repo: 'acme/widgets', pr: 1 });
+      await ok(routine, 'comment', { session, file: 'src.ts', line: 9, body: 'P3: line nine deserves a look' });
+      await ok(routine, 'general_comment', { session, body: 'Posted once.' });
+
+      const before = github.postedReviews.length;
+      const results = await Promise.all([
+        ok<{ url: string | null }>(routine, 'post_review', { session, event: 'COMMENT' }),
+        ok<{ url: string | null }>(routine, 'post_review', { session, event: 'COMMENT' }),
+      ]);
+      expect(github.postedReviews.length).toBe(before + 1);
+      expect(github.postedReviews.at(-1)?.body).toContain('Posted once.');
+      expect(results.filter(result => result.url !== null)).toHaveLength(1);
+    });
+
+    it('answers with an error when GitHub rejects a review of only a summary', async () => {
+      const { session } = await ok<{ session: string }>(routine, 'create_session', { repo: 'acme/widgets', pr: 1 });
+      const { thread } = await ok<{ thread: string }>(routine, 'general_comment', { session, body: 'Only a summary.' });
+      github.failReviewWith = 422;
+      try {
+        expect(await failed(routine, 'post_review', { session, event: 'COMMENT' })).toContain('Nothing was posted');
+      } finally {
+        github.failReviewWith = null;
+        await ok(routine, 'dismiss', { id: thread });
+      }
+    });
+
+    it('forgets the installation GitHub refused the token of, and says when the App is not installed', async () => {
+      const { session } = await ok<{ session: string }>(routine, 'create_session', { repo: 'acme/widgets', pr: 1 });
+      const { thread } = await ok<{ thread: string }>(routine, 'general_comment', { session, body: 'Refused.' });
+      try {
+        github.failReviewWith = 401;
+        expect(await failed(routine, 'post_review', { session, event: 'COMMENT' })).toContain('401');
+        github.failReviewWith = null;
+        delete github.installations['acme/widgets'];
+        expect(await failed(routine, 'post_review', { session, event: 'COMMENT' })).toBe(
+          `The diffity GitHub App is not installed on acme/widgets; install it at ${github.url}/apps/diffity/installations/new`,
+        );
+      } finally {
+        github.failReviewWith = null;
+        github.installations['acme/widgets'] = 7;
+        await ok(routine, 'dismiss', { id: thread });
+      }
+    });
+
+    it('refuses once the pull request has moved past the session', async () => {
+      const { session } = await ok<{ session: string }>(routine, 'create_session', { repo: 'acme/widgets', pr: 1 });
+      pulls[1].headSha = fixture.head2;
+      try {
+        expect(await failed(routine, 'post_review', { session, event: 'REQUEST_CHANGES', body: 'Changes, please' })).toContain('moved on');
+      } finally {
+        pulls[1].headSha = fixture.head1;
+      }
+    });
   });
 });

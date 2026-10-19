@@ -81,6 +81,7 @@ jobs:
         env:
           GITHUB_APP_CLIENT_ID: ${{ vars.DIFFITY_GITHUB_APP_CLIENT_ID }}
           GITHUB_APP_SLUG: ${{ vars.DIFFITY_GITHUB_APP_SLUG }}
+          GITHUB_APP_ID: ${{ vars.DIFFITY_GITHUB_APP_ID }}
           # /projects/<project number>/global/backendServices/<id of the `diffity` backend service>
           IAP_AUDIENCE: ${{ vars.DIFFITY_IAP_AUDIENCE }}
         run: |
@@ -99,6 +100,11 @@ jobs:
           fi
           if [ -n "$GITHUB_APP_SLUG" ]; then
             env_vars+=",DIFFITY_GITHUB_APP_SLUG=${GITHUB_APP_SLUG}"
+          fi
+          # Without the App's id and key, agents cannot post reviews as the App.
+          if [ -n "$GITHUB_APP_ID" ]; then
+            env_vars+=",DIFFITY_GITHUB_APP_ID=${GITHUB_APP_ID}"
+            secrets+=",DIFFITY_GITHUB_APP_PRIVATE_KEY=diffity-github-app-private-key:latest"
           fi
 
           gcloud run deploy diffity \

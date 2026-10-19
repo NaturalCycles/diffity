@@ -1,6 +1,8 @@
-import type { GitHubAppConfig } from './config.js';
+import { sign } from 'node:crypto';
+import type { GitHubAppConfig, GitHubBotConfig } from './config.js';
 import type { Db, Queryable } from './db.js';
 import { decrypt, encrypt, randomToken, sha256 } from './crypto.js';
+import { keyedSerializer } from './git.js';
 import type { GitHubAccess, GitHubApi } from './github.js';
 
 type Fetch = typeof fetch;
@@ -182,4 +184,72 @@ export class GitHubAppAccess implements GitHubAccess {
       [userId],
     );
   }
+}
+
+/** GitHub refuses an App JWT that expires more than 10 minutes out; issued a minute back for clock drift. */
+export function appJwt(bot: GitHubBotConfig, now: number): string {
+  const seconds = Math.floor(now / 1000);
+  const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
+  const unsigned = `${encode({ alg: 'RS256', typ: 'JWT' })}.${encode({ iat: seconds - 60, exp: seconds + 9 * 60, iss: bot.appId })}`;
+  return `${unsigned}.${sign('RSA-SHA256', Buffer.from(unsigned), bot.privateKey).toString('base64url')}`;
+}
+
+/**
+ * The App acting as itself, `<slug>[bot]` on GitHub, with installation tokens minted from its
+ * private key. A token is good for an hour and kept per installation until shortly before then.
+ */
+export class GitHubAppBot {
+  private readonly installations = new Map<string, number>();
+  private readonly tokens = new Map<number, { token: string; expiresAt: number }>();
+  private readonly lock = keyedSerializer();
+
+  constructor(
+    private readonly bot: GitHubBotConfig,
+    private readonly options: { api: GitHubApi; slug: string | null; installUrl?: string | null; now?: () => number },
+  ) {}
+
+  private now(): number {
+    return this.options.now?.() ?? Date.now();
+  }
+
+  /** The account its comments are under; unknown without the slug. */
+  get login(): string | null {
+    return this.options.slug ? `${this.options.slug}[bot]` : null;
+  }
+
+  get installUrl(): string | null {
+    return this.options.installUrl ?? null;
+  }
+
+  async installationToken(owner: string, repo: string): Promise<string> {
+    const key = installationKey(owner, repo);
+    let installationId = this.installations.get(key);
+    if (installationId === undefined) {
+      installationId = await this.options.api.repoInstallationId(appJwt(this.bot, this.now()), owner, repo);
+      this.installations.set(key, installationId);
+    }
+    const id = installationId;
+    return this.lock(String(id))(async () => {
+      const cached = this.tokens.get(id);
+      if (cached && cached.expiresAt - EXPIRY_MARGIN_MS > this.now()) {
+        return cached.token;
+      }
+      const minted = await this.options.api.createInstallationToken(appJwt(this.bot, this.now()), id);
+      this.tokens.set(id, { token: minted.token, expiresAt: Date.parse(minted.expiresAt) });
+      return minted.token;
+    });
+  }
+
+  invalidate(owner: string, repo: string): void {
+    const key = installationKey(owner, repo);
+    const installationId = this.installations.get(key);
+    this.installations.delete(key);
+    if (installationId !== undefined) {
+      this.tokens.delete(installationId);
+    }
+  }
+}
+
+function installationKey(owner: string, repo: string): string {
+  return `${owner}/${repo}`.toLowerCase();
 }
