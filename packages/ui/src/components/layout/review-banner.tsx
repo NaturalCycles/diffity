@@ -13,6 +13,10 @@ interface ReviewBannerProps {
   onReload: () => void;
   /** An agent waits on this session or on the user's queue, so a review asked for now gets picked up. */
   agentListening?: boolean;
+  /** Diffity called the user's routine for this session and it has not started listening yet. */
+  agentCalled?: boolean;
+  /** Diffity has a routine to call for this user, so a review asked for now gets picked up even with no agent listening. */
+  agentReachable?: boolean;
   onRequestReview?: () => void;
 }
 
@@ -23,8 +27,8 @@ const BAR = 'flex items-center gap-2 px-4 py-2 border-b text-xs text-text';
  * finished looking" is the difference between approving a change and approving it too early.
  */
 export function ReviewBanner(props: ReviewBannerProps) {
-  const { review, findings, ready, onReload, agentListening = false, onRequestReview } = props;
-  const canRequest = agentListening && !!onRequestReview;
+  const { review, findings, ready, onReload, agentListening = false, agentCalled = false, agentReachable = false, onRequestReview } = props;
+  const canRequest = (agentListening || agentReachable) && !!onRequestReview;
   const requestButton = (label: string) => (
     <button
       type="button"
@@ -75,7 +79,7 @@ export function ReviewBanner(props: ReviewBannerProps) {
   if (review.state === 'stale') {
     return (
       <div role="status" data-testid="review-banner" data-state="stale" className={`${BAR} border-border bg-bg-secondary`}>
-        <span className="font-medium">No agent picked this up</span>
+        <span className="font-medium">{agentCalled ? 'Agent called, starting…' : 'No agent picked this up'}</span>
         <span className="text-text-secondary">
           Ask an agent to review it with the diffity <code>review</code> prompt, or to attend your queue.
         </span>

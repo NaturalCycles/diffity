@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { Db } from './db.js';
 import { randomToken, sha256 } from './crypto.js';
+import { ROUTINE_COOLDOWN_MS } from './routine.js';
 
 export const LIVE_TOKEN_TTL_MS = 12 * 60 * 60 * 1000;
+export const SESSION_TOKEN_TTL_MS = 48 * 60 * 60 * 1000;
 /** A request whose agent went quiet for this long is handed out again. */
 export const CLAIM_TTL_MS = 10 * 60 * 1000;
 /** Under the load balancer's 30 s backend timeout. */
@@ -79,15 +81,17 @@ export interface LiveStatus {
   listening: boolean;
   lastPollAt: string | null;
   working: number;
+  calledAt: string | null;
 }
 
 /** An agent that holds a request has stopped polling to work on it, and still counts as listening. */
-function liveStatus(polls: (number | null | undefined)[], working: number, now: number): LiveStatus {
+function liveStatus(polls: (number | null | undefined)[], working: number, now: number, calledAt: string | null = null): LiveStatus {
   const latest = Math.max(...polls.map(poll => poll ?? -Infinity));
   return {
     listening: now - latest < LISTENING_WINDOW_MS || working > 0,
     lastPollAt: Number.isFinite(latest) ? new Date(latest).toISOString() : null,
     working,
+    calledAt,
   };
 }
 
@@ -108,15 +112,32 @@ export class Live {
    * user's. Only its hash is kept.
    */
   async issueToken(userId: string, sessionId: string | null, now = Date.now()): Promise<{ token: string; expiresAt: number }> {
+    return this.insertToken(userId, sessionId, 'wait', now + LIVE_TOKEN_TTL_MS);
+  }
+
+  /** A token for a routine diffity called: the review tools on this one session, and waiting on it. */
+  async issueSessionToken(userId: string, sessionId: string, now = Date.now()): Promise<{ token: string; expiresAt: number }> {
+    return this.insertToken(userId, sessionId, 'session', now + SESSION_TOKEN_TTL_MS);
+  }
+
+  private async insertToken(userId: string, sessionId: string | null, scope: 'wait' | 'session', expiresAt: number) {
     const token = randomToken();
-    const expiresAt = now + LIVE_TOKEN_TTL_MS;
-    await this.db.query('INSERT INTO live_tokens (token_hash, user_id, session_id, expires_at) VALUES ($1, $2, $3, $4)', [
+    await this.db.query('INSERT INTO live_tokens (token_hash, user_id, session_id, scope, expires_at) VALUES ($1, $2, $3, $4, $5)', [
       sha256(token),
       userId,
       sessionId,
+      scope,
       expiresAt,
     ]);
     return { token, expiresAt };
+  }
+
+  async verifySessionToken(token: string, now = Date.now()): Promise<{ userId: string; sessionId: string; expiresAt: number } | null> {
+    const row = await this.db.one<{ user_id: string; session_id: string; expires_at: number }>(
+      "SELECT user_id, session_id, expires_at FROM live_tokens WHERE token_hash = $1 AND scope = 'session'",
+      [sha256(token)],
+    );
+    return row && row.expires_at > now ? { userId: row.user_id, sessionId: row.session_id, expiresAt: row.expires_at } : null;
   }
 
   /**
@@ -268,12 +289,14 @@ export class Live {
 
   /** An agent listens on a session when it waits on that session or on everything of the user's. */
   async status(userId: string, sessionId: string, now = Date.now()): Promise<LiveStatus> {
-    const row = await this.db.one<{ session_poll: number | null; user_poll: number | null }>(
-      `SELECT s.live_polled_at AS session_poll, u.live_polled_at AS user_poll
+    const row = await this.db.one<{ session_poll: number | null; user_poll: number | null; fired: number | null }>(
+      `SELECT s.live_polled_at AS session_poll, u.live_polled_at AS user_poll, s.routine_fired_at AS fired
          FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = $1 AND s.user_id = $2`,
       [sessionId, userId],
     );
-    return liveStatus([row?.session_poll, row?.user_poll], row ? await this.working(userId, sessionId, now) : 0, now);
+    const fired = row?.fired ?? null;
+    const calledAt = fired !== null && now - fired < ROUTINE_COOLDOWN_MS ? new Date(fired).toISOString() : null;
+    return liveStatus([row?.session_poll, row?.user_poll], row ? await this.working(userId, sessionId, now) : 0, now, calledAt);
   }
 
   /** Whether an agent waits on the user's whole queue, which is what a new session's review needs. */

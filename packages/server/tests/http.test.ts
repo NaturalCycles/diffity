@@ -159,6 +159,36 @@ describe('web pages', () => {
     expect(await server.users.gitHubToken(aliceId)).toBeNull();
   });
 
+  it('keeps the routine’s key encrypted and never shows it, keeps it on a save without one, and removes both on request', async () => {
+    const save = (body: string) => api('/settings/routine', {
+      method: 'POST',
+      cookie: aliceCookie,
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+    });
+    expect((await api('/settings', { cookie: aliceCookie })).body).toContain('No key yet');
+    expect((await save('url=http%3A%2F%2Finsecure.example%2Ffire&key=sk-routine')).status).toBe(400);
+    expect(await server.users.routine(aliceId)).toBeNull();
+
+    const saved = await save('url=+https%3A%2F%2Fapi.example%2Ffire+&key=sk-routine');
+    expect(saved.status).toBe(303);
+    expect(saved.headers.get('location')).toBe('/settings');
+    expect(await server.users.routine(aliceId)).toEqual({ url: 'https://api.example/fire', key: 'sk-routine' });
+    expect(JSON.stringify(await server.db.query('SELECT routine_key FROM users'))).not.toContain('sk-routine');
+    const settings = (await api('/settings', { cookie: aliceCookie })).body as string;
+    expect(settings).toContain('Key is set');
+    expect(settings).toContain('value="https://api.example/fire"');
+    expect(settings).not.toContain('sk-routine');
+    expect(await server.users.routine(bobId)).toBeNull();
+
+    await save('url=https%3A%2F%2Fapi.example%2Fother&key=');
+    expect(await server.users.routine(aliceId)).toEqual({ url: 'https://api.example/other', key: 'sk-routine' });
+
+    await save('clear=1');
+    expect(await server.users.routine(aliceId)).toBeNull();
+    expect(await server.users.routineSettings(aliceId)).toEqual({ url: null, keySet: false });
+  });
+
   it('signs out', async () => {
     const cookie = await login(server.base, 'carol@example.com');
     expect((await api('/', { cookie })).status).toBe(200);
@@ -194,9 +224,9 @@ describe('pull requests awaiting review', () => {
     try {
       const page = (await api('/', { cookie: aliceCookie })).body as string;
       expect(page).toContain('<a href="https://github.com/acme/widgets/pull/1">acme/widgets#1</a>');
-      expect(page).toContain(`<a href="/s/${prSession.id}/">open · ${fixture.head1.slice(0, 7)}</a>`);
+      expect(page).toContain(`<a href="/s/${prSession.id}/" target="_blank" rel="noopener">open · ${fixture.head1.slice(0, 7)}</a>`);
       expect(page).toContain('2026-10-03 09:15');
-      expect(page).toMatch(/action="\/sessions">\s*<input type="hidden" name="repo" value="acme\/widgets">\s*<input type="hidden" name="pr" value="2">/);
+      expect(page).toMatch(/action="\/sessions" target="_blank">\s*<input type="hidden" name="repo" value="acme\/widgets">\s*<input type="hidden" name="pr" value="2">/);
       expect(page).not.toContain('Release 1.2');
       expect(page).toContain('(1 hidden by your');
 
@@ -206,6 +236,92 @@ describe('pull requests awaiting review', () => {
     } finally {
       await server.users.setGitHubToken(aliceId, null);
       await server.users.setSettings(aliceId, { skipTitles: [], includeDrafts: false });
+    }
+  });
+
+  it('offers to hand a pull request to the agent when a routine is configured, with nobody listening', async () => {
+    github.reviewRequests['alice-token-routine'] = [
+      { owner: 'acme', repo: 'widgets', number: 1, title: 'Change line ten', author: 'octocat', updatedAt: '2026-10-03T09:15:00Z' },
+      { owner: 'acme', repo: 'widgets', number: 2, title: 'Rename a file', author: 'carol', updatedAt: '2026-10-02T09:00:00Z' },
+    ];
+    await server.users.setGitHubToken(aliceId, 'alice-token-routine');
+    const userStatus = async () => (await api('/api/live/status', { cookie: aliceCookie })).body;
+    const sessionStatus = async () => (await api(`/s/${session.id}/api/live/status`, { cookie: aliceCookie })).body;
+    try {
+      const without = (await api('/', { cookie: aliceCookie })).body as string;
+      expect(without).not.toContain('Create and review');
+      expect(without).not.toContain('<button type="submit">review</button>');
+      expect(without).toContain('<button type="submit">Create session</button>');
+      expect(await userStatus()).toMatchObject({ listening: false, routine: false });
+      expect(await sessionStatus()).toMatchObject({ listening: false, routine: false });
+
+      await server.users.setRoutine(aliceId, 'https://api.example/fire', 'sk-routine');
+      const reachable = (await api('/', { cookie: aliceCookie })).body as string;
+      expect(reachable).not.toContain('Agent listening');
+      expect(reachable).toMatch(/name="pr" value="2">\s*<input type="hidden" name="review" value="1"><button type="submit">Create and review<\/button>/);
+      expect(reachable).toContain(`action="/sessions/${prSession.id}/review-request"><button type="submit">review</button>`);
+      expect(await userStatus()).toMatchObject({ listening: false, routine: true });
+      expect(await sessionStatus()).toMatchObject({ listening: false, routine: true });
+      expect((await api('/api/live/status', { cookie: bobCookie })).body.routine).toBe(false);
+    } finally {
+      await server.users.setRoutine(aliceId, null, null);
+      await server.users.setGitHubToken(aliceId, null);
+    }
+  });
+
+  it('lists the user’s own open pull requests, drafts marked, apart from the review queue', async () => {
+    github.reviewRequests['alice-token-own'] = [
+      { owner: 'acme', repo: 'widgets', number: 2, title: 'Rename a file', author: 'carol', updatedAt: '2026-10-02T09:00:00Z' },
+    ];
+    github.ownPulls['alice-token-own'] = [
+      { owner: 'acme', repo: 'widgets', number: 1, title: 'Change line ten', author: 'alice', updatedAt: '2026-10-03T09:15:00Z' },
+      { owner: 'acme', repo: 'widgets', number: 5, title: 'Work in progress', author: 'alice', draft: true, updatedAt: '2026-10-04T09:15:00Z' },
+    ];
+    await server.users.setGitHubToken(aliceId, 'alice-token-own');
+    try {
+      const page = (await api('/', { cookie: aliceCookie })).body as string;
+      const review = page.slice(page.indexOf('Awaiting your review'), page.indexOf('Your open pull requests'));
+      const own = page.slice(page.indexOf('Your open pull requests'), page.indexOf('Your review sessions'));
+      expect(review).toContain('acme/widgets#2');
+      expect(review).not.toContain('acme/widgets#1');
+      expect(review).not.toContain('Work in progress');
+      expect(own).toContain('acme/widgets#1');
+      expect(own).toContain('Work in progress <span class="muted">draft</span>');
+      expect(own).toContain(`<a href="/s/${prSession.id}/" target="_blank" rel="noopener">open · ${fixture.head1.slice(0, 7)}</a>`);
+      expect(own).not.toContain('acme/widgets#2');
+      expect(github.searches).toContain('is:pr is:open archived:false author:@me');
+
+      github.ownPulls['alice-token-own-none'] = [];
+      await server.users.setGitHubToken(aliceId, 'alice-token-own-none');
+      expect((await api('/', { cookie: aliceCookie })).body).toContain('You have no open pull requests.');
+    } finally {
+      await server.users.setGitHubToken(aliceId, null);
+    }
+    expect((await api('/', { cookie: aliceCookie })).body).toContain('Connect GitHub on Settings</a> to see your open pull requests.');
+  });
+
+  it('opens sessions in a new tab, folds each section, and allows only its own script', async () => {
+    github.reviewRequests['alice-token-tabs'] = [
+      { owner: 'acme', repo: 'widgets', number: 2, title: 'Rename a file', author: 'carol', updatedAt: '2026-10-02T09:00:00Z' },
+    ];
+    await server.users.setGitHubToken(aliceId, 'alice-token-tabs');
+    try {
+      const res = await api('/', { cookie: aliceCookie });
+      const page = res.body as string;
+      expect(page).toContain(`<a href="/s/${session.id}/" target="_blank" rel="noopener">`);
+      expect(page).not.toMatch(/<a href="\/s\/[^"]+\/">/);
+      expect(page).toContain('<form class="inline" method="post" action="/sessions" target="_blank">');
+      expect(page.match(/<details open><summary><h2>/g)).toHaveLength(3);
+      expect(page).toContain('<script src="/sections.js"></script>');
+      const csp = res.headers.get('content-security-policy')!;
+      expect(csp).toContain("script-src 'self'");
+      expect(csp).not.toMatch(/script-src[^;]*unsafe/);
+      const script = await api('/sections.js');
+      expect(script.headers.get('content-type')).toContain('javascript');
+      expect(script.body).toContain('localStorage');
+      expect((await api('/settings', { cookie: aliceCookie })).headers.get('content-security-policy')).not.toContain('script-src');
+    } finally {
+      await server.users.setGitHubToken(aliceId, null);
     }
   });
 

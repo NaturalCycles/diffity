@@ -232,6 +232,17 @@ export const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    version: 6,
+    sql: `
+      ALTER TABLE live_tokens ADD COLUMN scope TEXT NOT NULL DEFAULT 'wait';
+      ALTER TABLE live_tokens ADD CONSTRAINT live_tokens_scope_check
+        CHECK (scope = 'wait' OR (scope = 'session' AND session_id IS NOT NULL));
+      ALTER TABLE users ADD COLUMN routine_url TEXT;
+      ALTER TABLE users ADD COLUMN routine_key TEXT;
+      ALTER TABLE sessions ADD COLUMN routine_fired_at BIGINT;
+    `,
+  },
 ];
 
 /** Any constant; two instances starting together take turns migrating. */

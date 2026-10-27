@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { CommentThread, RepoInfoResponse } from '@diffity/api';
-import { CLAIM_TTL_MS, LISTENING_WINDOW_MS, LIVE_TOKEN_TTL_MS, Live, REVIEW_STALE_MS } from '../src/live.js';
+import { CLAIM_TTL_MS, LISTENING_WINDOW_MS, LIVE_TOKEN_TTL_MS, Live, REVIEW_STALE_MS, SESSION_TOKEN_TTL_MS } from '../src/live.js';
 import { Reviews } from '../src/reviews.js';
 import { Users } from '../src/users.js';
 import type { Db } from '../src/db.js';
@@ -133,6 +133,24 @@ describe('the request queue', () => {
     expect(await live.verifyToken(scoped.token, null)).toBeNull();
   });
 
+  it('accepts a session token as one for its session, until it expires, and a wait token never as one', async () => {
+    const { token, expiresAt } = await live.issueSessionToken(alice, sessionId);
+    expect(expiresAt - Date.now()).toBeGreaterThan(SESSION_TOKEN_TTL_MS - 60_000);
+    expect(await live.verifySessionToken(token)).toEqual({ userId: alice, sessionId, expiresAt });
+    expect(await live.verifySessionToken(token, expiresAt)).toBeNull();
+    expect(await live.verifySessionToken('made-up')).toBeNull();
+    expect((await db.one<{ scope: string }>('SELECT scope FROM live_tokens WHERE session_id = $1 AND expires_at = $2', [sessionId, expiresAt]))?.scope)
+      .toBe('session');
+
+    expect(await live.verifyToken(token, sessionId)).toBe(alice);
+    expect(await live.verifyToken(token, otherSessionId)).toBeNull();
+    expect(await live.verifyToken(token, null)).toBeNull();
+
+    const wait = await live.issueToken(alice, sessionId);
+    expect(await live.verifySessionToken(wait.token)).toBeNull();
+    expect(await live.verifySessionToken((await live.issueToken(alice, null)).token)).toBeNull();
+  });
+
   it('queues one review per session at a time, and review_done settles it', async () => {
     expect(await live.queueReview(alice, otherSessionId)).toBe(true);
     expect(await live.queueReview(alice, otherSessionId)).toBe(false);
@@ -192,7 +210,7 @@ describe('the request queue', () => {
     expect((await live.userStatus(alice, now)).listening).toBe(false);
 
     await live.recordPoll({ userId: alice, sessionId: null }, now);
-    expect(await live.status(alice, otherSessionId, now)).toEqual({ listening: true, lastPollAt: new Date(now).toISOString(), working: 0 });
+    expect(await live.status(alice, otherSessionId, now)).toEqual({ listening: true, lastPollAt: new Date(now).toISOString(), working: 0, calledAt: null });
     expect((await live.userStatus(alice, now)).listening).toBe(true);
     expect((await live.userStatus(alice, now + LISTENING_WINDOW_MS)).listening).toBe(false);
     expect((await live.userStatus(bob, now)).listening).toBe(false);
@@ -577,7 +595,7 @@ describe('the attendant over HTTP', () => {
     try {
       const status = () => fetch(`${server.base}/api/live/status`, { headers: { cookie: aliceCookie } }).then(res => res.json());
       expect((await fetch(`${server.base}/api/live/status`)).status).toBe(401);
-      expect(await status()).toEqual({ listening: false, lastPollAt: null, working: 0 });
+      expect(await status()).toEqual({ listening: false, lastPollAt: null, working: 0, calledAt: null, routine: false });
       const before = await (await fetch(`${server.base}/`, { headers: { cookie: aliceCookie } })).text();
       expect(before).not.toContain('Agent listening');
       expect(before).toContain('<button type="submit">Create session</button>');

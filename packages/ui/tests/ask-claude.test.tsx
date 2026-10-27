@@ -3,7 +3,7 @@ import { render, cleanup, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CommentForm } from '../src/components/comments/comment-form';
 import { ThreadCard } from '../src/components/comments/thread-card';
-import { AgentListeningContext } from '../src/lib/agent-listening';
+import { AgentListeningContext, AgentReachableContext } from '../src/lib/agent-listening';
 import { makeComment, makeThread } from './helpers/wire';
 
 afterEach(cleanup);
@@ -41,6 +41,22 @@ describe('Ask Claude on the comment box', () => {
     const ask = screen.getByRole('button', { name: 'Ask Claude' });
     expect(ask).toHaveProperty('disabled', true);
     expect(ask.parentElement?.getAttribute('title')).toBe('No agent is listening on this review');
+  });
+
+  it('asks with nobody listening when diffity has a routine to call', async () => {
+    const user = userEvent.setup({ delay: null });
+    const onAsk = vi.fn();
+    render(
+      <AgentReachableContext.Provider value={true}>
+        <CommentForm onSubmit={vi.fn()} onCancel={() => {}} onAsk={onAsk} />
+      </AgentReachableContext.Provider>,
+    );
+
+    await user.type(screen.getByPlaceholderText('Leave a comment'), 'why this?');
+    const ask = screen.getByRole('button', { name: 'Ask Claude' });
+    expect(ask.parentElement?.getAttribute('title')).toBe('Ask; diffity calls your routine to answer');
+    await user.click(ask);
+    expect(onAsk).toHaveBeenCalledWith('why this?');
   });
 
   it('is not offered where nothing can be asked', () => {

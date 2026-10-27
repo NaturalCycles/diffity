@@ -76,6 +76,13 @@ describe('the review banner', () => {
     expect(onRequestReview).toHaveBeenCalledTimes(3);
   });
 
+  it('offers a review with nobody listening when diffity has a routine to call', () => {
+    const onRequestReview = vi.fn();
+    render(<ReviewBanner review={run('none')} findings={0} ready={false} onReload={() => {}} agentReachable onRequestReview={onRequestReview} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Ask your agent to review' }));
+    expect(onRequestReview).toHaveBeenCalledTimes(1);
+  });
+
   it('offers the reload only for a review that finished while the page was open', () => {
     banner(run('done'), true);
     expect(screen.getByRole('button', { name: 'Reload' })).toBeTruthy();

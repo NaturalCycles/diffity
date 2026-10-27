@@ -19,6 +19,8 @@ export interface McpContext {
   /** Who the comments are from, as the connecting client named itself when it registered. */
   agentName: string;
   version: string;
+  /** The one session a session token works on. */
+  sessionScope?: string;
 }
 
 function json(value: unknown): CallToolResult {
@@ -94,9 +96,15 @@ export function createMcpServer(ctx: McpContext): McpServer {
   const agent: CommentAuthor = { name: ctx.agentName, type: 'agent' };
   const server = new McpServer({ name: 'diffity', version: ctx.version });
 
-  const session = (id: string): Promise<ReviewSessionRecord> => service.requireSession(userId, id);
+  const session = async (id: string): Promise<ReviewSessionRecord> => {
+    const record = await service.requireSession(userId, id);
+    if (ctx.sessionScope !== undefined && record.id !== ctx.sessionScope) {
+      throw new ServiceError(`This token is for session ${ctx.sessionScope.slice(0, 8)} only`);
+    }
+    return record;
+  };
 
-  const thread = async (id: string, sessionId?: string): Promise<CommentThread> => {
+  const thread = async (id: string, sessionId = ctx.sessionScope): Promise<CommentThread> => {
     const found = await reviews.getThread(userId, id);
     if (!found) {
       throw new ServiceError(`No thread matches ${id}`);
@@ -111,6 +119,9 @@ export function createMcpServer(ctx: McpContext): McpServer {
     const found = await reviews.getTour(userId, id);
     if (!found) {
       throw new ServiceError(`No walkthrough matches ${id}`);
+    }
+    if (ctx.sessionScope !== undefined) {
+      await session(found.sessionId);
     }
     return found;
   };
@@ -128,112 +139,170 @@ export function createMcpServer(ctx: McpContext): McpServer {
     createdAt: record.createdAt,
   });
 
-  server.registerTool(
-    'create_session',
-    {
-      description:
-        'Open a review session on pushed code. Give the repository and exactly one of: `pr` (a pull request number); '
-        + '`base` and `head` (full commit shas); or `base` and `patch` (a unified diff applied to base, for work that is not pushed). '
-        + 'Returns the session id, the URL the user opens to read the review, and the changed files. '
-        + 'With `review: true` the session is queued for the agent waiting on the user\'s queue (live_token {}) to review. '
-        + 'The `review` prompt of this server holds the method for reviewing through these tools.',
-      inputSchema: {
-        repo: z.string().describe('"owner/name" on GitHub'),
-        pr: z.number().int().positive().optional(),
-        base: z.string().optional().describe('Full 40-character commit sha'),
-        head: z.string().optional().describe('Full 40-character commit sha'),
-        patch: z.string().optional().describe('Unified diff (git diff output) against base'),
-        review: z.boolean().optional().describe('Queue the session for the agent waiting on your queue to review'),
+  // A session token's run works on its one session and reads the code from its own checkout.
+  if (!ctx.sessionScope) {
+    server.registerTool(
+      'create_session',
+      {
+        description:
+          'Open a review session on pushed code. Give the repository and exactly one of: `pr` (a pull request number); '
+          + '`base` and `head` (full commit shas); or `base` and `patch` (a unified diff applied to base, for work that is not pushed). '
+          + 'Returns the session id, the URL the user opens to read the review, and the changed files. '
+          + 'With `review: true` the session is queued for the agent waiting on the user\'s queue (live_token {}) to review. '
+          + 'The `review` prompt of this server holds the method for reviewing through these tools.',
+        inputSchema: {
+          repo: z.string().describe('"owner/name" on GitHub'),
+          pr: z.number().int().positive().optional(),
+          base: z.string().optional().describe('Full 40-character commit sha'),
+          head: z.string().optional().describe('Full 40-character commit sha'),
+          patch: z.string().optional().describe('Unified diff (git diff output) against base'),
+          review: z.boolean().optional().describe('Queue the session for the agent waiting on your queue to review'),
+        },
       },
-    },
-    guarded(async ({ review, ...input }) => {
-      const created = await service.createSession(userId, input);
-      const queued = review ? await ctx.live.queueReview(userId, created.session.id) : false;
-      return json({
-        ...describe(created.session),
-        ...(review ? { review: queued ? 'queued' : 'already queued' } : {}),
-        created: created.created,
-        carriedThreads: created.carried,
-        files: created.files.map(file => ({
-          status: file.status,
-          path: file.newPath,
-          ...(file.oldPath !== file.newPath ? { oldPath: file.oldPath } : {}),
-        })),
-      });
-    }),
-  );
+      guarded(async ({ review, ...input }) => {
+        const created = await service.createSession(userId, input);
+        const queued = review ? await ctx.live.queueReview(userId, created.session.id) : false;
+        return json({
+          ...describe(created.session),
+          ...(review ? { review: queued ? 'queued' : 'already queued' } : {}),
+          created: created.created,
+          carriedThreads: created.carried,
+          files: created.files.map(file => ({
+            status: file.status,
+            path: file.newPath,
+            ...(file.oldPath !== file.newPath ? { oldPath: file.oldPath } : {}),
+          })),
+        });
+      }),
+    );
 
-  server.registerTool(
-    'list_sessions',
-    {
-      description: 'List your review sessions, newest first.',
-      inputSchema: { repo: z.string().optional().describe('Only sessions of this "owner/name"') },
-      annotations: { readOnlyHint: true },
-    },
-    guarded(async ({ repo }) => {
-      const [owner, name] = repo?.split('/') ?? [];
-      return json((await reviews.listSessions(userId, { owner, repo: name })).map(describe));
-    }),
-  );
+    server.registerTool(
+      'list_sessions',
+      {
+        description: 'List your review sessions, newest first.',
+        inputSchema: { repo: z.string().optional().describe('Only sessions of this "owner/name"') },
+        annotations: { readOnlyHint: true },
+      },
+      guarded(async ({ repo }) => {
+        const [owner, name] = repo?.split('/') ?? [];
+        return json((await reviews.listSessions(userId, { owner, repo: name })).map(describe));
+      }),
+    );
 
-  server.registerTool(
-    'list_review_requests',
-    {
-      description:
-        'List the open pull requests waiting for your review on GitHub, after your filters on the Settings page, '
-        + 'each with your newest session on it, if any. Review one with create_session { repo, pr }.',
-      inputSchema: {},
-      annotations: { readOnlyHint: true },
-    },
-    guarded(async () => {
-      const found = await service.reviewRequests(userId);
-      if (!found) {
-        throw new ServiceError(`Connect GitHub first, at ${service.settingsUrl()}`);
+    server.registerTool(
+      'list_review_requests',
+      {
+        description:
+          'List the open pull requests waiting for your review on GitHub, after your filters on the Settings page, '
+          + 'each with your newest session on it, if any. Review one with create_session { repo, pr }.',
+        inputSchema: {},
+        annotations: { readOnlyHint: true },
+      },
+      guarded(async () => {
+        const found = await service.reviewRequests(userId);
+        if (!found) {
+          throw new ServiceError(`Connect GitHub first, at ${service.settingsUrl()}`);
+        }
+        return json({
+          requests: found.requests.map(request => ({
+            repo: `${request.owner}/${request.repo}`,
+            pr: request.number,
+            title: request.title,
+            author: request.author,
+            draft: request.draft,
+            updatedAt: request.updatedAt,
+            url: request.url,
+            session: request.session ? { ...request.session, url: service.sessionUrl(request.session.id) } : null,
+          })),
+          hidden: found.hidden,
+        });
+      }),
+    );
+
+    server.registerTool(
+      'get_diff',
+      {
+        description: "The session's unified diff; line numbers are in the @@ hunk headers.",
+        inputSchema: { session: sessionArg, file: z.string().optional().describe('Only this file') },
+        annotations: { readOnlyHint: true },
+      },
+      guarded(async args => {
+        const raw = await service.diffText(await session(args.session), { path: args.file });
+        return text(raw.trim() ? raw : 'No changes.');
+      }),
+    );
+
+    server.registerTool(
+      'get_file',
+      {
+        description: 'A file as it is on one side of the diff: `new` is the head, `old` the base.',
+        inputSchema: { session: sessionArg, path: z.string().min(1), side: z.enum(['old', 'new']).default('new') },
+        annotations: { readOnlyHint: true },
+      },
+      guarded(async args => {
+        const content = await service.readFile(await session(args.session), args.side, args.path);
+        if (content === null) {
+          throw new ServiceError(`${args.path} does not exist on the ${args.side} side`);
+        }
+        return text(content);
+      }),
+    );
+
+    const requireSignedIn = () => {
+      if (ctx.automation) {
+        throw new ServiceError('Automation tokens are managed by a signed-in agent, not by an automation token');
       }
-      return json({
-        requests: found.requests.map(request => ({
-          repo: `${request.owner}/${request.repo}`,
-          pr: request.number,
-          title: request.title,
-          author: request.author,
-          draft: request.draft,
-          updatedAt: request.updatedAt,
-          url: request.url,
-          session: request.session ? { ...request.session, url: service.sessionUrl(request.session.id) } : null,
-        })),
-        hidden: found.hidden,
-      });
-    }),
-  );
+    };
 
-  server.registerTool(
-    'get_diff',
-    {
-      description: "The session's unified diff; line numbers are in the @@ hunk headers.",
-      inputSchema: { session: sessionArg, file: z.string().optional().describe('Only this file') },
-      annotations: { readOnlyHint: true },
-    },
-    guarded(async args => {
-      const raw = await service.diffText(await session(args.session), { path: args.file });
-      return text(raw.trim() ? raw : 'No changes.');
-    }),
-  );
+    const tokenName = z.string().trim().min(1).max(100).describe('What the token is for, e.g. "pr-review routine"');
 
-  server.registerTool(
-    'get_file',
-    {
-      description: 'A file as it is on one side of the diff: `new` is the head, `old` the base.',
-      inputSchema: { session: sessionArg, path: z.string().min(1), side: z.enum(['old', 'new']).default('new') },
-      annotations: { readOnlyHint: true },
-    },
-    guarded(async args => {
-      const content = await service.readFile(await session(args.session), args.side, args.path);
-      if (content === null) {
-        throw new ServiceError(`${args.path} does not exist on the ${args.side} side`);
-      }
-      return text(content);
-    }),
-  );
+    server.registerTool(
+      'automation_token',
+      {
+        description:
+          'Mint a bearer token for an agent that cannot sign in, such as a scheduled routine: it reaches this MCP endpoint '
+          + 'as you, with every tool, until revoked. Shown once; store it as a secret.',
+        inputSchema: { name: tokenName },
+      },
+      guarded(async args => {
+        requireSignedIn();
+        const token = await ctx.automationTokens.mint(userId, args.name);
+        return json({
+          name: args.name,
+          token,
+          use: `Send it as "Authorization: Bearer <token>" to ${new URL('/mcp', service.publicUrl).href}. It is not shown again.`,
+        });
+      }),
+    );
+
+    server.registerTool(
+      'automation_tokens',
+      {
+        description: 'List your automation tokens, without the tokens themselves.',
+        inputSchema: {},
+        annotations: { readOnlyHint: true },
+      },
+      guarded(async () => {
+        requireSignedIn();
+        return json(await ctx.automationTokens.list(userId));
+      }),
+    );
+
+    server.registerTool(
+      'automation_token_revoke',
+      {
+        description: 'Revoke one of your automation tokens by name.',
+        inputSchema: { name: tokenName },
+      },
+      guarded(async args => {
+        requireSignedIn();
+        if (!(await ctx.automationTokens.revoke(userId, args.name))) {
+          throw new ServiceError(`You have no automation token named "${args.name}"`);
+        }
+        return text(`Revoked automation token "${args.name}"`);
+      }),
+    );
+  }
 
   server.registerTool(
     'get_standards',
@@ -371,7 +440,8 @@ export function createMcpServer(ctx: McpContext): McpServer {
       inputSchema: { id: z.string().min(1), body, session: sessionArg.optional() },
     },
     guarded(async args => {
-      const scoped = args.session === undefined ? undefined : (await session(args.session)).id;
+      const asked = args.session ?? ctx.sessionScope;
+      const scoped = asked === undefined ? undefined : (await session(asked)).id;
       const comment = await reviews.findComment(userId, args.id);
       let commentId: string;
       let sessionId: string;
@@ -516,7 +586,8 @@ export function createMcpServer(ctx: McpContext): McpServer {
       inputSchema: { session: sessionArg.optional() },
     },
     guarded(async args => {
-      const record = args.session === undefined ? null : await session(args.session);
+      const scoped = ctx.sessionScope ?? args.session;
+      const record = scoped === undefined ? null : await session(scoped);
       const { token, expiresAt } = await ctx.live.issueToken(userId, record?.id ?? null);
       const query = record ? `session=${record.id}&wait=${MAX_WAIT_SECONDS}` : `wait=${MAX_WAIT_SECONDS}`;
       const pollUrl = new URL(`/live/await?${query}`, service.publicUrl).href;
@@ -557,61 +628,6 @@ export function createMcpServer(ctx: McpContext): McpServer {
         url: result.reviewUrl,
         ...(result.errors.length > 0 ? { errors: result.errors } : {}),
       });
-    }),
-  );
-
-  const requireSignedIn = () => {
-    if (ctx.automation) {
-      throw new ServiceError('Automation tokens are managed by a signed-in agent, not by an automation token');
-    }
-  };
-
-  const tokenName = z.string().trim().min(1).max(100).describe('What the token is for, e.g. "pr-review routine"');
-
-  server.registerTool(
-    'automation_token',
-    {
-      description:
-        'Mint a bearer token for an agent that cannot sign in, such as a scheduled routine: it reaches this MCP endpoint '
-        + 'as you, with every tool, until revoked. Shown once; store it as a secret.',
-      inputSchema: { name: tokenName },
-    },
-    guarded(async args => {
-      requireSignedIn();
-      const token = await ctx.automationTokens.mint(userId, args.name);
-      return json({
-        name: args.name,
-        token,
-        use: `Send it as "Authorization: Bearer <token>" to ${new URL('/mcp', service.publicUrl).href}. It is not shown again.`,
-      });
-    }),
-  );
-
-  server.registerTool(
-    'automation_tokens',
-    {
-      description: 'List your automation tokens, without the tokens themselves.',
-      inputSchema: {},
-      annotations: { readOnlyHint: true },
-    },
-    guarded(async () => {
-      requireSignedIn();
-      return json(await ctx.automationTokens.list(userId));
-    }),
-  );
-
-  server.registerTool(
-    'automation_token_revoke',
-    {
-      description: 'Revoke one of your automation tokens by name.',
-      inputSchema: { name: tokenName },
-    },
-    guarded(async args => {
-      requireSignedIn();
-      if (!(await ctx.automationTokens.revoke(userId, args.name))) {
-        throw new ServiceError(`You have no automation token named "${args.name}"`);
-      }
-      return text(`Revoked automation token "${args.name}"`);
     }),
   );
 
