@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useContext } from 'react';
-import { AgentListeningContext } from '../../lib/agent-listening';
+import { AgentCalledContext, AgentListeningContext, AgentReachableContext } from '../../lib/agent-listening';
 
 interface CommentFormProps {
   onSubmit: (body: string) => void;
@@ -18,6 +18,8 @@ export function CommentForm(props: CommentFormProps) {
     autoFocus = true, lineLabel, onAsk,
   } = props;
   const listening = useContext(AgentListeningContext);
+  const called = useContext(AgentCalledContext);
+  const reachable = useContext(AgentReachableContext) || listening;
   const [body, setBody] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -76,10 +78,15 @@ export function CommentForm(props: CommentFormProps) {
           Cancel
         </button>
         {onAsk && (
-          <span title={listening ? 'Ask the agent that wrote this review; it answers in this thread.' : 'No agent is listening on this review'}>
+          <span
+            title={listening
+              ? 'Ask the agent that wrote this review; it answers in this thread.'
+              : called ? 'Agent called, starting…'
+                : reachable ? 'Ask; diffity calls your routine to answer' : 'No agent is listening on this review'}
+          >
             <button
               onClick={() => send(onAsk)}
-              disabled={!listening || !body.trim()}
+              disabled={!reachable || !body.trim()}
               className="px-3 py-1.5 text-xs font-medium rounded-md border border-accent/40 text-accent hover:bg-accent/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
             >
               Ask Claude

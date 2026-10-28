@@ -97,6 +97,7 @@ const PAGE_SIZE = 100;
 const MAX_PAGES = 30;
 
 const REVIEW_REQUESTS_QUERY = 'is:pr is:open archived:false review-requested:@me';
+const OWN_PULLS_QUERY = 'is:pr is:open archived:false author:@me';
 
 const REVIEW_THREADS_QUERY = `query($owner:String!,$repo:String!,$number:Int!){
   repository(owner:$owner,name:$repo){
@@ -290,15 +291,24 @@ export class GitHubApi {
   }
 
   /** Open pull requests waiting for the token's own review, most recently updated first. */
-  async reviewRequests(token: string): Promise<ReviewRequest[]> {
-    const query = new URLSearchParams({ q: REVIEW_REQUESTS_QUERY, sort: 'updated', order: 'desc', per_page: '50' });
+  reviewRequests(token: string): Promise<ReviewRequest[]> {
+    return this.searchPulls(token, REVIEW_REQUESTS_QUERY);
+  }
+
+  /** The token's own open pull requests, most recently updated first. */
+  ownPulls(token: string): Promise<ReviewRequest[]> {
+    return this.searchPulls(token, OWN_PULLS_QUERY);
+  }
+
+  private async searchPulls(token: string, q: string): Promise<ReviewRequest[]> {
+    const query = new URLSearchParams({ q, sort: 'updated', order: 'desc', per_page: '50' });
     let result: { items?: RawSearchIssue[] };
     try {
       result = await this.json(token, `/search/issues?${query.toString()}`);
     } catch (err) {
       // A search GitHub refuses (rate limit, an App without access) leaves the list empty, not the page broken.
       if (err instanceof GitHubApiError && (err.status === 422 || err.status === 403)) {
-        console.warn(`Listing review requests failed: ${err.message}`);
+        console.warn(`Searching pull requests failed: ${err.message}`);
         return [];
       }
       throw err;

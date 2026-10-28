@@ -168,6 +168,26 @@ export class ReviewService {
 
   /** Null when the user has no GitHub access to ask with. */
   async reviewRequests(userId: string, now = Date.now()): Promise<ReviewRequests | null> {
+    const all = await this.searchPulls(userId, 'review', token => this.github.reviewRequests(token), now);
+    if (!all) {
+      return null;
+    }
+    const shown = filterReviewRequests(all, await this.users.settings(userId));
+    return { requests: await this.withSessions(userId, shown), hidden: all.length - shown.length };
+  }
+
+  /** Null when the user has no GitHub access to ask with. */
+  async ownPulls(userId: string, now = Date.now()): Promise<ReviewRequestRow[] | null> {
+    const all = await this.searchPulls(userId, 'own', token => this.github.ownPulls(token), now);
+    return all && this.withSessions(userId, all);
+  }
+
+  private async searchPulls(
+    userId: string,
+    kind: 'review' | 'own',
+    search: (token: string) => Promise<ReviewRequest[]>,
+    now: number,
+  ): Promise<ReviewRequest[] | null> {
     const token = await this.access.tokenFor(userId);
     if (!token) {
       return null;
@@ -177,24 +197,24 @@ export class ReviewService {
         this.reviewRequestCache.delete(key);
       }
     }
-    let cached = this.reviewRequestCache.get(userId);
+    const key = `${kind}:${userId}`;
+    let cached = this.reviewRequestCache.get(key);
     if (!cached || cached.token !== token) {
-      const entry = { token, at: now, requests: this.github.reviewRequests(token) };
-      this.reviewRequestCache.set(userId, entry);
+      const entry = { token, at: now, requests: search(token) };
+      this.reviewRequestCache.set(key, entry);
       entry.requests.catch(() => {
-        if (this.reviewRequestCache.get(userId) === entry) {
-          this.reviewRequestCache.delete(userId);
+        if (this.reviewRequestCache.get(key) === entry) {
+          this.reviewRequestCache.delete(key);
         }
       });
       cached = entry;
     }
-    const all = await cached.requests;
-    const shown = filterReviewRequests(all, await this.users.settings(userId));
-    const sessions = await this.reviews.latestPrSessions(userId, shown);
-    return {
-      requests: shown.map(request => ({ ...request, session: sessions.get(prKey(request.owner, request.repo, request.number)) ?? null })),
-      hidden: all.length - shown.length,
-    };
+    return cached.requests;
+  }
+
+  private async withSessions(userId: string, requests: ReviewRequest[]): Promise<ReviewRequestRow[]> {
+    const sessions = await this.reviews.latestPrSessions(userId, requests);
+    return requests.map(request => ({ ...request, session: sessions.get(prKey(request.owner, request.repo, request.number)) ?? null }));
   }
 
   async requireSession(userId: string, idOrPrefix: string): Promise<ReviewSessionRecord> {

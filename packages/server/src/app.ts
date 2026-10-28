@@ -11,13 +11,14 @@ import type { Config } from './config.js';
 import { WEB_SESSION_MAX_AGE_SECONDS, type Users, type User, type WebSessions } from './users.js';
 import { hashPresentedClientSecret, type OAuthProvider } from './oauth.js';
 import type { AutomationTokens } from './automation.js';
-import { ServiceError, describeSession, type ReviewRequests, type ReviewService } from './service.js';
+import { ServiceError, describeSession, type ReviewRequestRow, type ReviewService } from './service.js';
 import type { DevLoginProvider, IapLogin } from './login.js';
 import { GitHubConnectError, type GitHubAppAccess } from './github-app.js';
 import { createMcpServer } from './mcp.js';
 import { MAX_WAIT_SECONDS, type Live } from './live.js';
+import type { Routine } from './routine.js';
 import { uiApiRouter } from './ui-api.js';
-import { escapeHtml, page } from './html.js';
+import { SECTIONS_SCRIPT, escapeHtml, page } from './html.js';
 import { randomToken } from './crypto.js';
 import {
   SESSION_COOKIE,
@@ -37,6 +38,7 @@ export interface AppDeps {
   automationTokens: AutomationTokens;
   service: ReviewService;
   live: Live;
+  routine: Routine;
   devLogin: DevLoginProvider | null;
   /** When set, identity comes from IAP's header on every request, and there is no login form. */
   iap: IapLogin | null;
@@ -91,7 +93,7 @@ function formTargetFor(redirectUri: string): string {
 }
 
 export function createApp(deps: AppDeps): express.Express {
-  const { config, users, webSessions, oauth, service, live } = deps;
+  const { config, users, webSessions, oauth, service, live, routine } = deps;
   const publicUrl = config.publicUrl;
   const mcpUrl = new URL('/mcp', publicUrl);
   const secureCookies = publicUrl.protocol === 'https:';
@@ -118,9 +120,9 @@ export function createApp(deps: AppDeps): express.Express {
     return userId ? users.get(userId) : null;
   };
 
-  const sendPage = (res: Response, status: number, title: string, body: string, user: User | null, formTargets: string[] = []) => {
+  const sendPage = (res: Response, status: number, title: string, body: string, user: User | null, formTargets: string[] = [], selfScripts = false) => {
     res.status(status)
-      .set('Content-Security-Policy', pageContentSecurityPolicy(formTargets))
+      .set('Content-Security-Policy', pageContentSecurityPolicy(formTargets, selfScripts))
       .set('Cache-Control', 'no-store')
       .type('html')
       .send(page({ title, body, user }));
@@ -143,6 +145,10 @@ export function createApp(deps: AppDeps): express.Express {
 
   app.get('/healthz', (_req, res) => {
     res.json({ ok: true, version: deps.version });
+  });
+
+  app.get('/sections.js', (_req, res) => {
+    res.type('text/javascript').set('Cache-Control', 'no-cache').send(SECTIONS_SCRIPT);
   });
 
   if (deps.uiDir) {
@@ -209,17 +215,27 @@ export function createApp(deps: AppDeps): express.Express {
     verifier: {
       verifyAccessToken: async token => {
         const automation = await deps.automationTokens.verify(token);
-        if (!automation) {
-          return oauth.verifyAccessToken(token);
+        if (automation) {
+          return {
+            token,
+            clientId: `automation:${automation.name}`,
+            scopes: [],
+            // The SDK requires an expiry; an automation token lasts until it is revoked.
+            expiresAt: Number.MAX_SAFE_INTEGER,
+            extra: { userId: automation.userId, automation: true, automationName: automation.name },
+          };
         }
-        return {
-          token,
-          clientId: `automation:${automation.name}`,
-          scopes: [],
-          // The SDK requires an expiry; an automation token lasts until it is revoked.
-          expiresAt: Number.MAX_SAFE_INTEGER,
-          extra: { userId: automation.userId, automation: true, automationName: automation.name },
-        };
+        const scoped = await live.verifySessionToken(token);
+        if (scoped) {
+          return {
+            token,
+            clientId: 'session',
+            scopes: [],
+            expiresAt: scoped.expiresAt,
+            extra: { userId: scoped.userId, sessionScope: scoped.sessionId },
+          };
+        }
+        return oauth.verifyAccessToken(token);
       },
     },
     resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(mcpUrl),
@@ -232,14 +248,16 @@ export function createApp(deps: AppDeps): express.Express {
       return;
     }
     const automationName = req.auth!.extra!.automation === true ? String(req.auth!.extra!.automationName) : null;
+    const sessionScope = typeof req.auth!.extra!.sessionScope === 'string' ? req.auth!.extra!.sessionScope : undefined;
     const server = createMcpServer({
       service,
       live,
       automationTokens: deps.automationTokens,
       userId,
       automation: automationName !== null,
-      agentName: automationName ?? (await oauth.clientsStore.clientName(req.auth!.clientId)) ?? 'Claude',
+      agentName: sessionScope ? 'Attendant' : automationName ?? (await oauth.clientsStore.clientName(req.auth!.clientId)) ?? 'Claude',
       version: deps.version,
+      sessionScope,
     });
     // Stateless: every request is complete in itself, so nothing is held between them.
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
@@ -435,6 +453,7 @@ export function createApp(deps: AppDeps): express.Express {
       return;
     }
     const settings = await users.settings(user.id);
+    const routineSettings = await users.routineSettings(user.id);
     sendPage(res, 200, 'Settings', `
       <h1>Settings</h1>
       <h2>GitHub access</h2>
@@ -448,6 +467,18 @@ export function createApp(deps: AppDeps): express.Express {
         <p><label><input type="checkbox" name="includeDrafts" value="1"${settings.includeDrafts ? ' checked' : ''}> List drafts too</label></p>
         <button type="submit">Save</button>
       </form>
+      <h2>Call an agent</h2>
+      <p>When you ask for a review from this page, or ask a question while no agent is listening, diffity fires this Claude
+        routine with the session and a token that works on that session only.</p>
+      <form method="post" action="/settings/routine">
+        <p><label>Fire URL <input type="text" name="url" size="60" value="${escapeHtml(routineSettings.url ?? '')}"></label></p>
+        <p><label>Key <input type="password" name="key" autocomplete="off"></label>
+          <span class="muted">${routineSettings.keySet ? 'Key is set' : 'No key yet'}</span></p>
+        <button type="submit">Save</button>
+      </form>
+      ${routineSettings.url || routineSettings.keySet
+        ? '<form method="post" action="/settings/routine"><input type="hidden" name="clear" value="1"><button type="submit">Remove</button></form>'
+        : ''}
       <h2>Connect an agent</h2>
       <p>Add this server to Claude Code as an MCP connector; it signs you in through this page the first time.
         Its <code>review</code> prompt holds the review method.</p>
@@ -480,6 +511,27 @@ export function createApp(deps: AppDeps): express.Express {
       skipTitles: [...new Set(raw.split(/\r?\n/).map(line => line.trim()).filter(Boolean))],
       includeDrafts: req.body?.includeDrafts === '1',
     });
+    res.redirect(303, '/settings');
+  });
+
+  app.post('/settings/routine', sameOrigin, forms, async (req, res) => {
+    const user = await userFor(req);
+    if (!user) {
+      notSignedIn(res, '/settings');
+      return;
+    }
+    if (req.body?.clear === '1') {
+      await users.setRoutine(user.id, null, null);
+      res.redirect(303, '/settings');
+      return;
+    }
+    const url = typeof req.body?.url === 'string' ? req.body.url.trim() : '';
+    if (!url.startsWith('https://')) {
+      sendPage(res, 400, 'Settings', '<p class="error">The fire URL must start with https://.</p><p><a href="/settings">Settings</a></p>', user);
+      return;
+    }
+    const key = typeof req.body?.key === 'string' ? req.body.key.trim() : '';
+    await users.setRoutine(user.id, url, key || undefined);
     res.redirect(303, '/settings');
   });
 
@@ -528,47 +580,54 @@ export function createApp(deps: AppDeps): express.Express {
     res.redirect(303, '/settings');
   });
 
-  const reviewRequestsSection = async (user: User, listening: boolean): Promise<string> => {
-    let found: ReviewRequests | null;
+  const section = (heading: string, content: string): string =>
+    `<details open><summary><h2>${heading}</h2></summary>${content}</details>`;
+
+  const pullsSection = async (
+    heading: string,
+    connectFor: string,
+    empty: string,
+    list: () => Promise<{ rows: ReviewRequestRow[]; hidden: number } | null>,
+    reachable: boolean,
+  ): Promise<string> => {
+    let found: { rows: ReviewRequestRow[]; hidden: number } | null;
     try {
-      found = await service.reviewRequests(user.id);
+      found = await list();
     } catch (err) {
-      return `<h2>Awaiting your review</h2>
-        <p class="error">GitHub could not be asked: ${escapeHtml(err instanceof Error ? err.message : String(err))}</p>`;
+      return section(heading, `<p class="error">GitHub could not be asked: ${escapeHtml(err instanceof Error ? err.message : String(err))}</p>`);
     }
     if (!found) {
-      return `<h2>Awaiting your review</h2>
-        <p class="muted"><a href="/settings">Connect GitHub on Settings</a> to see pull requests waiting for your review.</p>`;
+      return section(heading, `<p class="muted"><a href="/settings">Connect GitHub on Settings</a> to see ${connectFor}.</p>`);
     }
     const hidden = found.hidden > 0 ? ` <span class="muted">(${found.hidden} hidden by your <a href="/settings">filters</a>)</span>` : '';
-    if (found.requests.length === 0) {
-      return `<h2>Awaiting your review</h2><p>Nothing is waiting for your review.${hidden}</p>`;
+    if (found.rows.length === 0) {
+      return section(heading, `<p>${empty}${hidden}</p>`);
     }
-    const rows = found.requests.map(request => {
+    const rows = found.rows.map(request => {
       const slug = `${request.owner}/${request.repo}`;
       const action = request.session
-        ? `<a href="/s/${escapeHtml(request.session.id)}/">open · ${escapeHtml(request.session.headSha.slice(0, 7))}</a>${listening
+        ? `<a href="/s/${escapeHtml(request.session.id)}/" target="_blank" rel="noopener">open · ${escapeHtml(request.session.headSha.slice(0, 7))}</a>${reachable
           ? ` <form class="inline" method="post" action="/sessions/${escapeHtml(request.session.id)}/review-request"><button type="submit">review</button></form>`
           : ''}`
-        : `<form class="inline" method="post" action="/sessions">
+        : `<form class="inline" method="post" action="/sessions" target="_blank">
              <input type="hidden" name="repo" value="${escapeHtml(slug)}">
              <input type="hidden" name="pr" value="${request.number}">
-             ${listening
+             ${reachable
                ? '<input type="hidden" name="review" value="1"><button type="submit">Create and review</button>'
                : '<button type="submit">Create session</button>'}
            </form>`;
       return `
       <tr>
         <td><a href="${escapeHtml(request.url)}">${escapeHtml(`${slug}#${request.number}`)}</a></td>
-        <td>${escapeHtml(request.title)}</td>
+        <td>${escapeHtml(request.title)}${request.draft ? ' <span class="muted">draft</span>' : ''}</td>
         <td>${escapeHtml(request.author)}</td>
         <td class="muted">${escapeHtml(request.updatedAt.slice(0, 16).replace('T', ' '))}</td>
         <td>${action}</td>
       </tr>`;
     }).join('');
-    return `<h2>Awaiting your review</h2>
+    return section(heading, `
       <table><tr><th>Pull request</th><th>Title</th><th>Author</th><th>Updated</th><th></th></tr>${rows}</table>
-      ${hidden ? `<p>${hidden}</p>` : ''}`;
+      ${hidden ? `<p>${hidden}</p>` : ''}`);
   };
 
   app.get('/', async (req, res) => {
@@ -579,10 +638,21 @@ export function createApp(deps: AppDeps): express.Express {
     }
     const status = await live.userStatus(user.id);
     const listening = status.listening;
-    const [requests, sessions] = await Promise.all([reviewRequestsSection(user, listening), reviews.listSessions(user.id)]);
+    const reachable = listening || (await routine.configured(user.id));
+    const [requests, own, sessions] = await Promise.all([
+      pullsSection('Awaiting your review', 'pull requests waiting for your review', 'Nothing is waiting for your review.', async () => {
+        const found = await service.reviewRequests(user.id);
+        return found && { rows: found.requests, hidden: found.hidden };
+      }, reachable),
+      pullsSection('Your open pull requests', 'your open pull requests', 'You have no open pull requests.', async () => {
+        const rows = await service.ownPulls(user.id);
+        return rows && { rows, hidden: 0 };
+      }, reachable),
+      reviews.listSessions(user.id),
+    ]);
     const rows = sessions.map(session => `
       <tr>
-        <td><a href="/s/${session.id}/">${escapeHtml(`${session.owner}/${session.repo}`)}</a></td>
+        <td><a href="/s/${session.id}/" target="_blank" rel="noopener">${escapeHtml(`${session.owner}/${session.repo}`)}</a></td>
         <td>${escapeHtml(describeSession(session))}</td>
         <td class="muted">${escapeHtml(session.createdAt.slice(0, 16).replace('T', ' '))}</td>
       </tr>`).join('');
@@ -591,10 +661,10 @@ export function createApp(deps: AppDeps): express.Express {
       : listening
         ? '<p><strong>Agent listening</strong> <span class="muted">· Create and review hands a pull request to it</span></p>'
         : '';
-    sendPage(res, 200, 'Sessions', agent + requests + (sessions.length > 0
-      ? `<h2>Your review sessions</h2><table><tr><th>Repository</th><th>Change</th><th>Created</th></tr>${rows}</table>`
-      : `<h2>No review sessions yet</h2><p>Ask your agent to <code>create_session</code> through the diffity MCP connector.
-         See <a href="/settings">settings</a> for how to add it.</p>`), user);
+    sendPage(res, 200, 'Sessions', agent + requests + own + (sessions.length > 0
+      ? section('Your review sessions', `<table><tr><th>Repository</th><th>Change</th><th>Created</th></tr>${rows}</table>`)
+      : section('No review sessions yet', `<p>Ask your agent to <code>create_session</code> through the diffity MCP connector.
+         See <a href="/settings">settings</a> for how to add it.</p>`)) + '<script src="/sections.js"></script>', user, [], true);
   });
 
   app.post('/sessions', sameOrigin, forms, async (req, res) => {
@@ -608,6 +678,7 @@ export function createApp(deps: AppDeps): express.Express {
       const { session } = await service.createSession(user.id, { repo, pr: Number(req.body?.pr) });
       if (req.body?.review === '1') {
         await live.queueReview(user.id, session.id);
+        await routine.fire(user.id, session, 'review');
       }
       res.redirect(303, `/s/${session.id}/`);
     } catch (err) {
@@ -631,6 +702,7 @@ export function createApp(deps: AppDeps): express.Express {
       return;
     }
     await live.queueReview(user.id, session.id);
+    await routine.fire(user.id, session, 'review');
     res.redirect(303, '/');
   });
 
@@ -641,14 +713,14 @@ export function createApp(deps: AppDeps): express.Express {
       res.status(401).json({ error: 'Sign in first' });
       return;
     }
-    res.json((await live.userStatus(user.id)) satisfies LiveStatusResponse);
+    res.json({ ...(await live.userStatus(user.id)), routine: await routine.configured(user.id) } satisfies LiveStatusResponse);
   });
 
   app.use('/s/:sid/api', requireSameOrigin(publicUrl), (_req, res, next) => {
     res.set('Content-Security-Policy', UI_CONTENT_SECURITY_POLICY);
     res.set('Cache-Control', 'no-store');
     next();
-  }, uiApiRouter({ service, live, userFor }));
+  }, uiApiRouter({ service, live, routine, userFor }));
 
   app.get('/s/:sid{/*rest}', async (req, res) => {
     const user = await userFor(req);

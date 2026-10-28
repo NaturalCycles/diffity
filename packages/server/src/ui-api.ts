@@ -21,10 +21,12 @@ import { describeSession, ServiceError, type ReviewService } from './service.js'
 import { splitLines } from './anchor.js';
 import type { User } from './users.js';
 import type { Live } from './live.js';
+import type { Routine } from './routine.js';
 
 export interface UiApiDeps {
   service: ReviewService;
   live: Live;
+  routine: Routine;
   userFor: (req: Request) => Promise<User | null>;
 }
 
@@ -47,7 +49,7 @@ function parsed<T>(res: Response, result: ParseResult<T>): T | null {
 
 /** The `/api/*` subset the review UI needs, scoped to one session of the signed-in user. */
 export function uiApiRouter(deps: UiApiDeps): Router {
-  const { service, live } = deps;
+  const { service, live, routine } = deps;
   const reviews = service.reviews;
   const router = express.Router({ mergeParams: true });
   router.use(express.json({ limit: '2mb' }));
@@ -82,6 +84,13 @@ export function uiApiRouter(deps: UiApiDeps): Router {
     };
 
   const author = (user: User): CommentAuthor => ({ name: user.name, type: 'user' });
+
+  const ask = async ({ user, session }: Scoped, threadId: string, commentId: string): Promise<void> => {
+    await live.ask(user.id, session.id, threadId, commentId);
+    if (!(await live.status(user.id, session.id)).listening) {
+      await routine.fire(user.id, session, 'ask');
+    }
+  };
 
   const sessionMatches = (res: Response, session: ReviewSessionRecord, asked: unknown): boolean => {
     if (asked !== undefined && asked !== null && asked !== '' && asked !== session.id) {
@@ -148,7 +157,8 @@ export function uiApiRouter(deps: UiApiDeps): Router {
     res.json(await reviews.threadsForSession(user.id, session.id, status));
   }));
 
-  router.post('/threads', handle(async ({ user, session }, req, res) => {
+  router.post('/threads', handle(async (scoped, req, res) => {
+    const { user, session } = scoped;
     const body = parsed(res, parseCreateThreadRequest(req.body));
     if (!body || !sessionMatches(res, session, body.sessionId)) {
       return;
@@ -166,7 +176,7 @@ export function uiApiRouter(deps: UiApiDeps): Router {
       kind: body.ask ? 'aside' : body.kind ?? 'review',
     });
     if (body.ask) {
-      await live.ask(user.id, session.id, thread.id, thread.comments[0].id);
+      await ask(scoped, thread.id, thread.comments[0].id);
     }
     res.json(body.ask ? await reviews.getThread(user.id, thread.id) : thread);
   }));
@@ -189,7 +199,7 @@ export function uiApiRouter(deps: UiApiDeps): Router {
     const kind = body.ask ? 'aside' : body.kind ?? 'review';
     const reply = await reviews.addReply(scoped.user.id, thread.id, body.body, author(scoped.user), kind);
     if (body.ask) {
-      await live.ask(scoped.user.id, scoped.session.id, thread.id, reply.id);
+      await ask(scoped, thread.id, reply.id);
     }
     res.json(body.ask ? { ...reply, ask: 'pending' } : reply);
   }));
@@ -246,11 +256,12 @@ export function uiApiRouter(deps: UiApiDeps): Router {
   }));
 
   router.get('/live/status', handle(async ({ user, session }, _req, res) => {
-    res.json((await live.status(user.id, session.id)) satisfies LiveStatusResponse);
+    res.json({ ...(await live.status(user.id, session.id)), routine: await routine.configured(user.id) } satisfies LiveStatusResponse);
   }));
 
   router.post('/review-request', handle(async ({ user, session }, _req, res) => {
     await live.queueReview(user.id, session.id);
+    await routine.fire(user.id, session, 'review');
     res.json((await reviews.getSession(user.id, session.id))!.review satisfies ReviewRun);
   }));
 

@@ -23,8 +23,22 @@ const STYLE = `
   textarea { font: inherit; padding: 6px 8px; max-width: 100%; }
   button { font: inherit; padding: 6px 12px; cursor: pointer; }
   form.inline { display: inline; }
+  summary { cursor: pointer; }
+  summary > h2 { display: inline-block; }
   code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
   pre { padding: 8px; border: 1px solid var(--line); overflow-x: auto; }
+`;
+
+/** Keeps each collapsible section of a page open or closed as the user last left it. */
+export const SECTIONS_SCRIPT = `for (const details of document.querySelectorAll('details')) {
+  const key = 'diffity.section:' + details.querySelector('summary').textContent.trim();
+  try {
+    if (localStorage.getItem(key) === 'closed') details.open = false;
+  } catch {}
+  details.addEventListener('toggle', () => {
+    try { localStorage.setItem(key, details.open ? 'open' : 'closed'); } catch {}
+  });
+}
 `;
 
 export function page(input: { title: string; body: string; user?: { email: string } | null }): string {

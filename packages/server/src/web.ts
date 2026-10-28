@@ -17,8 +17,8 @@ export const UI_CONTENT_SECURITY_POLICY = [
   "connect-src 'self'",
 ].join('; ');
 
-/** The server's own pages: no script at all, forms only to this origin unless widened for one. */
-export function pageContentSecurityPolicy(extraFormTargets: string[] = []): string {
+/** The server's own pages: no script unless the page loads one of this origin's, forms only to this origin unless widened for one. */
+export function pageContentSecurityPolicy(extraFormTargets: string[] = [], selfScripts = false): string {
   return [
     "default-src 'none'",
     "base-uri 'none'",
@@ -26,6 +26,7 @@ export function pageContentSecurityPolicy(extraFormTargets: string[] = []): stri
     `form-action 'self'${extraFormTargets.map(target => ` ${target}`).join('')}`,
     "img-src 'self'",
     "style-src 'unsafe-inline'",
+    ...selfScripts ? ["script-src 'self'"] : [],
   ].join('; ');
 }
 

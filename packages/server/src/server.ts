@@ -12,6 +12,7 @@ import { AutomationTokens } from './automation.js';
 import { ReviewService } from './service.js';
 import { DevLoginProvider, IapLogin } from './login.js';
 import { Live } from './live.js';
+import { Routine } from './routine.js';
 import { createApp } from './app.js';
 
 export interface ServerOverrides {
@@ -23,6 +24,8 @@ export interface ServerOverrides {
   uiDir?: string | null;
   rateLimit?: boolean;
   version?: string;
+  /** What fires the users' routines, instead of the network. */
+  routineFetch?: typeof fetch;
 }
 
 export interface RunningServer {
@@ -63,6 +66,7 @@ export async function startServer(
   const access = overrides.gitHubAccess ?? githubApp ?? new StoredTokenAccess(users, config.devGitHubToken);
   const service = new ReviewService(reviews, mirrors, api, access, config.publicUrl, users, bot);
   const live = new Live(db);
+  const routine = new Routine(db, users, live, config.publicUrl, overrides.routineFetch);
 
   const app = createApp({
     config,
@@ -72,6 +76,7 @@ export async function startServer(
     automationTokens: new AutomationTokens(db),
     service,
     live,
+    routine,
     devLogin: config.devLogin ? new DevLoginProvider(config) : null,
     iap: config.iapAudience ? new IapLogin({ ...config, iapAudience: config.iapAudience }, overrides.iapKeys) : null,
     githubApp,

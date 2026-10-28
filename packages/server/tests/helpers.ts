@@ -166,6 +166,8 @@ export interface FakeGitHub {
   failReviewWith: number | null;
   /** What `GET /search/issues` finds waiting for each token's review. */
   reviewRequests: Record<string, FakeReviewRequest[]>;
+  /** What `GET /search/issues` finds authored by each token's own account. */
+  ownPulls: Record<string, FakeReviewRequest[]>;
   /** The `q` of every search. */
   searches: string[];
   /** Makes `GET /search/issues` answer this status instead. */
@@ -197,6 +199,7 @@ export async function startFakeGitHub(repos: FakeRepo[]): Promise<FakeGitHub> {
     tokenEndpoint: () => ({ error: 'bad_verification_code' }),
     failReviewWith: null,
     reviewRequests: {},
+    ownPulls: {},
     searches: [],
     failSearchWith: null,
     installations: {},
@@ -238,7 +241,8 @@ export async function startFakeGitHub(repos: FakeRepo[]): Promise<FakeGitHub> {
           send(fake.failSearchWith, { message: 'Validation Failed' });
           return;
         }
-        const items = (token ? fake.reviewRequests[token] ?? [] : []).map(pr => ({
+        const found = (url.searchParams.get('q') ?? '').includes('author:@me') ? fake.ownPulls : fake.reviewRequests;
+        const items = (token ? found[token] ?? [] : []).map(pr => ({
           number: pr.number,
           title: pr.title,
           html_url: `https://github.com/${pr.owner}/${pr.repo}/pull/${pr.number}`,

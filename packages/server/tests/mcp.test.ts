@@ -346,6 +346,68 @@ describe('automation tokens', () => {
   });
 });
 
+describe('session tokens', () => {
+  it('work on their one session through the review tools, and on nothing else', async () => {
+    const aliceId = (await server.users.findOrCreate('alice@example.com')).id;
+    const { session } = await ok<{ session: string }>(alice, 'create_session', { repo: 'acme/widgets', base: fixture.base, head: fixture.head1 });
+    const other = await ok<{ session: string }>(alice, 'create_session', { repo: 'acme/widgets', base: fixture.base, head: fixture.head2 });
+    const otherThread = await ok<{ thread: string }>(alice, 'comment', { session: other.session, file: 'added.ts', line: 1, body: 'Elsewhere' });
+    const otherTour = await ok<{ tour: string }>(alice, 'tour_start', { session: other.session, topic: 'Elsewhere' });
+    const { token } = await server.live.issueSessionToken(aliceId, session);
+    const attendant = await mcpClient(token);
+    try {
+      const names = (await attendant.listTools()).tools.map(tool => tool.name);
+      for (const removed of [
+        'create_session', 'list_sessions', 'list_review_requests', 'get_diff', 'get_file',
+        'automation_token', 'automation_tokens', 'automation_token_revoke',
+      ]) {
+        expect(names).not.toContain(removed);
+      }
+      expect(names).toEqual(expect.arrayContaining(['comment', 'list_comments', 'review_start', 'review_done', 'post_review', 'live_token']));
+
+      await ok(attendant, 'review_start', { session: session.slice(0, 8) });
+      const finding = await ok<{ thread: string }>(attendant, 'comment', { session, file: 'src.ts', line: 10, body: 'From the attendant' });
+      const threads = await ok<{ id: string; comments: { author: { name: string; type: string } }[] }[]>(attendant, 'list_comments', { session });
+      expect(threads.find(t => t.id === finding.thread)?.comments[0].author).toEqual({ name: 'Attendant', type: 'agent' });
+      await ok(attendant, 'review_done', { session });
+      expect(await failed(attendant, 'post_review', { session, event: 'COMMENT' })).toContain('not configured on this server');
+
+      const only = `This token is for session ${session.slice(0, 8)} only`;
+      expect(await failed(attendant, 'comment', { session: other.session, file: 'added.ts', line: 1, body: 'x' })).toBe(only);
+      expect(await failed(attendant, 'list_comments', { session: other.session })).toBe(only);
+      expect(await failed(attendant, 'review_start', { session: other.session })).toBe(only);
+      expect(await failed(attendant, 'review_done', { session: other.session })).toBe(only);
+      expect(await failed(attendant, 'post_review', { session: other.session, event: 'COMMENT' })).toBe(only);
+      expect(await failed(attendant, 'reply', { id: otherThread.thread, body: 'x' })).toContain('belongs to another session');
+      expect(await failed(attendant, 'resolve', { id: otherThread.thread })).toContain('belongs to another session');
+      expect(await failed(attendant, 'amend', { id: otherThread.thread, body: 'x' })).toContain('belongs to another session');
+      expect(await failed(attendant, 'tour_done', { tour: otherTour.tour })).toBe(only);
+
+      const waiting = await ok<{ session: string; command: string; pollUrl: string; token: string }>(attendant, 'live_token', { session: other.session });
+      expect(waiting.session).toBe(session);
+      expect(waiting.pollUrl).toBe(`${server.base}/live/await?session=${session}&wait=25`);
+      expect(waiting.command).toContain(waiting.pollUrl);
+    } finally {
+      await attendant.close();
+      await ok(alice, 'tour_delete', { tour: otherTour.tour });
+    }
+  });
+
+  it('wait on their session at /live/await', async () => {
+    const aliceId = (await server.users.findOrCreate('alice@example.com')).id;
+    const { session } = await ok<{ session: string }>(alice, 'create_session', { repo: 'acme/widgets', base: fixture.base, head: fixture.head1 });
+    const { token } = await server.live.issueSessionToken(aliceId, session);
+    const thread = await server.service.reviews.createThread({
+      userId: aliceId, sessionId: session, filePath: 'src.ts', side: 'new', startLine: 10, endLine: 10, body: 'Why?', author: { name: 'Alice', type: 'user' },
+    });
+    await server.live.ask(aliceId, session, thread.id, thread.comments[0].id);
+    const res = await fetch(`${server.base}/live/await?session=${session}&wait=0`, { headers: { Authorization: `Bearer ${token}` } });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ kind: 'ask', session, thread: thread.id, question: 'Why?' });
+    await server.live.answer(aliceId, thread.id);
+  });
+});
+
 describe('post_review', () => {
   it('answers that bot posting is not configured on a server without the App key', async () => {
     const { session } = await ok<{ session: string }>(alice, 'create_session', { repo: 'acme/widgets', pr: 1 });

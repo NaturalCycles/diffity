@@ -35,4 +35,8 @@ export interface LiveStatusResponse {
   lastPollAt: string | null;
   /** Requests an agent has taken and not answered yet; it counts as listening while it works on them. */
   working: number;
+  /** When diffity last fired the user's routine for this session, while that call is still expected to arrive. */
+  calledAt: string | null;
+  /** Diffity has a routine to call for this user when no agent is listening. */
+  routine: boolean;
 }

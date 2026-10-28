@@ -43,7 +43,7 @@ import type { LineSelection } from '../comments/types';
 import type { ParsedDiff } from '@diffity/parser';
 import { isThreadResolved } from '../comments/types';
 import { liveStatusOptions } from '../../queries/live';
-import { AgentListeningContext } from '../../lib/agent-listening';
+import { AgentCalledContext, AgentListeningContext, AgentReachableContext } from '../../lib/agent-listening';
 
 export function DiffPage() {
   const { theme: initialTheme, view: initialViewMode } = useLoaderData<{
@@ -87,6 +87,8 @@ export function DiffPage() {
   useTabBadge(answerAlerts.unseenWhileHidden);
   const liveStatus = useQuery(liveStatusOptions(sessionId)).data;
   const agentListening = !!liveStatus?.listening;
+  const agentCalled = !agentListening && !!liveStatus?.calledAt;
+  const agentReachable = agentListening || !!liveStatus?.routine;
   const requestReview = useRequestReview();
 
   const commentCountsByFile = useMemo(() => buildThreadCountsByFile(threads), [threads]);
@@ -483,7 +485,7 @@ export function DiffPage() {
   }
 
   return (
-    <AgentListeningContext.Provider value={agentListening}>
+    <AgentListeningContext.Provider value={agentListening}><AgentCalledContext.Provider value={agentCalled}><AgentReachableContext.Provider value={agentReachable}>
       <div className="flex flex-col h-screen bg-bg text-text font-sans">
         <Toolbar
           viewMode={viewMode}
@@ -517,6 +519,8 @@ export function DiffPage() {
             ready={arrival.ready}
             onReload={arrival.reload}
             agentListening={agentListening}
+            agentCalled={agentCalled}
+            agentReachable={agentReachable}
             onRequestReview={() => requestReview.mutate()}
           />
         )}
@@ -574,6 +578,6 @@ export function DiffPage() {
         </div>
         {showHelp && <ShortcutModal onClose={() => setShowHelp(false)} />}
       </div>
-    </AgentListeningContext.Provider>
+    </AgentReachableContext.Provider></AgentCalledContext.Provider></AgentListeningContext.Provider>
   );
 }

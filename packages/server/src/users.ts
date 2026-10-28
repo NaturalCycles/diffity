@@ -74,6 +74,42 @@ export class Users {
     const row = await this.db.one<{ github_token: string | null }>('SELECT github_token FROM users WHERE id = $1', [userId]);
     return row?.github_token ? decrypt(this.secretKey, row.github_token) : null;
   }
+
+  /** The Claude routine diffity fires to attend the user's sessions; null as well when its key no longer decrypts. */
+  async routine(userId: string): Promise<{ url: string; key: string } | null> {
+    const row = await this.db.one<{ routine_url: string | null; routine_key: string | null }>(
+      'SELECT routine_url, routine_key FROM users WHERE id = $1',
+      [userId],
+    );
+    const key = row?.routine_key ? decrypt(this.secretKey, row.routine_key) : null;
+    return row?.routine_url && key ? { url: row.routine_url, key } : null;
+  }
+
+  /** A null URL clears the routine; an undefined key keeps the stored one. */
+  async setRoutine(userId: string, url: string | null, key: string | null | undefined): Promise<void> {
+    if (url === null) {
+      await this.db.query('UPDATE users SET routine_url = NULL, routine_key = NULL WHERE id = $1', [userId]);
+      return;
+    }
+    if (key === undefined) {
+      await this.db.query('UPDATE users SET routine_url = $1 WHERE id = $2', [url, userId]);
+      return;
+    }
+    await this.db.query('UPDATE users SET routine_url = $1, routine_key = $2 WHERE id = $3', [
+      url,
+      key === null ? null : encrypt(this.secretKey, key),
+      userId,
+    ]);
+  }
+
+  /** What the settings page shows of the routine: never the key. */
+  async routineSettings(userId: string): Promise<{ url: string | null; keySet: boolean }> {
+    const row = await this.db.one<{ routine_url: string | null; routine_key: string | null }>(
+      'SELECT routine_url, routine_key FROM users WHERE id = $1',
+      [userId],
+    );
+    return { url: row?.routine_url ?? null, keySet: !!row?.routine_key };
+  }
 }
 
 export const WEB_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
