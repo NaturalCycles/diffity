@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { BundleThread } from '@diffity/api';
+import type { PrSnapshot } from '@diffity/github';
 import {
   UsageError,
+  atHead,
   bundleNamesFor,
   candidateLabel,
   compareFindings,
+  parseNumStat,
   findingsOf,
   firstSentence,
   formatTokens,
@@ -382,5 +385,31 @@ describe('the JSON shape', () => {
       added: [],
       spend: { costUsd: 1.2, minutes: 6.1, turns: 22, outputTokens: 14_000 },
     });
+  });
+});
+
+describe('atHead', () => {
+  const now = {
+    owner: 'o', repo: 'r', number: 7, headSha: 'newest', body: 'rewritten since',
+    checks: [{ name: 'test', status: 'success' }], additions: 90, deletions: 9, changedFiles: 6,
+  } as PrSnapshot;
+
+  it('describes the pinned head, not the newest, and drops the description', () => {
+    const facts = { checks: [{ name: 'test', status: 'failure' as const }], additions: 40, deletions: 2, changedFiles: 3 };
+
+    expect(atHead(now, 'pinned', facts)).toMatchObject({
+      owner: 'o', repo: 'r', number: 7, headSha: 'pinned', body: '', ...facts,
+    });
+  });
+});
+
+describe('parseNumStat', () => {
+  it('sums the lines and counts the files of git diff --numstat', () => {
+    expect(parseNumStat('40\t2\tsrc/a.ts\n0\t0\tsrc/b.ts\n')).toEqual({ additions: 40, deletions: 2, changedFiles: 2 });
+  });
+
+  it('counts a binary file as changed without lines, and nothing as nothing', () => {
+    expect(parseNumStat('-\t-\timage.png\n')).toEqual({ additions: 0, deletions: 0, changedFiles: 1 });
+    expect(parseNumStat('')).toEqual({ additions: 0, deletions: 0, changedFiles: 0 });
   });
 });

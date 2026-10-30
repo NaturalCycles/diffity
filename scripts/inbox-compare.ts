@@ -6,16 +6,17 @@
  * what it costs. One agent run per invocation; everything it writes stays in a scratch directory.
  */
 
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GENERAL_THREAD_FILE_PATH, parseReviewBundle, type BundleThread, type ReviewBundle } from '@diffity/api';
-import { viewPr } from '@diffity/github';
+import { parseChecks, viewPr, type PrSnapshot } from '@diffity/github';
 import type { RunStats } from '../packages/cli/src/inbox/agent-output.js';
 import { DEFAULT_INBOX_CONFIG, expandHome, type InboxConfig } from '../packages/cli/src/inbox/config.js';
 import { preparePr, type PrepareResult } from '../packages/cli/src/inbox/prepare.js';
-import { realPrepareDeps } from '../packages/cli/src/inbox/runtime.js';
+import { realPrepareDeps, startDiffityServer } from '../packages/cli/src/inbox/runtime.js';
 import { severityOf } from '../packages/cli/src/inbox/summary.js';
 import { cloneDir, removeWorktree } from '../packages/cli/src/inbox/worktree.js';
 
@@ -384,6 +385,67 @@ function readBaseline(options: Options): { path: string; bundle: ReviewBundle } 
   return newest;
 }
 
+/** What GitHub says about one commit of a pull request, as opposed to the pull request as it is now. */
+export interface HeadFacts {
+  checks: PrSnapshot['checks'];
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+}
+
+/**
+ * The pull request as a reviewer saw it at `head`. `gh pr view` describes it as it is now: the
+ * newest head's CI and size, and a description that may have been rewritten since. The
+ * description is dropped rather than guessed at, which also keeps runs comparable with the ones
+ * made before the prompt carried it.
+ */
+export function atHead(snapshot: PrSnapshot, head: string, facts: HeadFacts): PrSnapshot {
+  return { ...snapshot, headSha: head, body: '', ...facts };
+}
+
+/** Every page of a paginated endpoint, as gh returns them. */
+function ghPages(path: string): unknown[] {
+  return JSON.parse(execFileSync('gh', ['api', '--paginate', '--slurp', path], { encoding: 'utf8', maxBuffer: 50 * 1024 * 1024 })) as unknown[];
+}
+
+/** `git diff --numstat` summed; a binary file counts as changed with no lines. */
+export function parseNumStat(text: string): Omit<HeadFacts, 'checks'> {
+  const size = { additions: 0, deletions: 0, changedFiles: 0 };
+  for (const line of text.split('\n')) {
+    const [added, deleted] = line.split('\t');
+    if (added === undefined || deleted === undefined) {
+      continue;
+    }
+    size.changedFiles += 1;
+    size.additions += Number(added) || 0;
+    size.deletions += Number(deleted) || 0;
+  }
+  return size;
+}
+
+/**
+ * CI comes from GitHub, the size from the clone: the compare endpoint lists at most 300 files, so
+ * a larger change would be undercounted there.
+ */
+function headFacts(snapshot: PrSnapshot, head: string, clone: string): HeadFacts {
+  const base = `repos/${snapshot.owner}/${snapshot.repo}`;
+  const runs = ghPages(`${base}/commits/${head}/check-runs?per_page=100`).flatMap(page => (page as { check_runs?: unknown[] }).check_runs ?? []);
+  const statuses = ghPages(`${base}/commits/${head}/status?per_page=100`).flatMap(page => (page as { statuses?: unknown[] }).statuses ?? []);
+  // Hooks off, as the inbox runs git in the clone: this process holds the reviewer's credentials.
+  const git = (args: string[]): string =>
+    execFileSync('git', ['-C', clone, '-c', 'core.hooksPath=/dev/null', ...args], {
+      encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    }).trim();
+  const baseRef = `refs/diffity/base/${snapshot.baseRef}`;
+  git(['fetch', 'origin', `+refs/heads/${snapshot.baseRef}:${baseRef}`]);
+  try {
+    git(['cat-file', '-e', `${head}^{commit}`]);
+  } catch {
+    git(['fetch', 'origin', head]);
+  }
+  return { checks: parseChecks([...runs, ...statuses]), ...parseNumStat(git(['diff', '--numstat', `${baseRef}...${head}`])) };
+}
+
 function prName(ref: PrRefSpec): string {
   return `${ref.owner}/${ref.repo}#${ref.number}`;
 }
@@ -445,11 +507,17 @@ async function main(): Promise<number> {
     validate: { ...DEFAULT_INBOX_CONFIG.validate, model: null },
   };
   const candidate = candidateLabel(options.model, options.effort);
-  const deps = realPrepareDeps(
-    process.execPath, entry,
-    worktree => join(scratch, 'data', basename(worktree)),
-    config, message => console.error(`   ${message}`),
-  );
+  const dataDirFor = (worktree: string) => join(scratch, 'data', basename(worktree));
+  const deps = {
+    ...realPrepareDeps(process.execPath, entry, dataDirFor, config, message => console.error(`   ${message}`)),
+    // Comparisons run back to back on a busy machine, where a large clone can take longer than the
+    // daemon's 30s to serve; a missed start would be scored as the candidate failing.
+    startServer: (worktree: string, diffRef: string) =>
+      startDiffityServer(process.execPath, entry, worktree, diffRef, dataDirFor(worktree), 120_000),
+    // The discussion as it stands now holds the reviews of this very head, the baseline's findings
+    // among them, so a candidate given it would be told what it is being scored on finding.
+    prContext: async () => null,
+  };
 
   console.error(`🤖 preparing ${prName(options.ref)} at ${short} with ${candidate} — agent running…`);
   const startedAt = Date.now();
@@ -457,7 +525,7 @@ async function main(): Promise<number> {
   const ticker = setInterval(() => console.error(`   … ${elapsed().toFixed(0)} min`), 60_000);
   let result: PrepareResult;
   try {
-    result = await preparePr({ ...snapshot, headSha: head }, config, deps, { bumped: true, pinHead: head });
+    result = await preparePr(atHead(snapshot, head, headFacts(snapshot, head, clone)), config, deps, { bumped: true, pinHead: head });
   } finally {
     clearInterval(ticker);
   }
