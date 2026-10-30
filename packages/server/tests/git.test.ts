@@ -122,6 +122,22 @@ describe('after the mirror is lost', () => {
     expect(await pinned()).toContain(fixture.head1);
   });
 
+  it('keeps git’s own words when the fetch fails', async () => {
+    const otherDir = tempDir('mirrors-broken');
+    const broken = tempDir('not-a-repo');
+    try {
+      const other = new Mirrors(otherDir, fixture.remoteUrl);
+      await other.fetchCommits('acme', 'widgets', null, [fixture.base]);
+      await runGit(['remote', 'set-url', 'origin', `file://${broken}`], { gitDir: other.pathFor('acme', 'widgets') });
+      await expect(other.fetchCommits('acme', 'widgets', null, [fixture.orphan])).rejects.toThrow(
+        /could not be fetched into acme\/widgets: .*not .*a git repository/s,
+      );
+    } finally {
+      removeDir(otherDir);
+      removeDir(broken);
+    }
+  });
+
   it('fetches a commit on no branch by its sha', async () => {
     removeDir(mirrors.pathFor('acme', 'widgets'));
     expect(await mirrors.readFile('acme', 'widgets', null, fixture.orphan, 'src.ts')).toBe('export const orphan = true;\n');
@@ -130,8 +146,16 @@ describe('after the mirror is lost', () => {
 
   it('says when a sha cannot be had, and refuses a short one', async () => {
     removeDir(mirrors.pathFor('acme', 'widgets'));
-    await expect(mirrors.nameStatus('acme', 'widgets', null, '0'.repeat(40), fixture.base)).rejects.toThrow('is not in acme/widgets');
+    await expect(mirrors.nameStatus('acme', 'widgets', null, '0'.repeat(40), fixture.base)).rejects.toThrow('could not be fetched into acme/widgets');
     await expect(mirrors.readFile('acme', 'widgets', null, 'abc123', 'src.ts')).rejects.toThrow('Not a full commit sha');
+  });
+});
+
+describe('trees', () => {
+  it('fetches only commits as commits, but reads a file from a tree', async () => {
+    const tree = git(fixture.work, ['rev-parse', `${fixture.base}^{tree}`]);
+    await expect(mirrors.fetchCommits('acme', 'widgets', null, [tree])).rejects.toThrow('Not a commit');
+    expect(await mirrors.readFile('acme', 'widgets', null, tree, 'README.md')).toBe('# widgets\n');
   });
 });
 

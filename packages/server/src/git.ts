@@ -10,6 +10,12 @@ export class GitError extends Error {
   }
 }
 
+export class MissingObjectError extends Error {
+  constructor(message: string, readonly sha: string) {
+    super(message);
+  }
+}
+
 export interface GitOptions {
   gitDir?: string;
   input?: string;
@@ -212,20 +218,24 @@ export class Mirrors {
     }
   }
 
-  /** The shas the mirror does not have, found without fetching anything. */
-  private async missing(gitDir: string, shas: string[]): Promise<string[]> {
+  /** Each object's type, or `missing`, found without fetching anything. */
+  private async objectTypes(gitDir: string, shas: string[]): Promise<Map<string, string>> {
+    const types = new Map<string, string>();
     if (shas.length === 0) {
-      return [];
+      return types;
     }
     const raw = await runGit(['cat-file', '--batch-check'], {
       gitDir,
       env: { GIT_NO_LAZY_FETCH: '1' },
       input: shas.join('\n') + '\n',
     });
-    return raw
-      .split('\n')
-      .filter(line => line.endsWith(' missing'))
-      .map(line => line.slice(0, -' missing'.length));
+    for (const line of raw.split('\n')) {
+      const [name, type] = line.split(' ');
+      if (name && type) {
+        types.set(name, type);
+      }
+    }
+    return types;
   }
 
   private async pin(gitDir: string, sha: string): Promise<void> {
@@ -238,20 +248,23 @@ export class Mirrors {
    */
   private async ready(owner: string, repo: string, gitDir: string, token: string | null, shas: string[]): Promise<void> {
     const cloned = await this.ensureCloned(owner, repo, gitDir, token);
-    const missing = await this.missing(gitDir, shas);
+    const types = await this.objectTypes(gitDir, shas);
+    const missing = [...types].filter(([, type]) => type === 'missing').map(([sha]) => sha);
     for (const sha of missing) {
       if (!isSha(sha)) {
         throw new Error(`Not a full commit sha: ${sha}`);
       }
+      let detail = 'the remote did not send it';
       try {
         await runGit(['fetch', '--filter=blob:none', '--no-tags', 'origin', sha], { gitDir, env: authEnv(token) });
-      } catch {
-        // Whether it came is checked below.
+      } catch (err) {
+        if (!(err instanceof GitError)) {
+          throw err;
+        }
+        detail = err.stderr.trim();
       }
-      if ((await this.missing(gitDir, [sha])).length > 0) {
-        throw new Error(
-          `${sha} is not in ${owner}/${repo} on GitHub; a session made from a patch does not outlive a server restart, create it again`,
-        );
+      if ((await this.objectTypes(gitDir, [sha])).get(sha) === 'missing') {
+        throw new MissingObjectError(`${sha} could not be fetched into ${owner}/${repo}: ${detail}`, sha);
       }
     }
     for (const sha of cloned ? shas : missing) {
@@ -263,7 +276,11 @@ export class Mirrors {
   fetchCommits(owner: string, repo: string, token: string | null, shas: string[]): Promise<void> {
     return this.withRepo(owner, repo, async gitDir => {
       await this.ready(owner, repo, gitDir, token, shas);
+      const types = await this.objectTypes(gitDir, shas);
       for (const sha of shas) {
+        if (types.get(sha) !== 'commit') {
+          throw new Error(`Not a commit: ${sha}`);
+        }
         await this.pin(gitDir, sha);
       }
     });

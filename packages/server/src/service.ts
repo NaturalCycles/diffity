@@ -9,7 +9,7 @@ import {
   type ReviewSubmission,
   type Suppressed,
 } from '@diffity/api';
-import { isSha, isSafeRepoPath, isRepoName, keyedSerializer, type Mirrors, type NameStatus } from './git.js';
+import { isSha, isSafeRepoPath, isRepoName, keyedSerializer, MissingObjectError, type Mirrors, type NameStatus } from './git.js';
 import { GitHubApiError, type GitHubAccess, type GitHubApi, type ReviewCommentPayload, type ReviewRequest } from './github.js';
 import type { GitHubAppBot } from './github-app.js';
 import { prKey, type PrMeta, type ReviewSessionRecord, type Reviews } from './reviews.js';
@@ -330,12 +330,10 @@ export class ReviewService {
       }
     }
     const anchored = threads.filter(thread => thread.side === 'new' && thread.anchorContent && isSafeRepoPath(thread.filePath));
-    const contents = await this.mirrors.readFiles(
-      session.owner,
-      session.repo,
-      token,
-      session.headSha,
-      [...new Set(anchored.map(thread => thread.filePath))],
+    const contents = await this.fromMirror(session, () =>
+      this.mirrors.readFiles(session.owner, session.repo, token, session.headSha, [
+        ...new Set(anchored.map(thread => thread.filePath)),
+      ]),
     );
     for (const thread of anchored) {
       const content = contents.get(thread.filePath);
@@ -350,6 +348,17 @@ export class ReviewService {
     return moved;
   }
 
+  private async fromMirror<T>(session: ReviewSessionRecord, read: () => Promise<T>): Promise<T> {
+    try {
+      return await read();
+    } catch (err) {
+      if (err instanceof MissingObjectError && session.kind === 'patch' && err.sha === session.headSha) {
+        throw new ServiceError('This session was made from a patch and its tree did not outlive a server restart; create it again', 410);
+      }
+      throw err;
+    }
+  }
+
   private cacheKey(session: ReviewSessionRecord, ...parts: string[]): string {
     return [session.owner, session.repo, session.baseSha, session.headSha, ...parts].join('\0');
   }
@@ -361,14 +370,14 @@ export class ReviewService {
     const token = await this.access.tokenFor(session.userId);
     return this.diffCache.get(
       this.cacheKey(session, options.ignoreWhitespace ? 'w' : '', options.path ?? ''),
-      () => this.mirrors.diff(session.owner, session.repo, token, session.baseSha, session.headSha, options),
+      () => this.fromMirror(session, () => this.mirrors.diff(session.owner, session.repo, token, session.baseSha, session.headSha, options)),
     );
   }
 
   async changedFiles(session: ReviewSessionRecord): Promise<NameStatus[]> {
     const token = await this.access.tokenFor(session.userId);
     return this.filesCache.get(this.cacheKey(session, 'names'), () =>
-      this.mirrors.nameStatus(session.owner, session.repo, token, session.baseSha, session.headSha),
+      this.fromMirror(session, () => this.mirrors.nameStatus(session.owner, session.repo, token, session.baseSha, session.headSha)),
     );
   }
 
@@ -377,12 +386,8 @@ export class ReviewService {
     const diff = parseDiff(await this.diffText(session, options));
     const token = await this.access.tokenFor(session.userId);
     const counted = diff.files.filter(file => file.status !== 'added' && !file.isBinary);
-    const contents = await this.mirrors.readFiles(
-      session.owner,
-      session.repo,
-      token,
-      session.baseSha,
-      counted.map(file => file.oldPath || file.newPath),
+    const contents = await this.fromMirror(session, () =>
+      this.mirrors.readFiles(session.owner, session.repo, token, session.baseSha, counted.map(file => file.oldPath || file.newPath)),
     );
     for (const file of counted) {
       const content = contents.get(file.oldPath || file.newPath);
@@ -393,7 +398,7 @@ export class ReviewService {
     let suppressed: Suppressed | null = null;
     if (options.ignoreWhitespace) {
       const unfiltered = parseShortStat(
-        await this.mirrors.shortStat(session.owner, session.repo, token, session.baseSha, session.headSha),
+        await this.fromMirror(session, () => this.mirrors.shortStat(session.owner, session.repo, token, session.baseSha, session.headSha)),
       );
       suppressed = {
         files: Math.max(0, unfiltered.files - diff.stats.filesChanged),
@@ -408,7 +413,9 @@ export class ReviewService {
       return null;
     }
     const token = await this.access.tokenFor(session.userId);
-    return this.mirrors.readFile(session.owner, session.repo, token, side === 'old' ? session.baseSha : session.headSha, path);
+    return this.fromMirror(session, () =>
+      this.mirrors.readFile(session.owner, session.repo, token, side === 'old' ? session.baseSha : session.headSha, path),
+    );
   }
 
   /** The project's own review rules, as they are at the reviewed head. */
@@ -688,7 +695,9 @@ export class ReviewService {
       const lineCounts = new Map<string, number>();
       for (const side of ['old', 'new'] as const) {
         const paths = [...new Set(incoming.filter(thread => thread.side === side).map(thread => thread.filePath))];
-        const contents = await this.mirrors.readFiles(owner, repo, token, side === 'old' ? session.baseSha : session.headSha, paths);
+        const contents = await this.fromMirror(session, () =>
+          this.mirrors.readFiles(owner, repo, token, side === 'old' ? session.baseSha : session.headSha, paths),
+        );
         for (const [path, content] of contents) {
           if (content != null) {
             lineCounts.set(`${side}\0${path}`, splitLines(content).length);

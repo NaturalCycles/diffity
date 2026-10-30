@@ -240,7 +240,7 @@ describe('on a new instance, without the mirror', () => {
   it('says a patch session has to be made again', async () => {
     const patch = 'diff --git a/patched.ts b/patched.ts\nnew file mode 100644\n--- /dev/null\n+++ b/patched.ts\n@@ -0,0 +1 @@\n+export const patched = true;\n';
     const { session } = await service.createSession(alice, { repo: 'acme/widgets', base: fixture.base, patch });
-    await expect(restarted().diffText(session)).rejects.toThrow('does not outlive a server restart');
+    await expect(restarted().diffText(session)).rejects.toThrow('This session was made from a patch and its tree did not outlive a server restart; create it again');
   });
 });
 
