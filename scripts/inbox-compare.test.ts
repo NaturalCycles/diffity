@@ -7,6 +7,7 @@ import {
   bundleNamesFor,
   candidateLabel,
   compareFindings,
+  parseShortStat,
   findingsOf,
   firstSentence,
   formatTokens,
@@ -399,5 +400,16 @@ describe('atHead', () => {
     expect(atHead(now, 'pinned', facts)).toMatchObject({
       owner: 'o', repo: 'r', number: 7, headSha: 'pinned', body: '', ...facts,
     });
+  });
+});
+
+describe('parseShortStat', () => {
+  it('reads files, insertions and deletions from git diff --shortstat', () => {
+    expect(parseShortStat(' 3 files changed, 40 insertions(+), 2 deletions(-)')).toEqual({ additions: 40, deletions: 2, changedFiles: 3 });
+  });
+
+  it('counts a missing kind of change as zero', () => {
+    expect(parseShortStat(' 1 file changed, 1 insertion(+)')).toEqual({ additions: 1, deletions: 0, changedFiles: 1 });
+    expect(parseShortStat('')).toEqual({ additions: 0, deletions: 0, changedFiles: 0 });
   });
 });

@@ -403,24 +403,37 @@ export function atHead(snapshot: PrSnapshot, head: string, facts: HeadFacts): Pr
   return { ...snapshot, headSha: head, body: '', ...facts };
 }
 
-function ghJson(args: string[]): unknown {
-  return JSON.parse(execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 50 * 1024 * 1024 }));
+/** Every page of a paginated endpoint, as gh returns them. */
+function ghPages(path: string): unknown[] {
+  return JSON.parse(execFileSync('gh', ['api', '--paginate', '--slurp', path], { encoding: 'utf8', maxBuffer: 50 * 1024 * 1024 })) as unknown[];
 }
 
-function headFacts(snapshot: PrSnapshot, head: string): HeadFacts {
-  const base = `repos/${snapshot.owner}/${snapshot.repo}`;
-  const runs = ghJson(['api', `${base}/commits/${head}/check-runs?per_page=100`]) as { check_runs?: unknown[] };
-  const statuses = ghJson(['api', `${base}/commits/${head}/status`]) as { statuses?: unknown[] };
-  const compare = ghJson(['api', `${base}/compare/${snapshot.baseRef}...${head}`]) as {
-    files?: { additions?: number; deletions?: number }[];
-  };
-  const files = compare.files ?? [];
+export function parseShortStat(text: string): Omit<HeadFacts, 'checks'> {
+  const count = (pattern: RegExp): number => Number(pattern.exec(text)?.[1] ?? 0);
   return {
-    checks: parseChecks([...(runs.check_runs ?? []), ...(statuses.statuses ?? [])]),
-    additions: files.reduce((sum, file) => sum + (file.additions ?? 0), 0),
-    deletions: files.reduce((sum, file) => sum + (file.deletions ?? 0), 0),
-    changedFiles: files.length,
+    additions: count(/(\d+) insertions?\(\+\)/),
+    deletions: count(/(\d+) deletions?\(-\)/),
+    changedFiles: count(/(\d+) files? changed/),
   };
+}
+
+/**
+ * CI comes from GitHub, the size from the clone: the compare endpoint lists at most 300 files, so
+ * a larger change would be undercounted there.
+ */
+function headFacts(snapshot: PrSnapshot, head: string, clone: string): HeadFacts {
+  const base = `repos/${snapshot.owner}/${snapshot.repo}`;
+  const runs = ghPages(`${base}/commits/${head}/check-runs?per_page=100`).flatMap(page => (page as { check_runs?: unknown[] }).check_runs ?? []);
+  const statuses = ghPages(`${base}/commits/${head}/status?per_page=100`).flatMap(page => (page as { statuses?: unknown[] }).statuses ?? []);
+  const git = (args: string[]): string => execFileSync('git', ['-C', clone, ...args], { encoding: 'utf8' }).trim();
+  const baseRef = `refs/diffity/base/${snapshot.baseRef}`;
+  git(['fetch', 'origin', `+refs/heads/${snapshot.baseRef}:${baseRef}`]);
+  try {
+    git(['cat-file', '-e', `${head}^{commit}`]);
+  } catch {
+    git(['fetch', 'origin', head]);
+  }
+  return { checks: parseChecks([...runs, ...statuses]), ...parseShortStat(git(['diff', '--shortstat', `${baseRef}...${head}`])) };
 }
 
 function prName(ref: PrRefSpec): string {
@@ -502,7 +515,7 @@ async function main(): Promise<number> {
   const ticker = setInterval(() => console.error(`   … ${elapsed().toFixed(0)} min`), 60_000);
   let result: PrepareResult;
   try {
-    result = await preparePr(atHead(snapshot, head, headFacts(snapshot, head)), config, deps, { bumped: true, pinHead: head });
+    result = await preparePr(atHead(snapshot, head, headFacts(snapshot, head, clone)), config, deps, { bumped: true, pinHead: head });
   } finally {
     clearInterval(ticker);
   }
