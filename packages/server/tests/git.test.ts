@@ -109,6 +109,32 @@ describe('reading', () => {
   });
 });
 
+describe('after the mirror is lost', () => {
+  const pinned = () => runGit(['for-each-ref', '--format=%(objectname)', 'refs/diffity/keep/'], { gitDir: mirrors.pathFor('acme', 'widgets') });
+
+  it('clones again and fetches what a read needs', async () => {
+    await mirrors.fetchCommits('acme', 'widgets', null, [fixture.base, fixture.head1]);
+    const before = await mirrors.diff('acme', 'widgets', null, fixture.base, fixture.head1);
+    removeDir(mirrors.pathFor('acme', 'widgets'));
+    expect(await mirrors.diff('acme', 'widgets', null, fixture.base, fixture.head1)).toBe(before);
+    expect(existsSync(join(mirrors.pathFor('acme', 'widgets'), 'HEAD'))).toBe(true);
+    expect(await pinned()).toContain(fixture.base);
+    expect(await pinned()).toContain(fixture.head1);
+  });
+
+  it('fetches a commit on no branch by its sha', async () => {
+    removeDir(mirrors.pathFor('acme', 'widgets'));
+    expect(await mirrors.readFile('acme', 'widgets', null, fixture.orphan, 'src.ts')).toBe('export const orphan = true;\n');
+    expect(await pinned()).toContain(fixture.orphan);
+  });
+
+  it('says when a sha cannot be had, and refuses a short one', async () => {
+    removeDir(mirrors.pathFor('acme', 'widgets'));
+    await expect(mirrors.nameStatus('acme', 'widgets', null, '0'.repeat(40), fixture.base)).rejects.toThrow('is not in acme/widgets');
+    await expect(mirrors.readFile('acme', 'widgets', null, 'abc123', 'src.ts')).rejects.toThrow('Not a full commit sha');
+  });
+});
+
 describe('patch sessions', () => {
   it('applies a patch to the base in a throwaway index and diffs the tree it makes', async () => {
     const patch = git(fixture.work, ['diff', fixture.base, fixture.head1]) + '\n';
