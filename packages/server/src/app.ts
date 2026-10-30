@@ -580,8 +580,8 @@ export function createApp(deps: AppDeps): express.Express {
     res.redirect(303, '/settings');
   });
 
-  const section = (heading: string, content: string): string =>
-    `<details open><summary><h2>${heading}</h2></summary>${content}</details>`;
+  const section = (heading: string, content: string, count?: number): string =>
+    `<details open data-section="${heading}"><summary><h2>${heading}${count === undefined ? '' : ` (${count})`}</h2></summary>${content}</details>`;
 
   const pullsSection = async (
     heading: string,
@@ -601,7 +601,7 @@ export function createApp(deps: AppDeps): express.Express {
     }
     const hidden = found.hidden > 0 ? ` <span class="muted">(${found.hidden} hidden by your <a href="/settings">filters</a>)</span>` : '';
     if (found.rows.length === 0) {
-      return section(heading, `<p>${empty}${hidden}</p>`);
+      return section(heading, `<p>${empty}${hidden}</p>`, 0);
     }
     const rows = found.rows.map(request => {
       const slug = `${request.owner}/${request.repo}`;
@@ -627,7 +627,7 @@ export function createApp(deps: AppDeps): express.Express {
     }).join('');
     return section(heading, `
       <table><tr><th>Pull request</th><th>Title</th><th>Author</th><th>Updated</th><th></th></tr>${rows}</table>
-      ${hidden ? `<p>${hidden}</p>` : ''}`);
+      ${hidden ? `<p>${hidden}</p>` : ''}`, found.rows.length);
   };
 
   app.get('/', async (req, res) => {
@@ -662,7 +662,7 @@ export function createApp(deps: AppDeps): express.Express {
         ? '<p><strong>Agent listening</strong> <span class="muted">· Create and review hands a pull request to it</span></p>'
         : '';
     sendPage(res, 200, 'Sessions', agent + requests + own + (sessions.length > 0
-      ? section('Your review sessions', `<table><tr><th>Repository</th><th>Change</th><th>Created</th></tr>${rows}</table>`)
+      ? section('Your review sessions', `<table><tr><th>Repository</th><th>Change</th><th>Created</th></tr>${rows}</table>`, sessions.length)
       : section('No review sessions yet', `<p>Ask your agent to <code>create_session</code> through the diffity MCP connector.
          See <a href="/settings">settings</a> for how to add it.</p>`)) + '<script src="/sections.js"></script>', user, [], true);
   });

@@ -208,9 +208,9 @@ describe('pull requests awaiting review', () => {
 
   it('asks the user to connect GitHub when there is nothing to ask with', async () => {
     const page = await api('/', { cookie: aliceCookie });
-    expect(page.body).toContain('Awaiting your review');
+    expect(page.body).toContain('<h2>Awaiting your review</h2>');
     expect(page.body).toContain('Connect GitHub on Settings</a> to see pull requests waiting for your review');
-    expect(page.body).toContain('Your review sessions');
+    expect(page.body).toContain('<h2>Your review sessions (2)</h2>');
   });
 
   it('lists them, linking an existing session and offering to create one, minus what the filters hide', async () => {
@@ -229,10 +229,12 @@ describe('pull requests awaiting review', () => {
       expect(page).toMatch(/action="\/sessions" target="_blank">\s*<input type="hidden" name="repo" value="acme\/widgets">\s*<input type="hidden" name="pr" value="2">/);
       expect(page).not.toContain('Release 1.2');
       expect(page).toContain('(1 hidden by your');
+      expect(page).toContain('<h2>Awaiting your review (2)</h2>');
 
       await server.users.setSettings(aliceId, { skipTitles: ['release', 'rename', 'change'], includeDrafts: false });
       const empty = (await api('/', { cookie: aliceCookie })).body as string;
       expect(empty).toContain('Nothing is waiting for your review. <span class="muted">(3 hidden by your');
+      expect(empty).toContain('<h2>Awaiting your review (0)</h2>');
     } finally {
       await server.users.setGitHubToken(aliceId, null);
       await server.users.setSettings(aliceId, { skipTitles: [], includeDrafts: false });
@@ -282,6 +284,8 @@ describe('pull requests awaiting review', () => {
       const page = (await api('/', { cookie: aliceCookie })).body as string;
       const review = page.slice(page.indexOf('Awaiting your review'), page.indexOf('Your open pull requests'));
       const own = page.slice(page.indexOf('Your open pull requests'), page.indexOf('Your review sessions'));
+      expect(review).toContain('Awaiting your review (1)</h2>');
+      expect(own).toContain('Your open pull requests (2)</h2>');
       expect(review).toContain('acme/widgets#2');
       expect(review).not.toContain('acme/widgets#1');
       expect(review).not.toContain('Work in progress');
@@ -293,7 +297,9 @@ describe('pull requests awaiting review', () => {
 
       github.ownPulls['alice-token-own-none'] = [];
       await server.users.setGitHubToken(aliceId, 'alice-token-own-none');
-      expect((await api('/', { cookie: aliceCookie })).body).toContain('You have no open pull requests.');
+      const none = (await api('/', { cookie: aliceCookie })).body as string;
+      expect(none).toContain('You have no open pull requests.');
+      expect(none).toContain('<h2>Your open pull requests (0)</h2>');
     } finally {
       await server.users.setGitHubToken(aliceId, null);
     }
@@ -311,7 +317,8 @@ describe('pull requests awaiting review', () => {
       expect(page).toContain(`<a href="/s/${session.id}/" target="_blank" rel="noopener">`);
       expect(page).not.toMatch(/<a href="\/s\/[^"]+\/">/);
       expect(page).toContain('<form class="inline" method="post" action="/sessions" target="_blank">');
-      expect(page.match(/<details open><summary><h2>/g)).toHaveLength(3);
+      expect(page.match(/<details open data-section="[^"]+"><summary><h2>/g)).toHaveLength(3);
+      expect(page).toContain('<details open data-section="Awaiting your review"><summary><h2>Awaiting your review (1)</h2>');
       expect(page).toContain('<script src="/sections.js"></script>');
       const csp = res.headers.get('content-security-policy')!;
       expect(csp).toContain("script-src 'self'");
@@ -319,6 +326,7 @@ describe('pull requests awaiting review', () => {
       const script = await api('/sections.js');
       expect(script.headers.get('content-type')).toContain('javascript');
       expect(script.body).toContain('localStorage');
+      expect(script.body).toContain("'diffity.section:' + details.dataset.section");
       expect((await api('/settings', { cookie: aliceCookie })).headers.get('content-security-policy')).not.toContain('script-src');
     } finally {
       await server.users.setGitHubToken(aliceId, null);
