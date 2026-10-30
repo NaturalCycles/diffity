@@ -10,6 +10,12 @@ export class GitError extends Error {
   }
 }
 
+export class MissingObjectError extends Error {
+  constructor(message: string, readonly sha: string) {
+    super(message);
+  }
+}
+
 export interface GitOptions {
   gitDir?: string;
   input?: string;
@@ -186,9 +192,10 @@ export class Mirrors {
     return this.lock(gitDir)(() => work(gitDir));
   }
 
-  private async ensureCloned(owner: string, repo: string, gitDir: string, token: string | null): Promise<void> {
+  /** True when it had to clone. */
+  private async ensureCloned(owner: string, repo: string, gitDir: string, token: string | null): Promise<boolean> {
     if (existsSync(join(gitDir, 'HEAD'))) {
-      return;
+      return false;
     }
     await mkdir(dirname(gitDir), { recursive: true });
     // Cloned beside the target and moved into place, so a failed clone leaves nothing that
@@ -204,41 +211,75 @@ export class Mirrors {
       await runGit(['config', 'gc.auto', '0'], { gitDir: staging });
       await runGit(['config', 'maintenance.auto', 'false'], { gitDir: staging });
       await rename(staging, gitDir);
+      return true;
     } catch (err) {
       await rm(staging, { recursive: true, force: true });
       throw err;
     }
   }
 
-  private async hasObject(gitDir: string, spec: string): Promise<boolean> {
-    try {
-      await runGit(['cat-file', '-e', spec], { gitDir });
-      return true;
-    } catch {
-      return false;
+  /** Each object's type, or `missing`, found without fetching anything. */
+  private async objectTypes(gitDir: string, shas: string[]): Promise<Map<string, string>> {
+    const types = new Map<string, string>();
+    if (shas.length === 0) {
+      return types;
     }
+    const raw = await runGit(['cat-file', '--batch-check'], {
+      gitDir,
+      env: { GIT_NO_LAZY_FETCH: '1' },
+      input: shas.join('\n') + '\n',
+    });
+    for (const line of raw.split('\n')) {
+      const [name, type] = line.split(' ');
+      if (name && type) {
+        types.set(name, type);
+      }
+    }
+    return types;
   }
 
   private async pin(gitDir: string, sha: string): Promise<void> {
     await runGit(['update-ref', `refs/diffity/keep/${sha}`, sha], { gitDir });
   }
 
+  /**
+   * Every read goes through here first: the mirror lives on the instance's own disk, so it may be
+   * gone, or re-cloned without what an older session needs.
+   */
+  private async ready(owner: string, repo: string, gitDir: string, token: string | null, shas: string[]): Promise<void> {
+    const cloned = await this.ensureCloned(owner, repo, gitDir, token);
+    const types = await this.objectTypes(gitDir, shas);
+    const missing = [...types].filter(([, type]) => type === 'missing').map(([sha]) => sha);
+    for (const sha of missing) {
+      if (!isSha(sha)) {
+        throw new Error(`Not a full commit sha: ${sha}`);
+      }
+      let detail = 'the remote did not send it';
+      try {
+        await runGit(['fetch', '--filter=blob:none', '--no-tags', 'origin', sha], { gitDir, env: authEnv(token) });
+      } catch (err) {
+        if (!(err instanceof GitError)) {
+          throw err;
+        }
+        detail = err.stderr.trim();
+      }
+      if ((await this.objectTypes(gitDir, [sha])).get(sha) === 'missing') {
+        throw new MissingObjectError(`${sha} could not be fetched into ${owner}/${repo}: ${detail}`, sha);
+      }
+    }
+    for (const sha of cloned ? shas : missing) {
+      await this.pin(gitDir, sha);
+    }
+  }
+
   /** Makes each commit present, fetching the ones that are not, and pins them against gc. */
   fetchCommits(owner: string, repo: string, token: string | null, shas: string[]): Promise<void> {
     return this.withRepo(owner, repo, async gitDir => {
-      await this.ensureCloned(owner, repo, gitDir, token);
+      await this.ready(owner, repo, gitDir, token, shas);
+      const types = await this.objectTypes(gitDir, shas);
       for (const sha of shas) {
-        if (!isSha(sha)) {
-          throw new Error(`Not a full commit sha: ${sha}`);
-        }
-        if (!(await this.hasObject(gitDir, `${sha}^{commit}`))) {
-          await runGit(['fetch', '--filter=blob:none', '--no-tags', 'origin', sha], {
-            gitDir,
-            env: authEnv(token),
-          });
-        }
-        if (!(await this.hasObject(gitDir, `${sha}^{commit}`))) {
-          throw new Error(`Commit ${sha} is not in ${owner}/${repo}`);
+        if (types.get(sha) !== 'commit') {
+          throw new Error(`Not a commit: ${sha}`);
         }
         await this.pin(gitDir, sha);
       }
@@ -248,7 +289,7 @@ export class Mirrors {
   /** The pull request's head as GitHub has it now, fetched and pinned. */
   fetchPullHead(owner: string, repo: string, token: string | null, prNumber: number): Promise<string> {
     return this.withRepo(owner, repo, async gitDir => {
-      await this.ensureCloned(owner, repo, gitDir, token);
+      await this.ready(owner, repo, gitDir, token, []);
       const ref = `refs/diffity/pull/${prNumber}`;
       await runGit(['fetch', '--filter=blob:none', '--no-tags', 'origin', `+refs/pull/${prNumber}/head:${ref}`], {
         gitDir,
@@ -261,9 +302,10 @@ export class Mirrors {
   }
 
   mergeBase(owner: string, repo: string, token: string | null, a: string, b: string): Promise<string> {
-    return this.withRepo(owner, repo, async gitDir =>
-      (await runGit(['merge-base', a, b], { gitDir, env: authEnv(token) })).trim(),
-    );
+    return this.withRepo(owner, repo, async gitDir => {
+      await this.ready(owner, repo, gitDir, token, [a, b]);
+      return (await runGit(['merge-base', a, b], { gitDir, env: authEnv(token) })).trim();
+    });
   }
 
   /**
@@ -272,6 +314,7 @@ export class Mirrors {
    */
   applyPatch(owner: string, repo: string, token: string | null, base: string, patch: string): Promise<string> {
     return this.withRepo(owner, repo, async gitDir => {
+      await this.ready(owner, repo, gitDir, token, [base]);
       const indexFile = join(this.dataDir, 'tmp', `${randomUUID()}.index`);
       await mkdir(dirname(indexFile), { recursive: true });
       const env = { ...authEnv(token), GIT_INDEX_FILE: indexFile };
@@ -300,8 +343,9 @@ export class Mirrors {
     head: string,
     options: { ignoreWhitespace?: boolean; path?: string } = {},
   ): Promise<string> {
-    return this.withRepo(owner, repo, gitDir =>
-      runGit(
+    return this.withRepo(owner, repo, async gitDir => {
+      await this.ready(owner, repo, gitDir, token, [base, head]);
+      return runGit(
         [
           '--literal-pathspecs',
           'diff',
@@ -312,28 +356,31 @@ export class Mirrors {
           ...(options.path ? ['--', options.path] : []),
         ],
         { gitDir, env: authEnv(token) },
-      ),
-    );
+      );
+    });
   }
 
   shortStat(owner: string, repo: string, token: string | null, base: string, head: string): Promise<string> {
-    return this.withRepo(owner, repo, gitDir =>
-      runGit(['diff', '--shortstat', base, head], { gitDir, env: authEnv(token) }),
-    );
+    return this.withRepo(owner, repo, async gitDir => {
+      await this.ready(owner, repo, gitDir, token, [base, head]);
+      return runGit(['diff', '--shortstat', base, head], { gitDir, env: authEnv(token) });
+    });
   }
 
   nameStatus(owner: string, repo: string, token: string | null, base: string, head: string): Promise<NameStatus[]> {
-    return this.withRepo(owner, repo, async gitDir =>
-      parseNameStatus(await runGit(['diff', '--name-status', base, head], { gitDir, env: authEnv(token) })),
-    );
+    return this.withRepo(owner, repo, async gitDir => {
+      await this.ready(owner, repo, gitDir, token, [base, head]);
+      return parseNameStatus(await runGit(['diff', '--name-status', base, head], { gitDir, env: authEnv(token) }));
+    });
   }
 
   renames(owner: string, repo: string, token: string | null, from: string, to: string): Promise<NameStatus[]> {
-    return this.withRepo(owner, repo, async gitDir =>
-      parseNameStatus(
+    return this.withRepo(owner, repo, async gitDir => {
+      await this.ready(owner, repo, gitDir, token, [from, to]);
+      return parseNameStatus(
         await runGit(['diff', '-M', '--name-status', '--diff-filter=R', from, to], { gitDir, env: authEnv(token) }),
-      ),
-    );
+      );
+    });
   }
 
   /** Many files in one git call; a path missing at that revision maps to null. */
@@ -344,6 +391,7 @@ export class Mirrors {
       return Promise.resolve(result);
     }
     return this.withRepo(owner, repo, async gitDir => {
+      await this.ready(owner, repo, gitDir, token, [rev]);
       const raw = await runGitBuffer(['cat-file', '--batch'], {
         gitDir,
         env: authEnv(token),
@@ -377,6 +425,7 @@ export class Mirrors {
       return Promise.resolve(null);
     }
     return this.withRepo(owner, repo, async gitDir => {
+      await this.ready(owner, repo, gitDir, token, [rev]);
       try {
         return await runGit(['cat-file', 'blob', `${rev}:${path}`], { gitDir, env: authEnv(token) });
       } catch (err) {

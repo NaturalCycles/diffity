@@ -48,6 +48,8 @@ export interface Fixture {
   head1: string;
   /** feature's second commit, which moves and renames things. */
   head2: string;
+  /** On no branch, pushed only as refs/pull/9/head, as a merged or force-pushed pull request's old head is. */
+  orphan: string;
   remoteUrl: (owner: string, repo: string) => string;
   /** Moves refs/pull/1/head to another commit, as a push to the pull request would. */
   pushPull(sha: string): void;
@@ -103,6 +105,13 @@ export function makeFixture(): Fixture {
   git(work, ['push', bare, 'main', 'feature']);
   git(work, ['push', bare, `${head1}:refs/pull/1/head`]);
 
+  git(work, ['checkout', '--detach', head1]);
+  writeFileSync(join(work, 'src.ts'), 'export const orphan = true;\n');
+  git(work, ['commit', '-am', 'orphan']);
+  const orphan = git(work, ['rev-parse', 'HEAD']);
+  git(work, ['push', bare, `${orphan}:refs/pull/9/head`]);
+  git(work, ['checkout', 'main']);
+
   return {
     root,
     remotes,
@@ -111,6 +120,7 @@ export function makeFixture(): Fixture {
     mainTip,
     head1,
     head2,
+    orphan,
     remoteUrl: (owner, repo) => `file://${join(remotes, owner.toLowerCase(), `${repo.toLowerCase()}.git`)}`,
     pushPull: sha => git(work, ['push', '--force', bare, `${sha}:refs/pull/1/head`]),
   };

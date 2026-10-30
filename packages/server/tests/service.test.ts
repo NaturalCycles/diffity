@@ -217,6 +217,33 @@ describe('reading a session', () => {
   });
 });
 
+describe('on a new instance, without the mirror', () => {
+  const restarted = () => {
+    removeDir(new Mirrors(dataDir, fixture.remoteUrl).pathFor('acme', 'widgets'));
+    return new ReviewService(
+      reviews,
+      new Mirrors(dataDir, fixture.remoteUrl),
+      new GitHubApi(github.url),
+      new StoredTokenAccess(users, null),
+      new URL('http://localhost:5390'),
+      users,
+    );
+  };
+
+  it('still reads a pull request session', async () => {
+    const { session } = await service.createSession(alice, { repo: 'acme/widgets', pr: 1 });
+    const fresh = restarted();
+    expect((await fresh.changedFiles(session)).map(file => file.newPath).sort()).toEqual(['added.ts', 'src.ts']);
+    expect(await fresh.diffText(session)).toContain('+line 10 changed by the feature');
+  });
+
+  it('says a patch session has to be made again', async () => {
+    const patch = 'diff --git a/patched.ts b/patched.ts\nnew file mode 100644\n--- /dev/null\n+++ b/patched.ts\n@@ -0,0 +1 @@\n+export const patched = true;\n';
+    const { session } = await service.createSession(alice, { repo: 'acme/widgets', base: fixture.base, patch });
+    await expect(restarted().diffText(session)).rejects.toThrow('This session was made from a patch and its tree did not outlive a server restart; create it again');
+  });
+});
+
 describe('review requests', () => {
   const request = (title: string, draft = false): ReviewRequest => ({
     owner: 'acme', repo: 'widgets', number: 1, title, author: 'octocat', draft, updatedAt: '2026-10-01T10:00:00Z', url: 'u',
