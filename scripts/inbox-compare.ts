@@ -408,13 +408,19 @@ function ghPages(path: string): unknown[] {
   return JSON.parse(execFileSync('gh', ['api', '--paginate', '--slurp', path], { encoding: 'utf8', maxBuffer: 50 * 1024 * 1024 })) as unknown[];
 }
 
-export function parseShortStat(text: string): Omit<HeadFacts, 'checks'> {
-  const count = (pattern: RegExp): number => Number(pattern.exec(text)?.[1] ?? 0);
-  return {
-    additions: count(/(\d+) insertions?\(\+\)/),
-    deletions: count(/(\d+) deletions?\(-\)/),
-    changedFiles: count(/(\d+) files? changed/),
-  };
+/** `git diff --numstat` summed; a binary file counts as changed with no lines. */
+export function parseNumStat(text: string): Omit<HeadFacts, 'checks'> {
+  const size = { additions: 0, deletions: 0, changedFiles: 0 };
+  for (const line of text.split('\n')) {
+    const [added, deleted] = line.split('\t');
+    if (added === undefined || deleted === undefined) {
+      continue;
+    }
+    size.changedFiles += 1;
+    size.additions += Number(added) || 0;
+    size.deletions += Number(deleted) || 0;
+  }
+  return size;
 }
 
 /**
@@ -425,7 +431,11 @@ function headFacts(snapshot: PrSnapshot, head: string, clone: string): HeadFacts
   const base = `repos/${snapshot.owner}/${snapshot.repo}`;
   const runs = ghPages(`${base}/commits/${head}/check-runs?per_page=100`).flatMap(page => (page as { check_runs?: unknown[] }).check_runs ?? []);
   const statuses = ghPages(`${base}/commits/${head}/status?per_page=100`).flatMap(page => (page as { statuses?: unknown[] }).statuses ?? []);
-  const git = (args: string[]): string => execFileSync('git', ['-C', clone, ...args], { encoding: 'utf8' }).trim();
+  // Hooks off, as the inbox runs git in the clone: this process holds the reviewer's credentials.
+  const git = (args: string[]): string =>
+    execFileSync('git', ['-C', clone, '-c', 'core.hooksPath=/dev/null', ...args], {
+      encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    }).trim();
   const baseRef = `refs/diffity/base/${snapshot.baseRef}`;
   git(['fetch', 'origin', `+refs/heads/${snapshot.baseRef}:${baseRef}`]);
   try {
@@ -433,7 +443,7 @@ function headFacts(snapshot: PrSnapshot, head: string, clone: string): HeadFacts
   } catch {
     git(['fetch', 'origin', head]);
   }
-  return { checks: parseChecks([...runs, ...statuses]), ...parseShortStat(git(['diff', '--shortstat', `${baseRef}...${head}`])) };
+  return { checks: parseChecks([...runs, ...statuses]), ...parseNumStat(git(['diff', '--numstat', `${baseRef}...${head}`])) };
 }
 
 function prName(ref: PrRefSpec): string {
