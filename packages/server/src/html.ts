@@ -31,7 +31,7 @@ const STYLE = `
 
 /** Keeps each collapsible section of a page open or closed as the user last left it. */
 export const SECTIONS_SCRIPT = `for (const details of document.querySelectorAll('details')) {
-  const key = 'diffity.section:' + details.querySelector('summary').textContent.trim();
+  const key = 'diffity.section:' + details.dataset.section;
   try {
     if (localStorage.getItem(key) === 'closed') details.open = false;
   } catch {}
