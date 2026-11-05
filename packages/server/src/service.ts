@@ -82,6 +82,8 @@ export interface PullsQuery {
 const MAX_PATCH_BYTES = 10 * 1024 * 1024;
 const CACHE_ENTRIES = 256;
 const REVIEW_REQUESTS_TTL_MS = 60_000;
+/** GitHub's search allows 30 requests a minute, and a refused one reads as an empty list. */
+const FRESH_MIN_AGE_MS = 10_000;
 
 export function filterReviewRequests(requests: ReviewRequest[], settings: UserSettings): ReviewRequest[] {
   const skip = settings.skipTitles.map(pattern => pattern.trim().toLowerCase()).filter(Boolean);
@@ -217,7 +219,7 @@ export class ReviewService {
     }
     const key = `${kind}:${userId}`;
     let cached = this.reviewRequestCache.get(key);
-    if (!cached || cached.token !== token || fresh) {
+    if (!cached || cached.token !== token || (fresh && now - cached.at >= FRESH_MIN_AGE_MS)) {
       const entry = { token, at: now, requests: search(token) };
       this.reviewRequestCache.set(key, entry);
       entry.requests.catch(() => {

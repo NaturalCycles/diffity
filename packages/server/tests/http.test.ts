@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { CommentThread, RepoInfoResponse, Tour } from '@diffity/api';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -381,6 +381,12 @@ describe('pull requests awaiting review', () => {
       expect(fetchedAt((await api('/', { cookie: aliceCookie })).body)).toBe(at);
       expect(github.searches.length).toBe(searches + 2);
 
+      const soon = await api('/sessions/body?fresh=1', { cookie: aliceCookie });
+      expect(soon.headers.get('x-fetched-at')).toBe(at);
+      expect(github.searches.length).toBe(searches + 2);
+
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(Date.parse(at) + 11_000);
       const fresh = await api('/sessions/body?fresh=1', { cookie: aliceCookie });
       expect(github.searches.length).toBe(searches + 4);
       const later = fresh.headers.get('x-fetched-at')!;
@@ -388,6 +394,7 @@ describe('pull requests awaiting review', () => {
       expect(fetchedAt((await api('/', { cookie: aliceCookie })).body)).toBe(later);
       expect(github.searches.length).toBe(searches + 4);
     } finally {
+      vi.useRealTimers();
       await server.users.setGitHubToken(aliceId, null);
     }
   });

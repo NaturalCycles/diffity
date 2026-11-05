@@ -56,7 +56,7 @@ document.addEventListener('toggle', event => {
 }, true);
 `;
 
-/** Mirrored in SESSIONS_SCRIPT, which keeps the label current between refreshes. */
+/** Also runs in the browser, inside SESSIONS_SCRIPT, so it stays free of anything outside itself. */
 export function formatAge(ms: number): string {
   const seconds = Math.max(0, Math.floor(ms / 1000));
   if (seconds < 10) return 'just now';
@@ -89,13 +89,7 @@ export const SESSIONS_SCRIPT = `(() => {
   let inFlight = false;
   let failed = false;
 
-  const formatAge = ms => {
-    const seconds = Math.max(0, Math.floor(ms / 1000));
-    if (seconds < 10) return 'just now';
-    if (seconds < 60) return seconds + ' s ago';
-    if (seconds < 3600) return Math.floor(seconds / 60) + ' min ago';
-    return Math.floor(seconds / 3600) + ' h ago';
-  };
+  const formatAge = ${formatAge.toString()};
   const tick = () => {
     const fetchedAt = Date.parse(container.dataset.fetchedAt || '');
     if (!Number.isNaN(fetchedAt)) age.textContent = 'Updated ' + formatAge(Date.now() - fetchedAt);

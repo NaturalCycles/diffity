@@ -354,6 +354,8 @@ describe('review requests', () => {
     expect((await service.reviewRequests(bob, { now: now + 10_000 }))?.fetchedAt).toBe(now);
     expect(github.searches.length).toBe(searches + 1);
 
+    expect((await service.reviewRequests(bob, { now: now + 5_000, fresh: true }))?.fetchedAt).toBe(now);
+    expect(github.searches.length).toBe(searches + 1);
     expect((await service.reviewRequests(bob, { now: now + 20_000, fresh: true }))?.fetchedAt).toBe(now + 20_000);
     expect(github.searches.length).toBe(searches + 2);
     expect((await service.reviewRequests(bob, { now: now + 30_000 }))?.fetchedAt).toBe(now + 20_000);
