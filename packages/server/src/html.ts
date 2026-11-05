@@ -97,6 +97,8 @@ export const SESSIONS_SCRIPT = `(() => {
 
   const refresh = async fresh => {
     if (inFlight) return;
+    // Swapping the content would take focus from the control a keyboard user is on; the next tick tries again.
+    if (!fresh && container.contains(document.activeElement)) return;
     inFlight = true;
     reload.setAttribute('aria-busy', 'true');
     try {

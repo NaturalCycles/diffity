@@ -311,6 +311,22 @@ describe('pull requests awaiting review', () => {
     expect((await api('/', { cookie: aliceCookie })).body).toContain('Connect GitHub on Settings</a> to see your open pull requests.');
   });
 
+  it('answers a refresh with an error when GitHub fails, so the page keeps what it shows', async () => {
+    github.reviewRequests['alice-token-failing'] = [];
+    github.ownPulls['alice-token-failing'] = [];
+    await server.users.setGitHubToken(aliceId, 'alice-token-failing');
+    github.failSearchWith = 500;
+    try {
+      const body = await api('/sessions/body', { cookie: aliceCookie });
+      expect(body.status).toBe(502);
+      expect(body.body).toContain('GitHub could not be asked');
+      expect((await api('/', { cookie: aliceCookie })).status).toBe(200);
+    } finally {
+      github.failSearchWith = null;
+      await server.users.setGitHubToken(aliceId, null);
+    }
+  });
+
   it('says who each own pull request is waiting on', async () => {
     github.ownPulls['alice-token-status'] = [
       { owner: 'acme', repo: 'widgets', number: 11, title: 'Threads', author: 'alice', draft: true, updatedAt: '2026-10-04T09:00:00Z',
@@ -325,6 +341,8 @@ describe('pull requests awaiting review', () => {
       { owner: 'acme', repo: 'widgets', number: 16, title: 'Approved', author: 'alice', updatedAt: '2026-10-04T09:00:00Z', reviewDecision: 'APPROVED' },
       { owner: 'acme', repo: 'widgets', number: 17, title: 'Changes', author: 'alice', updatedAt: '2026-10-04T09:00:00Z', reviewDecision: 'CHANGES_REQUESTED' },
       { owner: 'acme', repo: 'widgets', number: 18, title: 'Nobody', author: 'alice', updatedAt: '2026-10-04T09:00:00Z', reviewDecision: null },
+      { owner: 'acme', repo: 'widgets', number: 19, title: 'Unread threads', author: 'alice', updatedAt: '2026-10-04T09:00:00Z',
+        threads: Array.from({ length: 100 }, () => true), threadCount: 150, reviewDecision: 'APPROVED' },
     ];
     await server.users.setGitHubToken(aliceId, 'alice-token-status');
     try {
@@ -343,6 +361,7 @@ describe('pull requests awaiting review', () => {
       expect(status(16)).toBe('Approved');
       expect(status(17)).toBe('Changes requested');
       expect(status(18)).toBe('<span class="muted">No reviewer requested</span>');
+      expect(status(19)).toBe('<span class="muted" title="Only the first page of review threads was read">Open threads unknown ·</span> Approved');
       expect(own).not.toContain('<juraj>');
       expect(own).toContain('<td>Threads</td>');
     } finally {

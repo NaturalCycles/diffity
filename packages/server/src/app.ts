@@ -596,6 +596,9 @@ export function createApp(deps: AppDeps): express.Express {
     const parts = request.draft ? [draftBadge] : [];
     const reviewers = request.requestedReviewers ?? [];
     const openThreads = request.openThreads ?? 0;
+    if (openThreads === 0 && request.moreThreads) {
+      parts.push('<span class="muted" title="Only the first page of review threads was read">Open threads unknown ·</span>');
+    }
     if (openThreads > 0) {
       parts.push(`Waiting on: you · ${openThreads}${request.moreThreads ? '+' : ''} open thread${openThreads === 1 && !request.moreThreads ? '' : 's'}`);
     } else if (reviewers.length > 0) {
@@ -620,7 +623,7 @@ export function createApp(deps: AppDeps): express.Express {
     list: () => Promise<{ rows: ReviewRequestRow[]; hidden: number; fetchedAt: number } | null>,
     reachable: boolean,
     own = false,
-  ): Promise<{ html: string; fetchedAt: number | null }> => {
+  ): Promise<{ html: string; fetchedAt: number | null; failed?: true }> => {
     let found: { rows: ReviewRequestRow[]; hidden: number; fetchedAt: number } | null;
     try {
       found = await list();
@@ -628,6 +631,7 @@ export function createApp(deps: AppDeps): express.Express {
       return {
         html: section(heading, `<p class="error">GitHub could not be asked: ${escapeHtml(err instanceof Error ? err.message : String(err))}</p>`),
         fetchedAt: null,
+        failed: true,
       };
     }
     if (!found) {
@@ -671,7 +675,7 @@ export function createApp(deps: AppDeps): express.Express {
    * Everything on the sessions page below its status line. `fetchedAt` is when GitHub was last asked for the
    * oldest list shown, or now when no list came from GitHub.
    */
-  const sessionsBody = async (user: User, { fresh = false } = {}): Promise<{ html: string; fetchedAt: number }> => {
+  const sessionsBody = async (user: User, { fresh = false } = {}): Promise<{ html: string; fetchedAt: number; failed: boolean }> => {
     const now = Date.now();
     const status = await live.userStatus(user.id);
     const listening = status.listening;
@@ -703,7 +707,7 @@ export function createApp(deps: AppDeps): express.Express {
       : section('No review sessions yet', `<p>Ask your agent to <code>create_session</code> through the diffity MCP connector.
          See <a href="/settings">settings</a> for how to add it.</p>`));
     const fetched = [requests.fetchedAt, own.fetchedAt].filter((at): at is number => at !== null);
-    return { html, fetchedAt: fetched.length > 0 ? Math.min(...fetched) : now };
+    return { html, fetchedAt: fetched.length > 0 ? Math.min(...fetched) : now, failed: !!(requests.failed || own.failed) };
   };
 
   app.get('/', async (req, res) => {
@@ -726,7 +730,8 @@ export function createApp(deps: AppDeps): express.Express {
       return;
     }
     const body = await sessionsBody(user, { fresh: req.query.fresh === '1' });
-    res.status(200)
+    // A failed GitHub search is not swapped in over the lists the page already shows.
+    res.status(body.failed ? 502 : 200)
       .set('Content-Security-Policy', pageContentSecurityPolicy())
       .set('X-Fetched-At', new Date(body.fetchedAt).toISOString()).type('html').send(body.html);
   });
