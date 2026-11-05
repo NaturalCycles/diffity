@@ -594,7 +594,11 @@ export function createApp(deps: AppDeps): express.Express {
   /** Who one of the user's own pull requests is waiting on. */
   const ownStatus = (request: ReviewRequestRow): string => {
     const parts = request.draft ? [draftBadge] : [];
-    const reviewers = request.requestedReviewers ?? [];
+    if (!request.requestedReviewers) {
+      parts.push('<span class="muted" title="GitHub did not let diffity read its reviews; is the diffity App installed on this repository?">Status unknown</span>');
+      return parts.join(' ');
+    }
+    const reviewers = request.requestedReviewers;
     const openThreads = request.openThreads ?? 0;
     if (openThreads === 0 && request.moreThreads) {
       parts.push('<span class="muted" title="Only the first page of review threads was read">Open threads unknown ·</span>');

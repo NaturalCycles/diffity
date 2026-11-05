@@ -113,33 +113,23 @@ const OWN_PULLS_GRAPHQL = `query($q:String!){
   search(type:ISSUE,query:$q,first:50){
     nodes{
       ... on PullRequest{
-        number
-        title
         url
-        updatedAt
-        isDraft
-        repository{owner{login} name}
-        author{login}
         reviewDecision
         reviewRequests(first:20){totalCount nodes{requestedReviewer{... on User{login} ... on Bot{login} ... on Team{name}}}}
-        reviewThreads(first:${THREADS_PAGE}){totalCount nodes{isResolved isOutdated}}
+        reviewThreads(first:${THREADS_PAGE}){totalCount nodes{isResolved}}
       }
     }
   }
 }`;
 
 interface RawOwnPull {
-  number?: number;
-  title?: string;
   url?: string;
-  updatedAt?: string;
-  isDraft?: boolean;
-  repository?: { owner?: { login?: string }; name?: string };
-  author?: { login?: string } | null;
   reviewDecision?: string | null;
-  reviewRequests?: { totalCount?: number; nodes?: { requestedReviewer?: { login?: string; name?: string } | null }[] };
-  reviewThreads?: { totalCount?: number; nodes?: { isResolved?: boolean }[] };
+  reviewRequests?: { totalCount?: number; nodes?: { requestedReviewer?: { login?: string; name?: string } | null }[] } | null;
+  reviewThreads?: { totalCount?: number; nodes?: { isResolved?: boolean }[] } | null;
 }
+
+type OwnPullStatus = Required<Pick<ReviewRequest, 'openThreads' | 'moreThreads' | 'requestedReviewers' | 'requestedReviewerCount' | 'reviewDecision'>>;
 
 const REVIEW_THREADS_QUERY = `query($owner:String!,$repo:String!,$number:Int!){
   repository(owner:$owner,name:$repo){
@@ -338,53 +328,53 @@ export class GitHubApi {
   }
 
   /**
-   * The token's own open pull requests, most recently updated first, with who each is waiting on.
-   * Review threads and requested reviewers live on GraphQL only.
+   * The token's own open pull requests, most recently updated first, with who each is waiting on where
+   * GitHub lets the token see it. Review threads and requested reviewers live on GraphQL only, which
+   * refuses them in repositories the App is not installed on; those pull requests come without them.
    */
   async ownPulls(token: string): Promise<ReviewRequest[]> {
-    let json: { data?: { search?: { nodes?: (RawOwnPull | null)[] } }; errors?: { message?: string }[] };
+    const pulls = await this.searchPulls(token, OWN_PULLS_QUERY);
+    if (pulls.length === 0) {
+      return pulls;
+    }
+    let statuses: Map<string, OwnPullStatus>;
     try {
-      json = await this.json(token, '/graphql', {
-        method: 'POST',
-        body: { query: OWN_PULLS_GRAPHQL, variables: { q: `${OWN_PULLS_QUERY} sort:updated-desc` } },
-      });
+      statuses = await this.ownPullStatuses(token);
     } catch (err) {
-      if (err instanceof GitHubApiError && err.status === 422) {
-        console.warn(`Searching pull requests failed: ${err.message}`);
-        return [];
-      }
-      throw err;
+      console.warn(`Reading who pull requests wait on failed: ${err instanceof Error ? err.message : String(err)}`);
+      statuses = new Map();
     }
-    // GraphQL answers a refused or partly failed query with 200 and errors, e.g. when rate limited.
-    if (!json.data?.search || (json.errors?.length ?? 0) > 0) {
-      throw new Error(`Searching pull requests failed: ${json.errors?.map(e => e.message).join('; ') || 'no data'}`);
+    return pulls.map(pull => ({ ...pull, ...statuses.get(pull.url) }));
+  }
+
+  /** By pull request URL. A pull request GraphQL refuses is a null node with an error of its own, and is left out. */
+  private async ownPullStatuses(token: string): Promise<Map<string, OwnPullStatus>> {
+    const json = await this.json<{ data?: { search?: { nodes?: (RawOwnPull | null)[] } }; errors?: { message?: string }[] }>(
+      token,
+      '/graphql',
+      { method: 'POST', body: { query: OWN_PULLS_GRAPHQL, variables: { q: `${OWN_PULLS_QUERY} sort:updated-desc` } } },
+    );
+    if (!json.data?.search) {
+      throw new Error(json.errors?.map(e => e.message).join('; ') || 'no data');
     }
-    return (json.data.search.nodes ?? []).flatMap(node => {
-      const owner = node?.repository?.owner?.login;
-      const repo = node?.repository?.name;
-      if (!node || !owner || !repo || node.number === undefined) {
-        return [];
+    const statuses = new Map<string, OwnPullStatus>();
+    for (const node of json.data.search.nodes ?? []) {
+      if (!node?.url || !node.reviewThreads || !node.reviewRequests) {
+        continue;
       }
-      const threads = node.reviewThreads?.nodes ?? [];
-      const reviewers = (node.reviewRequests?.nodes ?? [])
+      const threads = node.reviewThreads.nodes ?? [];
+      const reviewers = (node.reviewRequests.nodes ?? [])
         .map(request => request.requestedReviewer?.login ?? request.requestedReviewer?.name)
         .filter((name): name is string => !!name);
-      return [{
-        owner,
-        repo,
-        number: node.number,
-        title: node.title ?? '',
-        author: node.author?.login ?? '',
-        draft: !!node.isDraft,
-        updatedAt: node.updatedAt ?? '',
-        url: node.url ?? `https://github.com/${owner}/${repo}/pull/${node.number}`,
+      statuses.set(node.url, {
         openThreads: threads.filter(thread => !thread.isResolved).length,
-        moreThreads: (node.reviewThreads?.totalCount ?? 0) > threads.length,
+        moreThreads: (node.reviewThreads.totalCount ?? 0) > threads.length,
         requestedReviewers: reviewers,
-        requestedReviewerCount: node.reviewRequests?.totalCount ?? reviewers.length,
+        requestedReviewerCount: node.reviewRequests.totalCount ?? reviewers.length,
         reviewDecision: node.reviewDecision ?? null,
-      }];
-    });
+      });
+    }
+    return statuses;
   }
 
   private async searchPulls(token: string, q: string): Promise<ReviewRequest[]> {

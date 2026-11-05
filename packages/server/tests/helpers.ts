@@ -161,6 +161,8 @@ export interface FakeReviewRequest {
   threads?: boolean[];
   /** Own pull requests only: the threads' totalCount, when more than `threads` holds. */
   threadCount?: number;
+  /** Own pull requests only: GraphQL refuses it, as in a repository the App is not installed on. */
+  forbidden?: boolean;
   /** Own pull requests only: requested users by login, or teams as `{ team }`. */
   reviewers?: (string | { team: string })[];
   reviewerCount?: number;
@@ -287,7 +289,9 @@ export async function startFakeGitHub(repos: FakeRepo[]): Promise<FakeGitHub> {
           send(200, { errors: fake.graphqlSearchErrors.map(message => ({ message })) });
           return;
         }
-        const nodes = (token ? fake.ownPulls[token] ?? [] : []).map(pr => ({
+        const pulls = token ? fake.ownPulls[token] ?? [] : [];
+        const errors = pulls.filter(pr => pr.forbidden).map(() => ({ type: 'FORBIDDEN', message: 'Resource not accessible by integration' }));
+        const nodes = pulls.map(pr => pr.forbidden ? null : ({
           number: pr.number,
           title: pr.title,
           url: `https://github.com/${pr.owner}/${pr.repo}/pull/${pr.number}`,
@@ -307,7 +311,7 @@ export async function startFakeGitHub(repos: FakeRepo[]): Promise<FakeGitHub> {
             nodes: (pr.threads ?? []).map(isResolved => ({ isResolved, isOutdated: false })),
           },
         }));
-        send(200, { data: { search: { nodes } } });
+        send(200, { data: { search: { nodes } }, ...errors.length > 0 ? { errors } : {} });
         return;
       }
       if (url.pathname === '/graphql' && req.method === 'POST') {
