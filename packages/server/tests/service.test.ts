@@ -288,10 +288,11 @@ describe('review requests', () => {
     }
   });
 
-  it('asks GitHub’s GraphQL search for the token’s own pull requests, with threads and requested reviewers', async () => {
+  it('lists the token’s own pull requests, with threads and requested reviewers where GraphQL shows them', async () => {
     github.ownPulls['own-search-token'] = [
       { owner: 'acme', repo: 'widgets', number: 8, title: 'Eight', author: 'erin', draft: true, updatedAt: '2026-10-02T08:30:00Z',
         threads: [false, true], threadCount: 120, reviewers: ['kirill', { team: 'platform' }], reviewerCount: 2, reviewDecision: 'REVIEW_REQUIRED' },
+      { owner: 'other', repo: 'elsewhere', number: 9, title: 'Nine', author: 'erin', updatedAt: '2026-10-02T08:00:00Z', forbidden: true },
     ];
     const api = new GitHubApi(github.url);
     expect(await api.ownPulls('own-search-token')).toEqual([{
@@ -299,8 +300,14 @@ describe('review requests', () => {
       updatedAt: '2026-10-02T08:30:00Z', url: 'https://github.com/acme/widgets/pull/8',
       openThreads: 1, moreThreads: true, requestedReviewers: ['kirill', 'platform'], requestedReviewerCount: 2,
       reviewDecision: 'REVIEW_REQUIRED',
+    }, {
+      owner: 'other', repo: 'elsewhere', number: 9, title: 'Nine', author: 'erin', draft: false,
+      updatedAt: '2026-10-02T08:00:00Z', url: 'https://github.com/other/elsewhere/pull/9',
     }]);
-    expect(github.searches.at(-1)).toBe('is:pr is:open archived:false author:@me sort:updated-desc');
+    expect(github.searches.slice(-2)).toEqual([
+      'is:pr is:open archived:false author:@me',
+      'is:pr is:open archived:false author:@me sort:updated-desc',
+    ]);
 
     try {
       github.failSearchWith = 403;
@@ -311,7 +318,7 @@ describe('review requests', () => {
       await expect(api.ownPulls('own-search-token')).rejects.toThrow('GitHub answered 500');
       github.failSearchWith = null;
       github.graphqlSearchErrors = ['API rate limit exceeded'];
-      await expect(api.ownPulls('own-search-token')).rejects.toThrow('Searching pull requests failed: API rate limit exceeded');
+      expect((await api.ownPulls('own-search-token')).map(pull => pull.requestedReviewers)).toEqual([undefined, undefined]);
     } finally {
       github.failSearchWith = null;
       github.graphqlSearchErrors = null;
@@ -367,7 +374,7 @@ describe('review requests', () => {
     expect(own?.fetchedAt).toBe(now + 30_000);
     expect(own?.requests.map(r => r.number)).toEqual([4]);
     expect((await service.ownPulls(bob, { now: now + 40_000, fresh: true }))?.fetchedAt).toBe(now + 40_000);
-    expect(github.searches.length).toBe(searches + 4);
+    expect(github.searches.length).toBe(searches + 6);
   });
 
   it('never links another user’s session, and answers null without GitHub access', async () => {

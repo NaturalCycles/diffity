@@ -343,6 +343,7 @@ describe('pull requests awaiting review', () => {
       { owner: 'acme', repo: 'widgets', number: 18, title: 'Nobody', author: 'alice', updatedAt: '2026-10-04T09:00:00Z', reviewDecision: null },
       { owner: 'acme', repo: 'widgets', number: 19, title: 'Unread threads', author: 'alice', updatedAt: '2026-10-04T09:00:00Z',
         threads: Array.from({ length: 100 }, () => true), threadCount: 150, reviewDecision: 'APPROVED' },
+      { owner: 'other', repo: 'elsewhere', number: 20, title: 'Not installed', author: 'alice', draft: true, updatedAt: '2026-10-04T09:00:00Z', forbidden: true },
     ];
     await server.users.setGitHubToken(aliceId, 'alice-token-status');
     try {
@@ -362,6 +363,11 @@ describe('pull requests awaiting review', () => {
       expect(status(17)).toBe('Changes requested');
       expect(status(18)).toBe('<span class="muted">No reviewer requested</span>');
       expect(status(19)).toBe('<span class="muted" title="Only the first page of review threads was read">Open threads unknown ·</span> Approved');
+      const elsewhere = own.slice(own.indexOf('other/elsewhere#20<'));
+      expect(elsewhere.slice(0, elsewhere.indexOf('</tr>'))).toContain(
+        '<span class="badge">Draft</span> <span class="muted" title="GitHub did not let diffity read its reviews; is the diffity App installed on this repository?">Status unknown</span>',
+      );
+      expect(page).not.toContain('GitHub could not be asked');
       expect(own).not.toContain('<juraj>');
       expect(own).toContain('<td>Threads</td>');
     } finally {
