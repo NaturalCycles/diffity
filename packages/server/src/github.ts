@@ -349,7 +349,7 @@ export class GitHubApi {
         body: { query: OWN_PULLS_GRAPHQL, variables: { q: `${OWN_PULLS_QUERY} sort:updated-desc` } },
       });
     } catch (err) {
-      if (err instanceof GitHubApiError && (err.status === 422 || err.status === 403)) {
+      if (err instanceof GitHubApiError && err.status === 422) {
         console.warn(`Searching pull requests failed: ${err.message}`);
         return [];
       }
@@ -393,8 +393,8 @@ export class GitHubApi {
     try {
       result = await this.json(token, `/search/issues?${query.toString()}`);
     } catch (err) {
-      // A search GitHub refuses (rate limit, an App without access) leaves the list empty, not the page broken.
-      if (err instanceof GitHubApiError && (err.status === 422 || err.status === 403)) {
+      // A query GitHub cannot validate, e.g. for an App without access, has no results. A rate limit's 403 is a failure.
+      if (err instanceof GitHubApiError && err.status === 422) {
         console.warn(`Searching pull requests failed: ${err.message}`);
         return [];
       }

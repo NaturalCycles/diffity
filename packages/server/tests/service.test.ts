@@ -279,6 +279,8 @@ describe('review requests', () => {
     github.failSearchWith = 422;
     try {
       expect(await api.reviewRequests('search-token')).toEqual([]);
+      github.failSearchWith = 403;
+      await expect(api.reviewRequests('search-token')).rejects.toThrow('GitHub answered 403');
       github.failSearchWith = 500;
       await expect(api.reviewRequests('search-token')).rejects.toThrow('GitHub answered 500');
     } finally {
@@ -302,7 +304,7 @@ describe('review requests', () => {
 
     try {
       github.failSearchWith = 403;
-      expect(await api.ownPulls('own-search-token')).toEqual([]);
+      await expect(api.ownPulls('own-search-token')).rejects.toThrow('GitHub answered 403');
       github.failSearchWith = 422;
       expect(await api.ownPulls('own-search-token')).toEqual([]);
       github.failSearchWith = 500;
