@@ -26,7 +26,7 @@ export function pageContentSecurityPolicy(extraFormTargets: string[] = [], selfS
     `form-action 'self'${extraFormTargets.map(target => ` ${target}`).join('')}`,
     "img-src 'self'",
     "style-src 'unsafe-inline'",
-    ...selfScripts ? ["script-src 'self'"] : [],
+    ...selfScripts ? ["script-src 'self'", "connect-src 'self'"] : [],
   ].join('; ');
 }
 

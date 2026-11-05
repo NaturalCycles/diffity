@@ -63,6 +63,20 @@ export interface ReviewRequests {
   requests: ReviewRequestRow[];
   /** How many the user's filters left out. */
   hidden: number;
+  /** When GitHub was asked, in epoch milliseconds; the answer is cached for a minute. */
+  fetchedAt: number;
+}
+
+export interface OwnPulls {
+  requests: ReviewRequestRow[];
+  /** When GitHub was asked, in epoch milliseconds; the answer is cached for a minute. */
+  fetchedAt: number;
+}
+
+export interface PullsQuery {
+  now?: number;
+  /** Asks GitHub again instead of answering from the cache. */
+  fresh?: boolean;
 }
 
 const MAX_PATCH_BYTES = 10 * 1024 * 1024;
@@ -167,27 +181,31 @@ export class ReviewService {
   }
 
   /** Null when the user has no GitHub access to ask with. */
-  async reviewRequests(userId: string, now = Date.now()): Promise<ReviewRequests | null> {
-    const all = await this.searchPulls(userId, 'review', token => this.github.reviewRequests(token), now);
-    if (!all) {
+  async reviewRequests(userId: string, query: PullsQuery = {}): Promise<ReviewRequests | null> {
+    const found = await this.searchPulls(userId, 'review', token => this.github.reviewRequests(token), query);
+    if (!found) {
       return null;
     }
+    const all = await found.requests;
     const shown = filterReviewRequests(all, await this.users.settings(userId));
-    return { requests: await this.withSessions(userId, shown), hidden: all.length - shown.length };
+    return { requests: await this.withSessions(userId, shown), hidden: all.length - shown.length, fetchedAt: found.at };
   }
 
   /** Null when the user has no GitHub access to ask with. */
-  async ownPulls(userId: string, now = Date.now()): Promise<ReviewRequestRow[] | null> {
-    const all = await this.searchPulls(userId, 'own', token => this.github.ownPulls(token), now);
-    return all && this.withSessions(userId, all);
+  async ownPulls(userId: string, query: PullsQuery = {}): Promise<OwnPulls | null> {
+    const found = await this.searchPulls(userId, 'own', token => this.github.ownPulls(token), query);
+    if (!found) {
+      return null;
+    }
+    return { requests: await this.withSessions(userId, await found.requests), fetchedAt: found.at };
   }
 
   private async searchPulls(
     userId: string,
     kind: 'review' | 'own',
     search: (token: string) => Promise<ReviewRequest[]>,
-    now: number,
-  ): Promise<ReviewRequest[] | null> {
+    { now = Date.now(), fresh = false }: PullsQuery,
+  ): Promise<{ at: number; requests: Promise<ReviewRequest[]> } | null> {
     const token = await this.access.tokenFor(userId);
     if (!token) {
       return null;
@@ -199,7 +217,7 @@ export class ReviewService {
     }
     const key = `${kind}:${userId}`;
     let cached = this.reviewRequestCache.get(key);
-    if (!cached || cached.token !== token) {
+    if (!cached || cached.token !== token || fresh) {
       const entry = { token, at: now, requests: search(token) };
       this.reviewRequestCache.set(key, entry);
       entry.requests.catch(() => {
@@ -209,7 +227,7 @@ export class ReviewService {
       });
       cached = entry;
     }
-    return cached.requests;
+    return cached;
   }
 
   private async withSessions(userId: string, requests: ReviewRequest[]): Promise<ReviewRequestRow[]> {

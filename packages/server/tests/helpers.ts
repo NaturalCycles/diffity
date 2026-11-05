@@ -157,6 +157,14 @@ export interface FakeReviewRequest {
   author: string;
   draft?: boolean;
   updatedAt: string;
+  /** Own pull requests only: each review thread's isResolved. */
+  threads?: boolean[];
+  /** Own pull requests only: the threads' totalCount, when more than `threads` holds. */
+  threadCount?: number;
+  /** Own pull requests only: requested users by login, or teams as `{ team }`. */
+  reviewers?: (string | { team: string })[];
+  reviewerCount?: number;
+  reviewDecision?: string | null;
 }
 
 export interface FakeGitHub {
@@ -176,11 +184,13 @@ export interface FakeGitHub {
   failReviewWith: number | null;
   /** What `GET /search/issues` finds waiting for each token's review. */
   reviewRequests: Record<string, FakeReviewRequest[]>;
-  /** What `GET /search/issues` finds authored by each token's own account. */
+  /** What the GraphQL search finds authored by each token's own account. */
   ownPulls: Record<string, FakeReviewRequest[]>;
-  /** The `q` of every search. */
+  /** The `q` of every search, REST or GraphQL. */
   searches: string[];
-  /** Makes `GET /search/issues` answer this status instead. */
+  /** Makes the GraphQL search answer 200 with these errors and no data. */
+  graphqlSearchErrors: string[] | null;
+  /** Makes `GET /search/issues` and the GraphQL search answer this status instead. */
   failSearchWith: number | null;
   /** The GitHub App's installation id per lowercased "owner/repo"; elsewhere it is not installed. */
   installations: Record<string, number>;
@@ -212,6 +222,7 @@ export async function startFakeGitHub(repos: FakeRepo[]): Promise<FakeGitHub> {
     ownPulls: {},
     searches: [],
     failSearchWith: null,
+    graphqlSearchErrors: null,
     installations: {},
     installationTokenRequests: [],
     installationTokenTtlMs: 60 * 60 * 1000,
@@ -263,6 +274,40 @@ export async function startFakeGitHub(repos: FakeRepo[]): Promise<FakeGitHub> {
           pull_request: { url: `${fake.url}/repos/${pr.owner}/${pr.repo}/pulls/${pr.number}` },
         }));
         send(200, { total_count: items.length, incomplete_results: false, items });
+        return;
+      }
+      if (url.pathname === '/graphql' && req.method === 'POST' && raw.includes('search(')) {
+        const { variables } = JSON.parse(raw) as { variables: { q: string } };
+        fake.searches.push(variables.q);
+        if (fake.failSearchWith) {
+          send(fake.failSearchWith, { message: 'Forbidden' });
+          return;
+        }
+        if (fake.graphqlSearchErrors) {
+          send(200, { errors: fake.graphqlSearchErrors.map(message => ({ message })) });
+          return;
+        }
+        const nodes = (token ? fake.ownPulls[token] ?? [] : []).map(pr => ({
+          number: pr.number,
+          title: pr.title,
+          url: `https://github.com/${pr.owner}/${pr.repo}/pull/${pr.number}`,
+          updatedAt: pr.updatedAt,
+          isDraft: pr.draft ?? false,
+          repository: { owner: { login: pr.owner }, name: pr.repo },
+          author: { login: pr.author },
+          reviewDecision: pr.reviewDecision ?? null,
+          reviewRequests: {
+            totalCount: pr.reviewerCount ?? pr.reviewers?.length ?? 0,
+            nodes: (pr.reviewers ?? []).map(reviewer => ({
+              requestedReviewer: typeof reviewer === 'string' ? { login: reviewer } : { name: reviewer.team },
+            })),
+          },
+          reviewThreads: {
+            totalCount: pr.threadCount ?? pr.threads?.length ?? 0,
+            nodes: (pr.threads ?? []).map(isResolved => ({ isResolved, isOutdated: false })),
+          },
+        }));
+        send(200, { data: { search: { nodes } } });
         return;
       }
       if (url.pathname === '/graphql' && req.method === 'POST') {

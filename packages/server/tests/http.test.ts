@@ -290,10 +290,15 @@ describe('pull requests awaiting review', () => {
       expect(review).not.toContain('acme/widgets#1');
       expect(review).not.toContain('Work in progress');
       expect(own).toContain('acme/widgets#1');
-      expect(own).toContain('Work in progress <span class="muted">draft</span>');
+      expect(own).toContain('<th>Status</th>');
+      expect(own).not.toContain('<th>Author</th>');
+      expect(own).not.toContain('alice');
+      expect(own).toContain('<span class="badge">Draft</span> <span class="muted">No reviewer requested</span>');
+      expect(review).toContain('<th>Author</th>');
+      expect(review).toContain('<td>carol</td>');
       expect(own).toContain(`<a href="/s/${prSession.id}/" target="_blank" rel="noopener">open · ${fixture.head1.slice(0, 7)}</a>`);
       expect(own).not.toContain('acme/widgets#2');
-      expect(github.searches).toContain('is:pr is:open archived:false author:@me');
+      expect(github.searches).toContain('is:pr is:open archived:false author:@me sort:updated-desc');
 
       github.ownPulls['alice-token-own-none'] = [];
       await server.users.setGitHubToken(aliceId, 'alice-token-own-none');
@@ -304,6 +309,87 @@ describe('pull requests awaiting review', () => {
       await server.users.setGitHubToken(aliceId, null);
     }
     expect((await api('/', { cookie: aliceCookie })).body).toContain('Connect GitHub on Settings</a> to see your open pull requests.');
+  });
+
+  it('says who each own pull request is waiting on', async () => {
+    github.ownPulls['alice-token-status'] = [
+      { owner: 'acme', repo: 'widgets', number: 11, title: 'Threads', author: 'alice', draft: true, updatedAt: '2026-10-04T09:00:00Z',
+        threads: [false, true, false], reviewers: ['kirill'] },
+      { owner: 'acme', repo: 'widgets', number: 12, title: 'One thread', author: 'alice', updatedAt: '2026-10-04T09:00:00Z', threads: [false] },
+      { owner: 'acme', repo: 'widgets', number: 13, title: 'Many threads', author: 'alice', updatedAt: '2026-10-04T09:00:00Z',
+        threads: Array.from({ length: 100 }, () => false), threadCount: 150 },
+      { owner: 'acme', repo: 'widgets', number: 14, title: 'Reviewers', author: 'alice', updatedAt: '2026-10-04T09:00:00Z',
+        threads: [true], reviewers: ['kirill', '<juraj>', { team: 'platform' }], reviewDecision: 'REVIEW_REQUIRED' },
+      { owner: 'acme', repo: 'widgets', number: 15, title: 'Two reviewers', author: 'alice', updatedAt: '2026-10-04T09:00:00Z',
+        reviewers: ['kirill', 'juraj'] },
+      { owner: 'acme', repo: 'widgets', number: 16, title: 'Approved', author: 'alice', updatedAt: '2026-10-04T09:00:00Z', reviewDecision: 'APPROVED' },
+      { owner: 'acme', repo: 'widgets', number: 17, title: 'Changes', author: 'alice', updatedAt: '2026-10-04T09:00:00Z', reviewDecision: 'CHANGES_REQUESTED' },
+      { owner: 'acme', repo: 'widgets', number: 18, title: 'Nobody', author: 'alice', updatedAt: '2026-10-04T09:00:00Z', reviewDecision: null },
+    ];
+    await server.users.setGitHubToken(aliceId, 'alice-token-status');
+    try {
+      const page = (await api('/', { cookie: aliceCookie })).body as string;
+      const own = page.slice(page.indexOf('Your open pull requests'), page.indexOf('Your review sessions'));
+      const status = (number: number) => {
+        const row = own.slice(own.indexOf(`acme/widgets#${number}<`));
+        const cell = row.slice(0, row.indexOf('</tr>')).split('<td>')[2];
+        return cell.slice(0, cell.indexOf('</td>'));
+      };
+      expect(status(11)).toBe('<span class="badge">Draft</span> Waiting on: you · 2 open threads');
+      expect(status(12)).toBe('Waiting on: you · 1 open thread');
+      expect(status(13)).toBe('Waiting on: you · 100+ open threads');
+      expect(status(14)).toBe('<span title="3 reviews requested: kirill, &lt;juraj&gt;, platform">Waiting on: kirill, &lt;juraj&gt;, …</span>');
+      expect(status(15)).toBe('<span title="2 reviews requested: kirill, juraj">Waiting on: kirill, juraj</span>');
+      expect(status(16)).toBe('Approved');
+      expect(status(17)).toBe('Changes requested');
+      expect(status(18)).toBe('<span class="muted">No reviewer requested</span>');
+      expect(own).not.toContain('<juraj>');
+      expect(own).toContain('<td>Threads</td>');
+    } finally {
+      await server.users.setGitHubToken(aliceId, null);
+    }
+  });
+
+  it('serves the sections alone for the page to swap in, with when GitHub was asked', async () => {
+    expect(await api('/sessions/body')).toMatchObject({ status: 401 });
+    github.reviewRequests['alice-token-body'] = [
+      { owner: 'acme', repo: 'widgets', number: 2, title: 'Rename a file', author: 'carol', updatedAt: '2026-10-02T09:00:00Z' },
+    ];
+    github.ownPulls['alice-token-body'] = [];
+    await server.users.setGitHubToken(aliceId, 'alice-token-body');
+    const fetchedAt = (page: string) => /<div id="sessions" data-fetched-at="([^"]+)">/.exec(page)![1];
+    try {
+      const searches = github.searches.length;
+      const first = (await api('/', { cookie: aliceCookie })).body as string;
+      expect(first).toMatch(/<p class="status"><span class="muted" id="sessions-age">Updated just now<\/span>/);
+      expect(first).toContain('id="sessions-reload"');
+      const at = fetchedAt(first);
+      expect(Date.parse(at)).not.toBeNaN();
+      expect(github.searches.length).toBe(searches + 2);
+
+      await new Promise(resolve => setTimeout(resolve, 5));
+      const body = await api('/sessions/body', { cookie: aliceCookie });
+      expect(body.status).toBe(200);
+      expect(body.headers.get('cache-control')).toBe('no-store');
+      expect(body.headers.get('content-type')).toContain('text/html');
+      expect(body.headers.get('x-fetched-at')).toBe(at);
+      expect(body.body).toContain('<h2>Awaiting your review (1)</h2>');
+      expect(body.body).toContain('<h2>Your open pull requests (0)</h2>');
+      expect(body.body).not.toContain('<!DOCTYPE');
+      expect(body.body).not.toContain('<header>');
+      expect(body.body).not.toContain('id="sessions"');
+      expect(fetchedAt((await api('/', { cookie: aliceCookie })).body)).toBe(at);
+      expect(github.searches.length).toBe(searches + 2);
+
+      const fresh = await api('/sessions/body?fresh=1', { cookie: aliceCookie });
+      expect(github.searches.length).toBe(searches + 4);
+      const later = fresh.headers.get('x-fetched-at')!;
+      expect(Date.parse(later)).toBeGreaterThan(Date.parse(at));
+      expect(fetchedAt((await api('/', { cookie: aliceCookie })).body)).toBe(later);
+      expect(github.searches.length).toBe(searches + 4);
+    } finally {
+      await server.users.setGitHubToken(aliceId, null);
+    }
   });
 
   it('opens sessions in a new tab, folds each section, and allows only its own script', async () => {
@@ -323,6 +409,12 @@ describe('pull requests awaiting review', () => {
       const csp = res.headers.get('content-security-policy')!;
       expect(csp).toContain("script-src 'self'");
       expect(csp).not.toMatch(/script-src[^;]*unsafe/);
+      expect(csp).toContain("connect-src 'self'");
+      expect(page).toContain('<script src="/sections.js"></script><script src="/sessions.js"></script>');
+      const sessionsScript = await api('/sessions.js');
+      expect(sessionsScript.headers.get('content-type')).toContain('javascript');
+      expect(sessionsScript.body).toContain("'/sessions/body' + (fresh ? '?fresh=1' : '')");
+      expect(sessionsScript.body).toContain('applySections(template.content)');
       const script = await api('/sections.js');
       expect(script.headers.get('content-type')).toContain('javascript');
       expect(script.body).toContain('localStorage');
