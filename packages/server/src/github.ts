@@ -73,6 +73,15 @@ export interface ReviewRequest {
   draft: boolean;
   updatedAt: string;
   url: string;
+  /** Unresolved review threads; known for the user's own pull requests only. */
+  openThreads?: number;
+  /** More threads than one page holds, so `openThreads` counts only the first page. */
+  moreThreads?: boolean;
+  /** Users and bots by login, and teams by name, whose review is still requested. */
+  requestedReviewers?: string[];
+  requestedReviewerCount?: number;
+  /** GitHub's APPROVED, CHANGES_REQUESTED or REVIEW_REQUIRED; null when the repository requires no review. */
+  reviewDecision?: string | null;
 }
 
 interface RawSearchIssue {
@@ -98,6 +107,39 @@ const MAX_PAGES = 30;
 
 const REVIEW_REQUESTS_QUERY = 'is:pr is:open archived:false review-requested:@me';
 const OWN_PULLS_QUERY = 'is:pr is:open archived:false author:@me';
+const THREADS_PAGE = 100;
+
+const OWN_PULLS_GRAPHQL = `query($q:String!){
+  search(type:ISSUE,query:$q,first:50){
+    nodes{
+      ... on PullRequest{
+        number
+        title
+        url
+        updatedAt
+        isDraft
+        repository{owner{login} name}
+        author{login}
+        reviewDecision
+        reviewRequests(first:20){totalCount nodes{requestedReviewer{... on User{login} ... on Bot{login} ... on Team{name}}}}
+        reviewThreads(first:${THREADS_PAGE}){totalCount nodes{isResolved isOutdated}}
+      }
+    }
+  }
+}`;
+
+interface RawOwnPull {
+  number?: number;
+  title?: string;
+  url?: string;
+  updatedAt?: string;
+  isDraft?: boolean;
+  repository?: { owner?: { login?: string }; name?: string };
+  author?: { login?: string } | null;
+  reviewDecision?: string | null;
+  reviewRequests?: { totalCount?: number; nodes?: { requestedReviewer?: { login?: string; name?: string } | null }[] };
+  reviewThreads?: { totalCount?: number; nodes?: { isResolved?: boolean }[] };
+}
 
 const REVIEW_THREADS_QUERY = `query($owner:String!,$repo:String!,$number:Int!){
   repository(owner:$owner,name:$repo){
@@ -295,9 +337,54 @@ export class GitHubApi {
     return this.searchPulls(token, REVIEW_REQUESTS_QUERY);
   }
 
-  /** The token's own open pull requests, most recently updated first. */
-  ownPulls(token: string): Promise<ReviewRequest[]> {
-    return this.searchPulls(token, OWN_PULLS_QUERY);
+  /**
+   * The token's own open pull requests, most recently updated first, with who each is waiting on.
+   * Review threads and requested reviewers live on GraphQL only.
+   */
+  async ownPulls(token: string): Promise<ReviewRequest[]> {
+    let json: { data?: { search?: { nodes?: (RawOwnPull | null)[] } }; errors?: { message?: string }[] };
+    try {
+      json = await this.json(token, '/graphql', {
+        method: 'POST',
+        body: { query: OWN_PULLS_GRAPHQL, variables: { q: `${OWN_PULLS_QUERY} sort:updated-desc` } },
+      });
+    } catch (err) {
+      if (err instanceof GitHubApiError && err.status === 422) {
+        console.warn(`Searching pull requests failed: ${err.message}`);
+        return [];
+      }
+      throw err;
+    }
+    // GraphQL answers a refused or partly failed query with 200 and errors, e.g. when rate limited.
+    if (!json.data?.search || (json.errors?.length ?? 0) > 0) {
+      throw new Error(`Searching pull requests failed: ${json.errors?.map(e => e.message).join('; ') || 'no data'}`);
+    }
+    return (json.data.search.nodes ?? []).flatMap(node => {
+      const owner = node?.repository?.owner?.login;
+      const repo = node?.repository?.name;
+      if (!node || !owner || !repo || node.number === undefined) {
+        return [];
+      }
+      const threads = node.reviewThreads?.nodes ?? [];
+      const reviewers = (node.reviewRequests?.nodes ?? [])
+        .map(request => request.requestedReviewer?.login ?? request.requestedReviewer?.name)
+        .filter((name): name is string => !!name);
+      return [{
+        owner,
+        repo,
+        number: node.number,
+        title: node.title ?? '',
+        author: node.author?.login ?? '',
+        draft: !!node.isDraft,
+        updatedAt: node.updatedAt ?? '',
+        url: node.url ?? `https://github.com/${owner}/${repo}/pull/${node.number}`,
+        openThreads: threads.filter(thread => !thread.isResolved).length,
+        moreThreads: (node.reviewThreads?.totalCount ?? 0) > threads.length,
+        requestedReviewers: reviewers,
+        requestedReviewerCount: node.reviewRequests?.totalCount ?? reviewers.length,
+        reviewDecision: node.reviewDecision ?? null,
+      }];
+    });
   }
 
   private async searchPulls(token: string, q: string): Promise<ReviewRequest[]> {
@@ -306,8 +393,8 @@ export class GitHubApi {
     try {
       result = await this.json(token, `/search/issues?${query.toString()}`);
     } catch (err) {
-      // A search GitHub refuses (rate limit, an App without access) leaves the list empty, not the page broken.
-      if (err instanceof GitHubApiError && (err.status === 422 || err.status === 403)) {
+      // A query GitHub cannot validate, e.g. for an App without access, has no results. A rate limit's 403 is a failure.
+      if (err instanceof GitHubApiError && err.status === 422) {
         console.warn(`Searching pull requests failed: ${err.message}`);
         return [];
       }

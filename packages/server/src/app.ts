@@ -18,7 +18,7 @@ import { createMcpServer } from './mcp.js';
 import { MAX_WAIT_SECONDS, type Live } from './live.js';
 import type { Routine } from './routine.js';
 import { uiApiRouter } from './ui-api.js';
-import { SECTIONS_SCRIPT, escapeHtml, page } from './html.js';
+import { SECTIONS_SCRIPT, SESSIONS_SCRIPT, escapeHtml, page, sessionsStatus } from './html.js';
 import { randomToken } from './crypto.js';
 import {
   SESSION_COOKIE,
@@ -149,6 +149,10 @@ export function createApp(deps: AppDeps): express.Express {
 
   app.get('/sections.js', (_req, res) => {
     res.type('text/javascript').set('Cache-Control', 'no-cache').send(SECTIONS_SCRIPT);
+  });
+
+  app.get('/sessions.js', (_req, res) => {
+    res.type('text/javascript').set('Cache-Control', 'no-cache').send(SESSIONS_SCRIPT);
   });
 
   if (deps.uiDir) {
@@ -583,25 +587,59 @@ export function createApp(deps: AppDeps): express.Express {
   const section = (heading: string, content: string, count?: number): string =>
     `<details open data-section="${heading}"><summary><h2>${heading}${count === undefined ? '' : ` (${count})`}</h2></summary>${content}</details>`;
 
+  const draftBadge = '<span class="badge">Draft</span>';
+
+  const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? '' : 's'}`;
+
+  /** Who one of the user's own pull requests is waiting on. */
+  const ownStatus = (request: ReviewRequestRow): string => {
+    const parts = request.draft ? [draftBadge] : [];
+    const reviewers = request.requestedReviewers ?? [];
+    const openThreads = request.openThreads ?? 0;
+    if (openThreads === 0 && request.moreThreads) {
+      parts.push('<span class="muted" title="Only the first page of review threads was read">Open threads unknown ·</span>');
+    }
+    if (openThreads > 0) {
+      parts.push(`Waiting on: you · ${openThreads}${request.moreThreads ? '+' : ''} open thread${openThreads === 1 && !request.moreThreads ? '' : 's'}`);
+    } else if (reviewers.length > 0) {
+      const count = Math.max(request.requestedReviewerCount ?? 0, reviewers.length);
+      const shown = reviewers.slice(0, 2).join(', ') + (count > 2 ? ', …' : '');
+      const all = `${plural(count, 'review')} requested: ${reviewers.join(', ')}${count > reviewers.length ? ', …' : ''}`;
+      parts.push(`<span title="${escapeHtml(all)}">Waiting on: ${escapeHtml(shown)}</span>`);
+    } else if (request.reviewDecision === 'APPROVED') {
+      parts.push('Approved');
+    } else if (request.reviewDecision === 'CHANGES_REQUESTED') {
+      parts.push('Changes requested');
+    } else {
+      parts.push('<span class="muted">No reviewer requested</span>');
+    }
+    return parts.join(' ');
+  };
+
   const pullsSection = async (
     heading: string,
     connectFor: string,
     empty: string,
-    list: () => Promise<{ rows: ReviewRequestRow[]; hidden: number } | null>,
+    list: () => Promise<{ rows: ReviewRequestRow[]; hidden: number; fetchedAt: number } | null>,
     reachable: boolean,
-  ): Promise<string> => {
-    let found: { rows: ReviewRequestRow[]; hidden: number } | null;
+    own = false,
+  ): Promise<{ html: string; fetchedAt: number | null; failed?: true }> => {
+    let found: { rows: ReviewRequestRow[]; hidden: number; fetchedAt: number } | null;
     try {
       found = await list();
     } catch (err) {
-      return section(heading, `<p class="error">GitHub could not be asked: ${escapeHtml(err instanceof Error ? err.message : String(err))}</p>`);
+      return {
+        html: section(heading, `<p class="error">GitHub could not be asked: ${escapeHtml(err instanceof Error ? err.message : String(err))}</p>`),
+        fetchedAt: null,
+        failed: true,
+      };
     }
     if (!found) {
-      return section(heading, `<p class="muted"><a href="/settings">Connect GitHub on Settings</a> to see ${connectFor}.</p>`);
+      return { html: section(heading, `<p class="muted"><a href="/settings">Connect GitHub on Settings</a> to see ${connectFor}.</p>`), fetchedAt: null };
     }
     const hidden = found.hidden > 0 ? ` <span class="muted">(${found.hidden} hidden by your <a href="/settings">filters</a>)</span>` : '';
     if (found.rows.length === 0) {
-      return section(heading, `<p>${empty}${hidden}</p>`, 0);
+      return { html: section(heading, `<p>${empty}${hidden}</p>`, 0), fetchedAt: found.fetchedAt };
     }
     const rows = found.rows.map(request => {
       const slug = `${request.owner}/${request.repo}`;
@@ -619,35 +657,38 @@ export function createApp(deps: AppDeps): express.Express {
       return `
       <tr>
         <td><a href="${escapeHtml(request.url)}">${escapeHtml(`${slug}#${request.number}`)}</a></td>
-        <td>${escapeHtml(request.title)}${request.draft ? ' <span class="muted">draft</span>' : ''}</td>
-        <td>${escapeHtml(request.author)}</td>
+        <td>${escapeHtml(request.title)}${!own && request.draft ? ` ${draftBadge}` : ''}</td>
+        <td>${own ? ownStatus(request) : escapeHtml(request.author)}</td>
         <td class="muted">${escapeHtml(request.updatedAt.slice(0, 16).replace('T', ' '))}</td>
         <td>${action}</td>
       </tr>`;
     }).join('');
-    return section(heading, `
-      <table><tr><th>Pull request</th><th>Title</th><th>Author</th><th>Updated</th><th></th></tr>${rows}</table>
-      ${hidden ? `<p>${hidden}</p>` : ''}`, found.rows.length);
+    return {
+      html: section(heading, `
+      <table><tr><th>Pull request</th><th>Title</th><th>${own ? 'Status' : 'Author'}</th><th>Updated</th><th></th></tr>${rows}</table>
+      ${hidden ? `<p>${hidden}</p>` : ''}`, found.rows.length),
+      fetchedAt: found.fetchedAt,
+    };
   };
 
-  app.get('/', async (req, res) => {
-    const user = await userFor(req);
-    if (!user) {
-      notSignedIn(res, req.originalUrl);
-      return;
-    }
+  /**
+   * Everything on the sessions page below its status line. `fetchedAt` is when GitHub was last asked for the
+   * oldest list shown, or now when no list came from GitHub.
+   */
+  const sessionsBody = async (user: User, { fresh = false } = {}): Promise<{ html: string; fetchedAt: number; failed: boolean }> => {
+    const now = Date.now();
     const status = await live.userStatus(user.id);
     const listening = status.listening;
     const reachable = listening || (await routine.configured(user.id));
     const [requests, own, sessions] = await Promise.all([
       pullsSection('Awaiting your review', 'pull requests waiting for your review', 'Nothing is waiting for your review.', async () => {
-        const found = await service.reviewRequests(user.id);
-        return found && { rows: found.requests, hidden: found.hidden };
+        const found = await service.reviewRequests(user.id, { now, fresh });
+        return found && { rows: found.requests, hidden: found.hidden, fetchedAt: found.fetchedAt };
       }, reachable),
       pullsSection('Your open pull requests', 'your open pull requests', 'You have no open pull requests.', async () => {
-        const rows = await service.ownPulls(user.id);
-        return rows && { rows, hidden: 0 };
-      }, reachable),
+        const found = await service.ownPulls(user.id, { now, fresh });
+        return found && { rows: found.requests, hidden: 0, fetchedAt: found.fetchedAt };
+      }, reachable, true),
       reviews.listSessions(user.id),
     ]);
     const rows = sessions.map(session => `
@@ -661,10 +702,38 @@ export function createApp(deps: AppDeps): express.Express {
       : listening
         ? '<p><strong>Agent listening</strong> <span class="muted">· Create and review hands a pull request to it</span></p>'
         : '';
-    sendPage(res, 200, 'Sessions', agent + requests + own + (sessions.length > 0
+    const html = agent + requests.html + own.html + (sessions.length > 0
       ? section('Your review sessions', `<table><tr><th>Repository</th><th>Change</th><th>Created</th></tr>${rows}</table>`, sessions.length)
       : section('No review sessions yet', `<p>Ask your agent to <code>create_session</code> through the diffity MCP connector.
-         See <a href="/settings">settings</a> for how to add it.</p>`)) + '<script src="/sections.js"></script>', user, [], true);
+         See <a href="/settings">settings</a> for how to add it.</p>`));
+    const fetched = [requests.fetchedAt, own.fetchedAt].filter((at): at is number => at !== null);
+    return { html, fetchedAt: fetched.length > 0 ? Math.min(...fetched) : now, failed: !!(requests.failed || own.failed) };
+  };
+
+  app.get('/', async (req, res) => {
+    const user = await userFor(req);
+    if (!user) {
+      notSignedIn(res, req.originalUrl);
+      return;
+    }
+    const body = await sessionsBody(user);
+    sendPage(res, 200, 'Sessions', sessionsStatus(body.fetchedAt, Date.now())
+      + `<div id="sessions" data-fetched-at="${new Date(body.fetchedAt).toISOString()}">${body.html}</div>`
+      + '<script src="/sections.js"></script><script src="/sessions.js"></script>', user, [], true);
+  });
+
+  app.get('/sessions/body', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    const user = await userFor(req);
+    if (!user) {
+      res.status(401).json({ error: 'Sign in first' });
+      return;
+    }
+    const body = await sessionsBody(user, { fresh: req.query.fresh === '1' });
+    // A failed GitHub search is not swapped in over the lists the page already shows.
+    res.status(body.failed ? 502 : 200)
+      .set('Content-Security-Policy', pageContentSecurityPolicy())
+      .set('X-Fetched-At', new Date(body.fetchedAt).toISOString()).type('html').send(body.html);
   });
 
   app.post('/sessions', sameOrigin, forms, async (req, res) => {

@@ -279,10 +279,42 @@ describe('review requests', () => {
     github.failSearchWith = 422;
     try {
       expect(await api.reviewRequests('search-token')).toEqual([]);
+      github.failSearchWith = 403;
+      await expect(api.reviewRequests('search-token')).rejects.toThrow('GitHub answered 403');
       github.failSearchWith = 500;
       await expect(api.reviewRequests('search-token')).rejects.toThrow('GitHub answered 500');
     } finally {
       github.failSearchWith = null;
+    }
+  });
+
+  it('asks GitHub’s GraphQL search for the token’s own pull requests, with threads and requested reviewers', async () => {
+    github.ownPulls['own-search-token'] = [
+      { owner: 'acme', repo: 'widgets', number: 8, title: 'Eight', author: 'erin', draft: true, updatedAt: '2026-10-02T08:30:00Z',
+        threads: [false, true], threadCount: 120, reviewers: ['kirill', { team: 'platform' }], reviewerCount: 2, reviewDecision: 'REVIEW_REQUIRED' },
+    ];
+    const api = new GitHubApi(github.url);
+    expect(await api.ownPulls('own-search-token')).toEqual([{
+      owner: 'acme', repo: 'widgets', number: 8, title: 'Eight', author: 'erin', draft: true,
+      updatedAt: '2026-10-02T08:30:00Z', url: 'https://github.com/acme/widgets/pull/8',
+      openThreads: 1, moreThreads: true, requestedReviewers: ['kirill', 'platform'], requestedReviewerCount: 2,
+      reviewDecision: 'REVIEW_REQUIRED',
+    }]);
+    expect(github.searches.at(-1)).toBe('is:pr is:open archived:false author:@me sort:updated-desc');
+
+    try {
+      github.failSearchWith = 403;
+      await expect(api.ownPulls('own-search-token')).rejects.toThrow('GitHub answered 403');
+      github.failSearchWith = 422;
+      expect(await api.ownPulls('own-search-token')).toEqual([]);
+      github.failSearchWith = 500;
+      await expect(api.ownPulls('own-search-token')).rejects.toThrow('GitHub answered 500');
+      github.failSearchWith = null;
+      github.graphqlSearchErrors = ['API rate limit exceeded'];
+      await expect(api.ownPulls('own-search-token')).rejects.toThrow('Searching pull requests failed: API rate limit exceeded');
+    } finally {
+      github.failSearchWith = null;
+      github.graphqlSearchErrors = null;
     }
   });
 
@@ -297,17 +329,45 @@ describe('review requests', () => {
     const now = Date.now();
     const searches = github.searches.length;
 
-    const found = await service.reviewRequests(bob, now);
+    const found = await service.reviewRequests(bob, { now });
     expect(found?.hidden).toBe(1);
     expect(found?.requests.map(r => [r.number, r.session?.id ?? null])).toEqual([[1, newest.id], [2, null]]);
     expect(found?.requests[0].session).toEqual({ id: newest.id, headSha: newest.headSha, createdAt: newest.createdAt });
 
     await users.setSettings(bob, { skipTitles: ['bump'], includeDrafts: true });
-    expect((await service.reviewRequests(bob, now + 30_000))?.requests.map(r => r.number)).toEqual([1, 3]);
+    expect((await service.reviewRequests(bob, { now: now + 30_000 }))?.requests.map(r => r.number)).toEqual([1, 3]);
     expect(github.searches.length).toBe(searches + 1);
-    await service.reviewRequests(bob, now + 61_000);
+    await service.reviewRequests(bob, { now: now + 61_000 });
     expect(github.searches.length).toBe(searches + 2);
     await users.setSettings(bob, { skipTitles: [], includeDrafts: false });
+  });
+
+  it('says when GitHub was asked, and asks again when fresh, replacing the cached answer', async () => {
+    github.reviewRequests['bob-token'] = [
+      { owner: 'acme', repo: 'widgets', number: 1, title: 'Change line ten', author: 'octocat', updatedAt: '2026-10-03T09:00:00Z' },
+    ];
+    github.ownPulls['bob-token'] = [
+      { owner: 'acme', repo: 'widgets', number: 4, title: 'Mine', author: 'bob', updatedAt: '2026-10-03T09:00:00Z' },
+    ];
+    const now = Date.now() + 200_000;
+    const searches = github.searches.length;
+
+    expect((await service.reviewRequests(bob, { now }))?.fetchedAt).toBe(now);
+    expect((await service.reviewRequests(bob, { now: now + 10_000 }))?.fetchedAt).toBe(now);
+    expect(github.searches.length).toBe(searches + 1);
+
+    expect((await service.reviewRequests(bob, { now: now + 5_000, fresh: true }))?.fetchedAt).toBe(now);
+    expect(github.searches.length).toBe(searches + 1);
+    expect((await service.reviewRequests(bob, { now: now + 20_000, fresh: true }))?.fetchedAt).toBe(now + 20_000);
+    expect(github.searches.length).toBe(searches + 2);
+    expect((await service.reviewRequests(bob, { now: now + 30_000 }))?.fetchedAt).toBe(now + 20_000);
+    expect(github.searches.length).toBe(searches + 2);
+
+    const own = await service.ownPulls(bob, { now: now + 30_000 });
+    expect(own?.fetchedAt).toBe(now + 30_000);
+    expect(own?.requests.map(r => r.number)).toEqual([4]);
+    expect((await service.ownPulls(bob, { now: now + 40_000, fresh: true }))?.fetchedAt).toBe(now + 40_000);
+    expect(github.searches.length).toBe(searches + 4);
   });
 
   it('never links another user’s session, and answers null without GitHub access', async () => {
