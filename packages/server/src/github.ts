@@ -77,7 +77,7 @@ export interface ReviewRequest {
   openThreads?: number;
   /** More threads than one page holds, so `openThreads` counts only the first page. */
   moreThreads?: boolean;
-  /** Users by login and teams by name whose review is still requested. */
+  /** Users and bots by login, and teams by name, whose review is still requested. */
   requestedReviewers?: string[];
   requestedReviewerCount?: number;
   /** GitHub's APPROVED, CHANGES_REQUESTED or REVIEW_REQUIRED; null when the repository requires no review. */
@@ -121,7 +121,7 @@ const OWN_PULLS_GRAPHQL = `query($q:String!){
         repository{owner{login} name}
         author{login}
         reviewDecision
-        reviewRequests(first:20){totalCount nodes{requestedReviewer{... on User{login} ... on Team{name}}}}
+        reviewRequests(first:20){totalCount nodes{requestedReviewer{... on User{login} ... on Bot{login} ... on Team{name}}}}
         reviewThreads(first:${THREADS_PAGE}){totalCount nodes{isResolved isOutdated}}
       }
     }
@@ -355,10 +355,9 @@ export class GitHubApi {
       }
       throw err;
     }
-    if (!json.data?.search) {
-      // GraphQL answers a refused query with 200 and errors, e.g. when rate limited.
-      console.warn(`Searching pull requests failed: ${json.errors?.map(e => e.message).join('; ') ?? 'no data'}`);
-      return [];
+    // GraphQL answers a refused or partly failed query with 200 and errors, e.g. when rate limited.
+    if (!json.data?.search || (json.errors?.length ?? 0) > 0) {
+      throw new Error(`Searching pull requests failed: ${json.errors?.map(e => e.message).join('; ') || 'no data'}`);
     }
     return (json.data.search.nodes ?? []).flatMap(node => {
       const owner = node?.repository?.owner?.login;

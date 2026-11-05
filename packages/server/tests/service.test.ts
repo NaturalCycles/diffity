@@ -309,7 +309,7 @@ describe('review requests', () => {
       await expect(api.ownPulls('own-search-token')).rejects.toThrow('GitHub answered 500');
       github.failSearchWith = null;
       github.graphqlSearchErrors = ['API rate limit exceeded'];
-      expect(await api.ownPulls('own-search-token')).toEqual([]);
+      await expect(api.ownPulls('own-search-token')).rejects.toThrow('Searching pull requests failed: API rate limit exceeded');
     } finally {
       github.failSearchWith = null;
       github.graphqlSearchErrors = null;
