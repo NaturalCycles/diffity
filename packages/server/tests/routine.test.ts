@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LiveStatusResponse } from '@diffity/api';
+import { routinePrompt } from '../src/routine.js';
 import {
   fakeUiDir,
   login,
@@ -184,5 +185,24 @@ describe('calling the routine', () => {
     expect((await ask(session.id, bobCookie)).status).toBe(200);
     expect(fired).toHaveLength(0);
     expect(await firedAt(session.id)).toBeNull();
+  });
+});
+
+describe('the routine prompt', () => {
+  it('describes the payload line with the fields a fire sends, in the same order', async () => {
+    const session = await shasSession(aliceId, fixture.mainTip, fixture.head2);
+    expect((await ask(session.id)).status).toBe(200);
+    expect(fired).toHaveLength(1);
+
+    const shape = routinePrompt(server.config.publicUrl).split('\n').map(line => line.trim()).find(line => line.startsWith('diffity session '));
+    expect(shape).toBeDefined();
+    expect(shape!.replaceAll(/<[^>]*>/g, ' ').split(/\s+/).filter(Boolean)).toEqual(['diffity', ...Object.keys(fields(fired[0].text))]);
+  });
+
+  it('names this server\'s MCP and await URLs and leaves no placeholder', () => {
+    const prompt = routinePrompt(server.config.publicUrl);
+    expect(prompt).not.toContain('{{');
+    expect(prompt).toContain(`'${server.base}/mcp'`);
+    expect(prompt).toContain(`'${server.base}/live/await?session=SESSION&wait=25'`);
   });
 });

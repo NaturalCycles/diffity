@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import type { Db } from './db.js';
 import type { Live } from './live.js';
 import type { ReviewSessionRecord } from './reviews.js';
@@ -8,6 +9,16 @@ const FIRE_TIMEOUT_MS = 10_000;
 
 export type RoutineFireKind = 'review' | 'ask';
 export type RoutineFireResult = 'fired' | 'cooldown' | 'unconfigured' | 'failed';
+
+let promptTemplate: string | undefined;
+
+/** The prompt the user's routine runs, for this server. Beside the module: the build copies it into dist. */
+export function routinePrompt(publicUrl: URL): string {
+  promptTemplate ??= readFileSync(new URL('./routine-prompt.md', import.meta.url), 'utf-8');
+  return promptTemplate
+    .replaceAll('{{mcpUrl}}', new URL('/mcp', publicUrl).href)
+    .replaceAll('{{awaitUrl}}', new URL('/live/await', publicUrl).href);
+}
 
 /** Calls the user's Claude routine (an API trigger) to attend a session; the run itself happens elsewhere. */
 export class Routine {
