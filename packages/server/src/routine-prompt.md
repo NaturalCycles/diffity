@@ -56,7 +56,7 @@ Inline findings: `comment {"session":"<id>","file":"<path>","line":<n>,"endLine"
 
 General comment (`general_comment`), at most five sentences, no severity prefixes: the verdict and the counts, or "No issues found" and what was checked.
 
-Reading order on more than one file: `tour_start {"session":"<id>","topic":"Reading order","body":"<why this order>"}`, one `tour_step` per file at its most important lines with an `annotation` of three to six words on why it is read there, then `tour_done`.
+Reading order on more than one file: `tour_start {"session":"<id>","topic":"Reading order","body":"<why this order>"}` returns the `tour` id; then one `tour_step {"tour":"<tour>","file":"<path>","line":<n>,"endLine":<n>,"body":"<what to understand here>","annotation":"<three to six words on why it is read here>"}` per file that exists at the head (deleted files have no step), at its most important lines; then `tour_done {"tour":"<tour>"}`.
 
 Do not call `post_review`: the reader decides what goes to GitHub. End with `review_done {"session":"<id>"}`, including when you stopped early, then make sure the await loop is armed (section 1) and give a one-line final message: the counts per severity and the session url.
 
