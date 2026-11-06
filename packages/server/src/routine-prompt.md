@@ -52,7 +52,7 @@ The code is in this environment, never fetched through diffity:
 
 Standards are the repository's own, nothing else: `get_standards` for the severity labels (P1, P2, P3) and the configured standards document, plus the AGENTS.md / CLAUDE.md files at the repository root and in the directories of the changed files. Read each changed file in full in the checkout, trace callers of changed signatures, and flag only real problems: bugs, wrong results, security, data loss, broken contracts, violations of a quoted repository rule, missing tests for new behaviour (P3 unless the rules say otherwise), incomplete changes. Skip style, linter territory and pre-existing code. Validate every finding against the full context before leaving it.
 
-Inline findings: `comment {"session":"<id>","file":"<path>","line":<n>,"endLine":<n>,"body":"P2: ..."}`. Lead with the problem, two or three sentences, one small code suggestion at most. Most severe first, then file order. Never claim a severity in prose that no inline finding carries.
+Inline findings: `comment {"session":"<id>","file":"<path>","line":<n>,"endLine":<n>,"body":"P2: ..."}`, with `"side":"old"` and the old line numbers for a finding on removed lines. Lead with the problem, two or three sentences, one small code suggestion at most. Most severe first, then file order. Never claim a severity in prose that no inline finding carries.
 
 General comment (`general_comment`), at most five sentences, no severity prefixes: the verdict and the counts, or "No issues found" and what was checked.
 
