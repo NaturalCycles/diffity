@@ -27,6 +27,7 @@ const STYLE = `
   summary > h2 { display: inline-block; }
   code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
   pre { padding: 8px; border: 1px solid var(--line); overflow-x: auto; }
+  pre.wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
   .badge { display: inline-block; padding: 0 7px; border: 1px solid var(--line); border-radius: 2em; font-size: 12px; font-weight: 500; line-height: 18px; color: var(--muted); white-space: nowrap; }
   .status { display: flex; gap: 8px; align-items: center; }
   .reload { display: inline-flex; padding: 4px; color: var(--muted); background: none; border: 1px solid var(--line); border-radius: 6px; }
@@ -54,6 +55,23 @@ document.addEventListener('toggle', event => {
   if (!(details instanceof HTMLDetailsElement) || !details.dataset.section) return;
   try { localStorage.setItem('diffity.section:' + details.dataset.section, details.open ? 'open' : 'closed'); } catch {}
 }, true);
+`;
+
+/** A `button[data-copy]` copies the text of the element whose id it names. */
+export const SETTINGS_SCRIPT = `document.addEventListener('click', async event => {
+  const button = event.target instanceof Element ? event.target.closest('button[data-copy]') : null;
+  if (!button) return;
+  const source = document.getElementById(button.dataset.copy);
+  if (!source) return;
+  const label = button.dataset.label || (button.dataset.label = button.textContent);
+  try {
+    await navigator.clipboard.writeText(source.textContent);
+    button.textContent = 'Copied';
+  } catch {
+    button.textContent = 'Copy failed';
+  }
+  setTimeout(() => { button.textContent = label; }, 2000);
+});
 `;
 
 /** Also runs in the browser, inside SESSIONS_SCRIPT, so it stays free of anything outside itself. */
