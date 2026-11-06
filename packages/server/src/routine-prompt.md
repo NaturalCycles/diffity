@@ -41,7 +41,7 @@ Run it as a background Bash command with `timeout` 7200000 (two hours, the maxim
 
 ## 2. The review, when kind is review
 
-The code is in this environment, never fetched through diffity:
+The code is in this environment, never fetched through diffity. A routine may have several repositories checked out: run every git command in the checkout whose `origin` is `<owner/repo>`. None → stop and say the routine needs that repository added.
 
     git fetch origin <head> <base>
     git checkout --detach <head>
