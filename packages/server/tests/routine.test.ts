@@ -178,6 +178,19 @@ describe('calling the routine', () => {
     }
   });
 
+  it('fires nothing for a patch session, whose head the run could not fetch, and the page does not offer it', async () => {
+    const patch = 'diff --git a/patched.ts b/patched.ts\nnew file mode 100644\n--- /dev/null\n+++ b/patched.ts\n@@ -0,0 +1 @@\n+export const patched = true;\n';
+    const { session } = await server.service.createSession(aliceId, { repo: 'acme/widgets', base: fixture.base, patch });
+    const status = await (await fetch(`${server.base}/s/${session.id}/api/live/status`, { headers: { cookie: aliceCookie } })).json() as LiveStatusResponse;
+    expect(status.routine).toBe(false);
+
+    expect((await ask(session.id)).status).toBe(200);
+    const fromPage = await fetch(`${server.base}/s/${session.id}/api/review-request`, { method: 'POST', headers: sameSite(aliceCookie) });
+    expect(fromPage.status).toBe(200);
+    expect(fired).toHaveLength(0);
+    expect(await firedAt(session.id)).toBeNull();
+  });
+
   it('fires nothing for a user without a routine', async () => {
     const created = await createAndReview(bobCookie);
     expect(created.status).toBe(303);

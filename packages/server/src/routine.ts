@@ -8,7 +8,7 @@ export const ROUTINE_COOLDOWN_MS = 10 * 60 * 1000;
 const FIRE_TIMEOUT_MS = 10_000;
 
 export type RoutineFireKind = 'review' | 'ask';
-export type RoutineFireResult = 'fired' | 'cooldown' | 'unconfigured' | 'failed';
+export type RoutineFireResult = 'fired' | 'cooldown' | 'unconfigured' | 'unfetchable' | 'failed';
 
 let promptTemplate: string | undefined;
 
@@ -35,8 +35,19 @@ export class Routine {
     return !!settings.url && settings.keySet;
   }
 
+  /**
+   * A patch session's head exists only on this server, and the session token reads no code, so a run could not see
+   * what it is asked about.
+   */
+  async callableFor(userId: string, session: ReviewSessionRecord): Promise<boolean> {
+    return session.kind !== 'patch' && await this.configured(userId);
+  }
+
   /** Fires the user's routine for the session unless none is configured or one fired within the cooldown; never throws. */
   async fire(userId: string, session: ReviewSessionRecord, kind: RoutineFireKind, now = Date.now()): Promise<RoutineFireResult> {
+    if (session.kind === 'patch') {
+      return 'unfetchable';
+    }
     try {
       const routine = await this.users.routine(userId);
       if (!routine) {
