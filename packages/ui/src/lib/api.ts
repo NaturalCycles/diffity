@@ -17,6 +17,7 @@ import type {
   Tour,
 } from '@diffity/api';
 import { apiPath } from './base';
+import { apiRequest } from './request';
 
 export type {
   GitHubDetails,
@@ -29,7 +30,7 @@ export type {
 } from '@diffity/api';
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(apiPath(url), init);
+  const res = await apiRequest(apiPath(url), init);
   if (!res.ok) {
     throw new Error(await errorMessage(res));
   }
@@ -37,7 +38,7 @@ async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 async function apiVoid(url: string, init?: RequestInit): Promise<void> {
-  const res = await fetch(apiPath(url), init);
+  const res = await apiRequest(apiPath(url), init);
   if (!res.ok) {
     throw new Error(await errorMessage(res));
   }
@@ -71,7 +72,7 @@ export function fetchRepoInfo(): Promise<RepoInfoResponse> {
 }
 
 export async function fetchThreads(sessionId: string, status?: ThreadStatus): Promise<CommentThread[]> {
-  const res = await fetch(apiPath(buildUrl('/api/threads', { session: sessionId, status })));
+  const res = await apiRequest(apiPath(buildUrl('/api/threads', { session: sessionId, status })));
   if (!res.ok) {
     return [];
   }
@@ -135,7 +136,7 @@ export async function fetchFileContent(filePath: string): Promise<string[]> {
 }
 
 export async function fetchGitHubDetails(): Promise<GitHubDetails | null> {
-  const res = await fetch(apiPath('/api/github/details'));
+  const res = await apiRequest(apiPath('/api/github/details'));
   if (!res.ok) {
     return null;
   }

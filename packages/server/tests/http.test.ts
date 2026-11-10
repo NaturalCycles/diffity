@@ -469,6 +469,10 @@ describe('pull requests awaiting review', () => {
       expect(sessionsScript.headers.get('content-type')).toContain('javascript');
       expect(sessionsScript.body).toContain("'/sessions/body' + (fresh ? '?fresh=1' : '')");
       expect(sessionsScript.body).toContain('applySections(template.content)');
+      expect(sessionsScript.body).toContain("redirect: 'manual'");
+      expect(sessionsScript.body).toContain("res.type === 'opaqueredirect' || res.status === 401");
+      expect(sessionsScript.body).toContain('location.reload()');
+      expect(page).toContain('<span class="error" id="sessions-signed-out" hidden>Signed out · reload to sign in again</span>');
       const script = await api('/sections.js');
       expect(script.headers.get('content-type')).toContain('javascript');
       expect(script.body).toContain('localStorage');

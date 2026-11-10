@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { addBadge, titleWithCount, toHref } from '../lib/favicon-badge';
+import { apiRequest } from '../lib/request';
 
 /** Marks the browser tab and its title while `count` answers wait unseen. */
 export function useTabBadge(count: number): void {
@@ -37,7 +38,7 @@ export function useTabBadge(count: number): void {
     if (plainSvg.current !== null) {
       badge(plainSvg.current);
     } else {
-      void fetch(href)
+      void apiRequest(href)
         .then(res => (res.ok ? res.text() : Promise.reject(new Error(res.statusText))))
         .then(svg => {
           plainSvg.current = svg;
