@@ -92,7 +92,7 @@ export function DiffPage() {
   const agentCalled = !agentListening && !!liveStatus?.calledAt;
   const agentReachable = agentListening || !!liveStatus?.routine;
   const requestReview = useRequestReview();
-  const head = useFollowHead(sessionId, info?.movedOn);
+  const head = useFollowHead(sessionId, info?.movedOn, info?.review?.state === 'reviewing');
 
   const commentCountsByFile = useMemo(() => buildThreadCountsByFile(threads), [threads]);
 

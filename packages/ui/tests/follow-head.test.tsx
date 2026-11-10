@@ -51,8 +51,8 @@ describe('the address of the same view in another session', () => {
   });
 });
 
-function Harness({ movedOn }: { movedOn: MovedOn | null }) {
-  const head = useFollowHead('old', movedOn);
+function Harness({ movedOn, reviewing }: { movedOn: MovedOn | null; reviewing?: boolean }) {
+  const head = useFollowHead('old', movedOn, reviewing);
   return head.movedOn
     ? <MovedOnBanner headSha={head.movedOn.headSha} updating={head.updating} onUpdate={head.update} />
     : <span>current</span>;
@@ -66,6 +66,16 @@ describe('a review page behind its pull request', () => {
 
     await waitFor(() => expect(replace).toHaveBeenCalledWith('/s/new/'));
     expect(calls.map(call => [call.method, call.url])).toEqual([['POST', '/api/advance']]);
+  });
+
+  it('stays and offers the update while an agent is still reviewing this session', async () => {
+    const calls = stubServer({ '/api/advance': () => Response.json({ sessionId: 'new', headSha: NEW }) });
+    const replace = stubNavigation();
+    render(<Harness movedOn={{ headSha: NEW, sessionId: null }} reviewing />);
+
+    expect(await screen.findByTestId('moved-on-banner')).toBeTruthy();
+    expect(calls).toHaveLength(0);
+    expect(replace).not.toHaveBeenCalled();
   });
 
   it('offers an update when the head moves while the page is open, and moves only when asked', async () => {
