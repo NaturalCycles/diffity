@@ -18,6 +18,9 @@ function postDialogOpen(doc: Document = document): boolean {
  */
 export function useFollowHead(sessionId: string | null, movedOn: MovedOn | null | undefined, reviewing = false) {
   const checked = useRef(false);
+  // Read when the server answers, which can be after a review was asked for meanwhile.
+  const reviewingNow = useRef(reviewing);
+  reviewingNow.current = reviewing;
   const inFlight = useRef(false);
   const [updating, setUpdating] = useState(false);
 
@@ -42,12 +45,12 @@ export function useFollowHead(sessionId: string | null, movedOn: MovedOn | null 
   }, [sessionId]);
 
   const followIfUnattended = useCallback(() => {
-    const unattended = () => !reviewing && safeToLeave(readPageState()) && !postDialogOpen();
+    const unattended = () => !reviewingNow.current && safeToLeave(readPageState()) && !postDialogOpen();
     if (!movedOn || !unattended()) {
       return;
     }
     void update(unattended);
-  }, [movedOn, reviewing, update]);
+  }, [movedOn, update]);
 
   useEffect(() => {
     if (!sessionId) {
@@ -56,7 +59,7 @@ export function useFollowHead(sessionId: string | null, movedOn: MovedOn | null 
     if (!checked.current) {
       checked.current = true;
       if (movedOn && !reviewing) {
-        void update(() => safeToLeave(readPageState()));
+        void update(() => !reviewingNow.current && safeToLeave(readPageState()));
       }
       return;
     }

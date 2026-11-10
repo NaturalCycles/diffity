@@ -333,8 +333,7 @@ describe('review requests', () => {
       { owner: 'acme', repo: 'widgets', number: 2, title: 'Bump lodash', author: 'dependabot', updatedAt: '2026-10-02T09:00:00Z' },
       { owner: 'acme', repo: 'widgets', number: 3, title: 'Sketch', author: 'octocat', draft: true, updatedAt: '2026-10-01T09:00:00Z' },
     ];
-    await service.createSession(bob, { repo: 'acme/widgets', pr: 1 });
-    const newest = (await reviews.listSessions(bob)).find(s => s.prNumber === 1)!;
+    const newest = (await service.createSession(bob, { repo: 'acme/widgets', pr: 1 })).session;
     const now = Date.now();
     const searches = github.searches.length;
 
@@ -491,6 +490,34 @@ describe('following a pull request’s head', () => {
       expect((await service.advanceSession(old)).id).toBe(prepared.id);
       expect((await reviews.threadsForSession(jan, prepared.id)).map(t => [t.id, t.startLine])).toEqual([[kept.id, 13]]);
     } finally {
+      moveTo(fixture.head1);
+    }
+  });
+
+  it('links the session holding the findings while a prepared one at the head has none, and gathers them when the head’s session is asked for', async () => {
+    const kim = (await users.findOrCreate('kim@example.com')).id;
+    await users.setGitHubToken(kim, 'bob-token');
+    const old = (await service.createSession(kim, { repo: 'acme/widgets', pr: 1 })).session;
+    const kept = await reviews.createThread({
+      userId: kim, sessionId: old.id, filePath: 'src.ts', side: 'new', startLine: 10, endLine: 10,
+      body: 'Not carried yet', author: { name: 'Agent', type: 'agent' }, anchorContent: 'line 10 changed by the feature',
+    });
+    moveTo(fixture.head2);
+    github.reviewRequests['bob-token'] = [
+      { owner: 'acme', repo: 'widgets', number: 1, title: 'Change line ten', author: 'octocat', updatedAt: '2000-01-01T00:00:00Z' },
+    ];
+    try {
+      const prepared = await service.advanceSession(old, { carry: false });
+      const row = (await service.reviewRequests(kim, { now: Date.now() + 720_000 }))!.requests[0];
+      expect(row.session?.id).toBe(old.id);
+      expect(row.movedTo).toBe(fixture.head2);
+
+      const again = await service.createSession(kim, { repo: 'acme/widgets', pr: 1 });
+      expect(again.session.id).toBe(prepared.id);
+      expect(again.carried).toBe(1);
+      expect((await reviews.threadsForSession(kim, prepared.id)).map(t => t.id)).toEqual([kept.id]);
+    } finally {
+      github.reviewRequests['bob-token'] = [];
       moveTo(fixture.head1);
     }
   });

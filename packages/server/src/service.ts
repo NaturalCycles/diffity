@@ -255,26 +255,34 @@ export class ReviewService {
   }
 
   /**
-   * Each row with the user's newest session, or their session at the pull request's current head where
-   * they have one. Nothing is made or moved here: a session left behind is brought forward when it is
-   * opened or handed to an agent. Only a pull request updated since its session was made can have moved,
+   * Each row with the user's session that still holds open findings, else their newest one, else their
+   * session at the pull request's current head. Nothing is made or moved here: a session left behind is
+   * brought forward, findings and all, when it is opened or handed to an agent. Only a pull request
+   * updated since its session was made, or one whose findings sit on an older session, can be behind,
    * so the others cost no GitHub request.
    */
   private async withSessions(userId: string, requests: ReviewRequest[]): Promise<ReviewRequestRow[]> {
-    const sessions = await this.reviews.latestPrSessions(userId, requests);
-    const rows: ReviewRequestRow[] = requests.map(request => ({
-      ...request,
-      session: sessions.get(prKey(request.owner, request.repo, request.number)) ?? null,
-      movedTo: null,
-    }));
-    const updated = rows.filter(row => row.session && Date.parse(row.updatedAt) > Date.parse(row.session.createdAt));
-    await eachLimited(updated, ADVANCE_CONCURRENCY, async row => {
+    const [newest, withWork] = await Promise.all([
+      this.reviews.latestPrSessions(userId, requests),
+      this.reviews.latestPrSessions(userId, requests, { openWork: true }),
+    ]);
+    const rows = requests.map(request => {
+      const key = prKey(request.owner, request.repo, request.number);
+      const working = withWork.get(key) ?? null;
+      const latest = newest.get(key) ?? null;
+      return {
+        row: { ...request, session: working ?? latest, movedTo: null } as ReviewRequestRow,
+        olderWork: !!working && working.id !== latest?.id,
+      };
+    });
+    const behind = rows.filter(({ row, olderWork }) => row.session && (olderWork || Date.parse(row.updatedAt) > Date.parse(row.session.createdAt)));
+    await eachLimited(behind, ADVANCE_CONCURRENCY, async ({ row, olderWork }) => {
       try {
         const head = await this.pullHead(userId, row.owner, row.repo, row.number, false);
         if (!head || head.closed || head.headSha === row.session!.headSha) {
           return;
         }
-        const current = await this.reviews.prSessionAt(userId, row, head.headSha);
+        const current = olderWork ? null : await this.reviews.prSessionAt(userId, row, head.headSha);
         if (current) {
           row.session = { id: current.id, headSha: current.headSha, createdAt: current.createdAt };
         } else {
@@ -284,7 +292,7 @@ export class ReviewService {
         console.warn(`Looking up ${row.owner}/${row.repo}#${row.number}'s current head failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     });
-    return rows;
+    return rows.map(({ row }) => row);
   }
 
   /** The pull request's head as GitHub has it, asked at most once a minute per user and pull request unless `fresh`. */
@@ -359,14 +367,11 @@ export class ReviewService {
     }
     if (existing) {
       if (carry) {
-        await this.carryOpenWork(existing, [session]);
+        await this.carryForward(existing);
       }
       return existing;
     }
     const created = await this.createSession(session.userId, { repo: `${session.owner}/${session.repo}`, pr: session.prNumber }, { carry });
-    if (carry && !created.created) {
-      await this.carryOpenWork(created.session, [session]);
-    }
     return created.session;
   }
 
@@ -475,7 +480,7 @@ export class ReviewService {
       baseSha,
       headSha,
     });
-    const carried = created && carry && prNumber !== null ? await this.carryForward(session) : 0;
+    const carried = carry && prNumber !== null ? await this.carryForward(session) : 0;
     return { session, created, carried, files: await this.changedFiles(session) };
   }
 

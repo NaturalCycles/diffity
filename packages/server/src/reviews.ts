@@ -328,9 +328,11 @@ export class Reviews {
   }
 
   /** The newest session of each of these pull requests that has one, keyed by `prKey`. */
+  /** With `openWork`, only sessions still holding open threads count. */
   async latestPrSessions(
     userId: string,
     pulls: { owner: string; repo: string; number: number }[],
+    { openWork = false }: { openWork?: boolean } = {},
   ): Promise<Map<string, { id: string; headSha: string; createdAt: string }>> {
     const found = new Map<string, { id: string; headSha: string; createdAt: string }>();
     if (pulls.length === 0) {
@@ -341,6 +343,7 @@ export class Reviews {
        FROM sessions s JOIN repos r ON r.id = s.repo_id
        WHERE s.user_id = $1 AND s.pr_number IS NOT NULL
          AND lower(r.owner) || '/' || lower(r.name) || '#' || s.pr_number = ANY($2::text[])
+         ${openWork ? "AND EXISTS (SELECT 1 FROM threads t WHERE t.session_id = s.id AND t.status = 'open')" : ''}
        ORDER BY lower(r.owner), lower(r.name), s.pr_number, s.created_at DESC, s.seq DESC`,
       [userId, pulls.map(pull => prKey(pull.owner, pull.repo, pull.number))],
     );
