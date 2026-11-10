@@ -86,7 +86,10 @@ describe('a review page behind its pull request', () => {
     render(<Harness movedOn={{ headSha: NEW, sessionId: null }} />);
 
     await waitFor(() => expect(replace).toHaveBeenCalledWith('/s/new/'));
-    expect(calls.map(call => [call.method, call.url])).toEqual([['POST', '/api/advance']]);
+    expect(calls.map(call => [call.method, call.url, call.body])).toEqual([
+      ['POST', '/api/advance', { prepare: true }],
+      ['POST', '/api/advance', { prepare: false }],
+    ]);
   });
 
   it('stays and offers the update while an agent is still reviewing this session', async () => {
@@ -135,7 +138,7 @@ describe('a review page nobody is looking at', () => {
 
     rerender(<Harness movedOn={moved} />);
     await waitFor(() => expect(replace).toHaveBeenCalledWith('/s/new/'));
-    expect(calls.map(call => call.url)).toEqual(['/api/advance']);
+    expect(calls.map(call => call.body)).toEqual([{ prepare: true }, { prepare: false }]);
   });
 
   it('follows when the reader leaves the tab, or comes back to it, with the update still on offer', async () => {
@@ -148,7 +151,7 @@ describe('a review page nobody is looking at', () => {
 
     setVisibility('hidden');
     await waitFor(() => expect(replace).toHaveBeenCalledWith('/s/new/'));
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(2);
   });
 
   it('stays when the reader starts writing while the new head is being fetched', async () => {
@@ -169,6 +172,7 @@ describe('a review page nobody is looking at', () => {
     answer();
     await waitFor(() => expect(calls).toHaveLength(1));
     await new Promise(resolve => setTimeout(resolve, 20));
+    expect(calls.map(call => call.body)).toEqual([{ prepare: true }]);
     expect(replace).not.toHaveBeenCalled();
     expect(screen.getByTestId('moved-on-banner')).toBeTruthy();
   });

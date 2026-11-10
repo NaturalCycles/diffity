@@ -169,8 +169,9 @@ export async function createReviewOnGitHub(review: ReviewSubmission): Promise<Re
   throw new Error(json?.error || `HTTP ${res.status}`);
 }
 
-export function advanceSession(): Promise<AdvanceResponse> {
-  return apiFetch('/api/advance', { method: 'POST' });
+/** With `prepare` the session at the current head is made, but nothing is moved to it yet. */
+export function advanceSession(prepare = false): Promise<AdvanceResponse> {
+  return apiFetch('/api/advance', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ prepare }) });
 }
 
 export function pullCommentsFromGitHub(sessionId: string): Promise<PullCommentsResult> {

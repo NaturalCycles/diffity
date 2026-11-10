@@ -473,6 +473,28 @@ describe('following a pull request’s head', () => {
     }
   });
 
+  it('only makes the head’s session when asked not to carry, leaving the findings where they are', async () => {
+    const jan = (await users.findOrCreate('jan@example.com')).id;
+    await users.setGitHubToken(jan, 'bob-token');
+    const old = (await service.createSession(jan, { repo: 'acme/widgets', pr: 1 })).session;
+    const kept = await reviews.createThread({
+      userId: jan, sessionId: old.id, filePath: 'src.ts', side: 'new', startLine: 10, endLine: 10,
+      body: 'Still being replied to', author: { name: 'Agent', type: 'agent' }, anchorContent: 'line 10 changed by the feature',
+    });
+    moveTo(fixture.head2);
+    try {
+      const prepared = await service.advanceSession(old, { carry: false });
+      expect(prepared.id).not.toBe(old.id);
+      expect(await reviews.threadsForSession(jan, prepared.id)).toEqual([]);
+      expect((await reviews.threadsForSession(jan, old.id, 'open')).map(t => t.id)).toEqual([kept.id]);
+
+      expect((await service.advanceSession(old)).id).toBe(prepared.id);
+      expect((await reviews.threadsForSession(jan, prepared.id)).map(t => [t.id, t.startLine])).toEqual([[kept.id, 13]]);
+    } finally {
+      moveTo(fixture.head1);
+    }
+  });
+
   it('carries the findings left behind when making the head’s session finds it already there', async () => {
     const hal = (await users.findOrCreate('hal@example.com')).id;
     await users.setGitHubToken(hal, 'bob-token');

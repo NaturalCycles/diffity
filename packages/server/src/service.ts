@@ -334,8 +334,9 @@ export class ReviewService {
    * The user's session at the pull request's current head, made if need be, with this session's open
    * findings carried over to it. A session of no pull request, or of a closed one, is its own current
    * session. Where GitHub cannot say what the head is, a newer session of the pull request stands in for it.
+   * Without `carry` only the destination is made, so a page that may yet stay keeps its findings.
    */
-  async advanceSession(session: ReviewSessionRecord): Promise<ReviewSessionRecord> {
+  async advanceSession(session: ReviewSessionRecord, { carry = true }: { carry?: boolean } = {}): Promise<ReviewSessionRecord> {
     if (session.prNumber === null) {
       return session;
     }
@@ -357,11 +358,13 @@ export class ReviewService {
       }
     }
     if (existing) {
-      await this.carryOpenWork(existing, [session]);
+      if (carry) {
+        await this.carryOpenWork(existing, [session]);
+      }
       return existing;
     }
-    const created = await this.createSession(session.userId, { repo: `${session.owner}/${session.repo}`, pr: session.prNumber });
-    if (!created.created) {
+    const created = await this.createSession(session.userId, { repo: `${session.owner}/${session.repo}`, pr: session.prNumber }, { carry });
+    if (carry && !created.created) {
       await this.carryOpenWork(created.session, [session]);
     }
     return created.session;
@@ -407,7 +410,7 @@ export class ReviewService {
     return session;
   }
 
-  async createSession(userId: string, input: CreateSessionInput): Promise<CreatedSession> {
+  async createSession(userId: string, input: CreateSessionInput, { carry = true }: { carry?: boolean } = {}): Promise<CreatedSession> {
     const slug = parseRepoSlug(input.repo);
     const mode = sessionMode(input);
     const token = await this.access.tokenFor(userId);
@@ -472,7 +475,7 @@ export class ReviewService {
       baseSha,
       headSha,
     });
-    const carried = created && prNumber !== null ? await this.carryForward(session) : 0;
+    const carried = created && carry && prNumber !== null ? await this.carryForward(session) : 0;
     return { session, created, carried, files: await this.changedFiles(session) };
   }
 

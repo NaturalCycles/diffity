@@ -22,16 +22,23 @@ export function goToSession(sessionId: string): void {
 
 /**
  * Moves the page to the session at the pull request's current head. False when this session is
- * already it, or when `mayLeave` no longer allows it by the time the server has answered, so the
- * page stays.
+ * already it, so the page stays. With `mayLeave` the destination is made first and asked again
+ * once it is ready, and the findings move only when the page is still free to go; making a new
+ * session can take long enough for the reader to have started something here.
  */
 export async function advanceAndGo(
   currentSessionId: string,
   beforeLeaving?: (sessionId: string) => void,
-  mayLeave: () => boolean = () => true,
+  mayLeave?: () => boolean,
 ): Promise<boolean> {
+  if (mayLeave) {
+    const prepared = await advanceSession(true);
+    if (prepared.sessionId === currentSessionId || !mayLeave()) {
+      return false;
+    }
+  }
   const { sessionId } = await advanceSession();
-  if (sessionId === currentSessionId || !mayLeave()) {
+  if (sessionId === currentSessionId) {
     return false;
   }
   beforeLeaving?.(sessionId);

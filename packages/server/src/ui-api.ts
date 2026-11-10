@@ -137,8 +137,8 @@ export function uiApiRouter(deps: UiApiDeps): Router {
     } satisfies RepoInfoResponse);
   }));
 
-  router.post('/advance', handle(async ({ session }, _req, res) => {
-    const advanced = await service.advanceSession(session);
+  router.post('/advance', handle(async ({ session }, req, res) => {
+    const advanced = await service.advanceSession(session, { carry: req.body?.prepare !== true });
     res.json({ sessionId: advanced.id, headSha: advanced.headSha } satisfies AdvanceResponse);
   }));
 
