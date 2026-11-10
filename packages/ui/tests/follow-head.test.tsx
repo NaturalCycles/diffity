@@ -151,6 +151,28 @@ describe('a review page nobody is looking at', () => {
     expect(calls).toHaveLength(1);
   });
 
+  it('stays when the reader starts writing while the new head is being fetched', async () => {
+    let answer!: () => void;
+    const answered = new Promise<void>(resolve => { answer = resolve; });
+    const calls = stubServer({ '/api/advance': () => Response.json({ sessionId: 'new', headSha: NEW }) });
+    const fetchNow = globalThis.fetch;
+    vi.stubGlobal('fetch', async (...args: Parameters<typeof fetch>) => {
+      await answered;
+      return fetchNow(...args);
+    });
+    const replace = stubNavigation();
+    const { rerender } = render(<Harness movedOn={null}><input aria-label="Reply" /></Harness>);
+    setVisibility('hidden', false);
+    rerender(<Harness movedOn={moved}><input aria-label="Reply" /></Harness>);
+
+    screen.getByRole('textbox', { name: 'Reply' }).focus();
+    answer();
+    await waitFor(() => expect(calls).toHaveLength(1));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(replace).not.toHaveBeenCalled();
+    expect(screen.getByTestId('moved-on-banner')).toBeTruthy();
+  });
+
   it('stays while the reader is on the page', async () => {
     const calls = stubServer({ '/api/advance': () => Response.json({ sessionId: 'new', headSha: NEW }) });
     const replace = stubNavigation();

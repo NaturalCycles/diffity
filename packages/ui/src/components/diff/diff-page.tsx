@@ -8,7 +8,7 @@ import { useWrapLines } from '../../hooks/use-wrap-lines';
 import { useKeyboard } from '../../hooks/use-keyboard';
 import { useReviewThreads } from '../../hooks/use-review-threads';
 import { useTours } from '../../hooks/use-tours';
-import { useHeld, useReviewArrival } from '../../hooks/use-review-arrival';
+import { isReviewPending, useHeld, useReviewArrival } from '../../hooks/use-review-arrival';
 import { useHideWhitespace } from '../../hooks/use-hide-whitespace';
 import { useAnswerAlerts } from '../../hooks/use-answer-alerts';
 import { useTabBadge } from '../../hooks/use-tab-badge';
@@ -92,7 +92,7 @@ export function DiffPage() {
   const agentCalled = !agentListening && !!liveStatus?.calledAt;
   const agentReachable = agentListening || !!liveStatus?.routine;
   const requestReview = useRequestReview();
-  const head = useFollowHead(sessionId, info?.movedOn, info?.review?.state === 'reviewing');
+  const head = useFollowHead(sessionId, info?.movedOn, isReviewPending(info?.review?.state));
 
   const commentCountsByFile = useMemo(() => buildThreadCountsByFile(threads), [threads]);
 

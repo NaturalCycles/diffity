@@ -13,22 +13,22 @@ function postDialogOpen(doc: Document = document): boolean {
  * follows the head only while nobody is looking at it — the tab hidden, or just shown again — and
  * only when nothing would be lost: no draft, no field being edited, no save under way, no post
  * dialog open. Otherwise, and always while the reader is on the page, a head that moves is offered
- * as an update instead. It never moves while an agent is still reviewing this session, whose
- * findings would land where the reader no longer looks.
+ * as an update instead. It never moves while a review of this session is queued or under way,
+ * whose findings would land where the reader no longer looks.
  */
 export function useFollowHead(sessionId: string | null, movedOn: MovedOn | null | undefined, reviewing = false) {
   const checked = useRef(false);
   const inFlight = useRef(false);
   const [updating, setUpdating] = useState(false);
 
-  const update = useCallback(async () => {
+  const update = useCallback(async (mayLeave?: () => boolean) => {
     if (!sessionId || inFlight.current) {
       return;
     }
     inFlight.current = true;
     setUpdating(true);
     try {
-      if (!(await advanceAndGo(sessionId))) {
+      if (!(await advanceAndGo(sessionId, undefined, mayLeave))) {
         inFlight.current = false;
         setUpdating(false);
       }
@@ -42,10 +42,11 @@ export function useFollowHead(sessionId: string | null, movedOn: MovedOn | null 
   }, [sessionId]);
 
   const followIfUnattended = useCallback(() => {
-    if (!movedOn || reviewing || !safeToLeave(readPageState()) || postDialogOpen()) {
+    const unattended = () => !reviewing && safeToLeave(readPageState()) && !postDialogOpen();
+    if (!movedOn || !unattended()) {
       return;
     }
-    void update();
+    void update(unattended);
   }, [movedOn, reviewing, update]);
 
   useEffect(() => {
@@ -55,7 +56,7 @@ export function useFollowHead(sessionId: string | null, movedOn: MovedOn | null 
     if (!checked.current) {
       checked.current = true;
       if (movedOn && !reviewing) {
-        void update();
+        void update(() => safeToLeave(readPageState()));
       }
       return;
     }
@@ -69,5 +70,5 @@ export function useFollowHead(sessionId: string | null, movedOn: MovedOn | null 
     return () => document.removeEventListener('visibilitychange', followIfUnattended);
   }, [followIfUnattended]);
 
-  return { movedOn: movedOn ?? null, updating, update };
+  return { movedOn: movedOn ?? null, updating, update: () => update() };
 }

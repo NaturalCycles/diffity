@@ -90,6 +90,7 @@ const REVIEW_REQUESTS_TTL_MS = 60_000;
 const FRESH_MIN_AGE_MS = 10_000;
 const PULL_HEAD_TTL_MS = 60_000;
 const ADVANCE_CONCURRENCY = 4;
+const MOVED_ON_WAIT_MS = 2_000;
 
 interface PullHead {
   headSha: string;
@@ -381,7 +382,11 @@ export class ReviewService {
     if (session.prNumber === null) {
       return null;
     }
-    const head = await this.knownPullHead(session, false);
+    // The page waits on this, so a slow GitHub answers on a later poll from the cache instead.
+    const head = await Promise.race([
+      this.knownPullHead(session, false),
+      new Promise<null>(resolve => setTimeout(resolve, MOVED_ON_WAIT_MS, null).unref()),
+    ]);
     if (head && (head.closed || head.headSha === session.headSha)) {
       return null;
     }
