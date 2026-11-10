@@ -89,12 +89,16 @@ const RELOAD_ICON = `<svg viewBox="0 0 16 16" aria-hidden="true" fill="currentCo
 export function sessionsStatus(fetchedAt: number, now: number): string {
   return `<p class="status"><span class="muted" id="sessions-age">Updated ${formatAge(now - fetchedAt)}</span>`
     + '<span class="error" id="sessions-error" hidden>Update failed · retrying</span>'
+    + '<span class="error" id="sessions-signed-out" hidden>Signed out · reload to sign in again</span>'
     + `<button type="button" class="reload" id="sessions-reload" title="Reload" aria-label="Reload">${RELOAD_ICON}</button></p>`;
 }
 
 /**
  * Keeps the sessions page current without reloading it: swaps in `/sessions/body` every minute while the tab
  * is visible, and from GitHub rather than the server's cache when the reload button asks. Needs SECTIONS_SCRIPT.
+ *
+ * An expired IAP sign-in answers with a redirect to Google, which a fetch cannot follow; only reloading the page
+ * signs in again. That happens on its own unless the reader is typing or away, and at most once per page load.
  */
 export const SESSIONS_SCRIPT = `(() => {
   const AUTO_MS = 60000;
@@ -102,10 +106,28 @@ export const SESSIONS_SCRIPT = `(() => {
   const age = document.getElementById('sessions-age');
   const error = document.getElementById('sessions-error');
   const reload = document.getElementById('sessions-reload');
-  if (!container || !age || !error || !reload) return;
+  const signedOutNote = document.getElementById('sessions-signed-out');
+  if (!container || !age || !error || !reload || !signedOutNote) return;
   let loadedAt = Date.now();
   let inFlight = false;
   let failed = false;
+  let signedOut = false;
+  let reloaded = false;
+
+  const typing = () => {
+    const active = document.activeElement;
+    return !!active && (active.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName));
+  };
+  const signOut = () => {
+    signedOut = true;
+    if (!reloaded && document.visibilityState === 'visible' && !typing()) {
+      reloaded = true;
+      location.reload();
+      return;
+    }
+    age.hidden = true;
+    signedOutNote.hidden = false;
+  };
 
   const formatAge = ${formatAge.toString()};
   const tick = () => {
@@ -114,13 +136,17 @@ export const SESSIONS_SCRIPT = `(() => {
   };
 
   const refresh = async fresh => {
-    if (inFlight) return;
+    if (inFlight || signedOut) return;
     // Swapping the content would take focus from the control a keyboard user is on; the next tick tries again.
     if (!fresh && container.contains(document.activeElement)) return;
     inFlight = true;
     reload.setAttribute('aria-busy', 'true');
     try {
-      const res = await fetch('/sessions/body' + (fresh ? '?fresh=1' : ''), { credentials: 'same-origin', cache: 'no-store' });
+      const res = await fetch('/sessions/body' + (fresh ? '?fresh=1' : ''), { credentials: 'same-origin', cache: 'no-store', redirect: 'manual' });
+      if (res.type === 'opaqueredirect' || res.status === 401) {
+        signOut();
+        return;
+      }
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const template = document.createElement('template');
       template.innerHTML = await res.text();
@@ -135,19 +161,24 @@ export const SESSIONS_SCRIPT = `(() => {
     } finally {
       inFlight = false;
       reload.removeAttribute('aria-busy');
-      error.hidden = !failed;
+      error.hidden = !failed || signedOut;
       tick();
     }
   };
 
   const due = () => failed || Date.now() - loadedAt >= AUTO_MS;
-  reload.addEventListener('click', () => refresh(true));
+  reload.addEventListener('click', () => {
+    if (signedOut) location.reload();
+    else refresh(true);
+  });
   setInterval(() => {
     tick();
     if (document.visibilityState === 'visible' && due()) refresh(false);
   }, 15000);
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && due()) refresh(false);
+    if (document.visibilityState !== 'visible') return;
+    if (signedOut) signOut();
+    else if (due()) refresh(false);
   });
 })();
 `;

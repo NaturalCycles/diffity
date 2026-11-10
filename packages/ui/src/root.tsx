@@ -5,6 +5,7 @@ import { Toaster } from "sonner";
 import NProgress from "nprogress";
 import { queryClient } from "./lib/query-client";
 import { ErrorPage } from "./components/error-page";
+import { SignedOutBanner } from "./components/layout/signed-out-banner";
 import { pagePath } from "./lib/base";
 import "nprogress/nprogress.css";
 import "./styles/app.css";
@@ -57,6 +58,7 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <NavigationProgress />
       <Outlet />
+      <SignedOutBanner />
       <Toaster
         position="bottom-right"
         toastOptions={{
