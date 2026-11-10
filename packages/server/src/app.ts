@@ -797,8 +797,9 @@ export function createApp(deps: AppDeps): express.Express {
       sendPage(res, 404, 'Not found', '<h1>No such session</h1><p><a href="/">Your sessions</a></p>', user);
       return;
     }
-    await live.queueReview(user.id, session.id);
-    await routine.fire(user.id, session, 'review');
+    const current = await service.sessionToReview(session);
+    await live.queueReview(user.id, current.id);
+    await routine.fire(user.id, current, 'review');
     res.redirect(303, '/');
   });
 

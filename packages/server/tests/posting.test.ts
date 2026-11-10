@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { GitHubDetails, PullCommentsResult, ReviewResult } from '@diffity/api';
+import type { GitHubDetails, PullCommentsResult, RepoInfoResponse, ReviewResult } from '@diffity/api';
 import type { ReviewSessionRecord } from '../src/reviews.js';
 import {
   login,
@@ -132,11 +132,22 @@ describe('posting a review', () => {
     expect(refused.status).toBe(403);
     expect(refused.body.error).toContain('Connect GitHub first');
 
+  });
+
+  it('refuses a moved head with what it moved to, and posts against the reviewed commit when asked to anyway', async () => {
     repoPulls[1].headSha = fixture.head2;
     try {
+      const before = github.postedReviews.length;
       const moved = await post(prSession.id, '/github/create-review', { event: 'APPROVE' });
       expect(moved.status).toBe(409);
-      expect(moved.body.error).toContain('new session');
+      expect(moved.body).toMatchObject({ code: 'moved_on', headSha: fixture.head2, sessionHeadSha: fixture.head1 });
+      expect(moved.body.error).toContain('create_session { repo: "acme/widgets", pr: 1 }');
+      expect(github.postedReviews.length).toBe(before);
+
+      const anyway = await post(prSession.id, '/github/create-review', { event: 'APPROVE', allowOutdated: true });
+      expect(anyway.status).toBe(200);
+      expect(anyway.body).toMatchObject({ commitSha: fixture.head1 });
+      expect(github.postedReviews.at(-1)).toMatchObject({ commit_id: fixture.head1, event: 'APPROVE' });
     } finally {
       repoPulls[1].headSha = fixture.head1;
     }
@@ -183,5 +194,39 @@ describe('GitHub details', () => {
     expect(details).toMatchObject({ prNumber: 1, viewerDidAuthor: true, headSha: fixture.head1, prAuthor: 'alice-gh' });
     expect(details.commentCount).toBe(github.comments.length);
     expect(details.reviews.map(r => [r.author, r.state])).toEqual([['carol', 'APPROVED']]);
+  });
+});
+
+describe('a pull request that moved on', () => {
+  const info = async (sessionId: string, cookie = aliceCookie) =>
+    (await fetch(`${server.base}/s/${sessionId}/api/info`, { headers: { cookie } })).json() as Promise<RepoInfoResponse>;
+
+  it('is current until the head moves, then advances to a session at the new head that the old one points to', async () => {
+    expect((await info(prSession.id)).movedOn).toBeNull();
+    const same = await post(prSession.id, '/advance', {});
+    expect(same.body).toEqual({ sessionId: prSession.id, headSha: fixture.head1 });
+
+    repoPulls[1].headSha = fixture.head2;
+    fixture.pushPull(fixture.head2);
+    try {
+      expect((await post(prSession.id, '/advance', {}, bobCookie)).status).toBe(404);
+      const advanced = await post(prSession.id, '/advance', {});
+      expect(advanced.status).toBe(200);
+      expect(advanced.body.headSha).toBe(fixture.head2);
+      expect(advanced.body.sessionId).not.toBe(prSession.id);
+
+      expect((await info(prSession.id)).movedOn).toEqual({ headSha: fixture.head2, sessionId: advanced.body.sessionId });
+      expect((await info(advanced.body.sessionId)).movedOn).toBeNull();
+      expect((await post(prSession.id, '/advance', {})).body.sessionId).toBe(advanced.body.sessionId);
+    } finally {
+      repoPulls[1].headSha = fixture.head1;
+      fixture.pushPull(fixture.head1);
+    }
+  });
+
+  it('never moves a session of no pull request', async () => {
+    const commits = (await server.service.createSession(aliceId, { repo: 'acme/widgets', base: fixture.mainTip, head: fixture.head2 })).session;
+    expect((await post(commits.id, '/advance', {})).body).toEqual({ sessionId: commits.id, headSha: fixture.head2 });
+    expect((await info(commits.id)).movedOn).toBeNull();
   });
 });

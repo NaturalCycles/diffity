@@ -132,7 +132,7 @@ export interface FakeRepo {
   private: boolean;
   /** Tokens that may read it; a public repository is readable with none. */
   tokens: string[];
-  pulls: Record<number, { title: string; baseSha: string; headSha: string; author?: string }>;
+  pulls: Record<number, { title: string; baseSha: string; headSha: string; author?: string; closed?: boolean }>;
 }
 
 export interface FakeComment {
@@ -425,7 +425,7 @@ export async function startFakeGitHub(repos: FakeRepo[]): Promise<FakeGitHub> {
         html_url: `https://github.com/${repo.owner}/${repo.name}/pull/${number}`,
         created_at: '2026-09-01T10:00:00Z',
         body: 'What the change is for',
-        state: 'open',
+        state: pull.closed ? 'closed' : 'open',
         user: { login: pull.author ?? 'octocat' },
         base: { sha: pull.baseSha, ref: 'main' },
         head: { sha: pull.headSha, ref: 'feature' },

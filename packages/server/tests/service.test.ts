@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Db } from '../src/db.js';
 import { Mirrors } from '../src/git.js';
 import { GitHubApi, StoredTokenAccess, type ReviewRequest } from '../src/github.js';
@@ -25,16 +25,18 @@ let service: ReviewService;
 let alice: string;
 let bob: string;
 let mallory: string;
+let pulls: Record<number, { title: string; baseSha: string; headSha: string; closed?: boolean }>;
 
 beforeAll(async () => {
   fixture = makeFixture();
+  pulls = { 1: { title: 'Change line ten', baseSha: fixture.mainTip, headSha: fixture.head1 } };
   github = await startFakeGitHub([
     {
       owner: 'Acme',
       name: 'widgets',
       private: true,
       tokens: ['alice-token', 'bob-token'],
-      pulls: { 1: { title: 'Change line ten', baseSha: fixture.mainTip, headSha: fixture.head1 } },
+      pulls,
     },
   ]);
   dataDir = tempDir('service');
@@ -386,5 +388,113 @@ describe('review requests', () => {
     const alices = (await reviews.listSessions(alice)).filter(s => s.prNumber === 1).map(s => s.id);
     const found = await service.reviewRequests(alice);
     expect(alices).toContain(found?.requests[0].session?.id);
+  });
+});
+
+describe('following a pull request’s head', () => {
+  let erin: string;
+  const pullLookups = () => github.requests.filter(request => request.toLowerCase() === 'get /repos/acme/widgets/pulls/1').length;
+  const moveTo = (sha: string) => {
+    pulls[1].headSha = sha;
+    fixture.pushPull(sha);
+  };
+
+  beforeAll(async () => {
+    erin = (await users.findOrCreate('erin@example.com')).id;
+    await users.setGitHubToken(erin, 'bob-token');
+  });
+
+  it('keeps a session at the current head, and a session of no pull request', async () => {
+    const session = (await service.createSession(erin, { repo: 'acme/widgets', pr: 1 })).session;
+    expect(await service.advanceSession(session)).toEqual(session);
+    expect(await service.movedOn(session)).toBeNull();
+    const commits = (await service.createSession(erin, { repo: 'acme/widgets', base: fixture.mainTip, head: fixture.head2 })).session;
+    const lookups = pullLookups();
+    expect(await service.advanceSession(commits)).toBe(commits);
+    expect(await service.movedOn(commits)).toBeNull();
+    expect(pullLookups()).toBe(lookups);
+  });
+
+  it('moves to a session at the new head with the open findings, made once', async () => {
+    const session = (await service.createSession(erin, { repo: 'acme/widgets', pr: 1 })).session;
+    const open = await reviews.createThread({
+      userId: erin, sessionId: session.id, filePath: 'src.ts', side: 'new', startLine: 10, endLine: 10,
+      body: 'Why this change?', author: { name: 'Agent', type: 'agent' }, anchorContent: 'line 10 changed by the feature',
+    });
+    moveTo(fixture.head2);
+    try {
+      const advanced = await service.advanceSession(session);
+      expect(advanced.id).not.toBe(session.id);
+      expect(advanced.headSha).toBe(fixture.head2);
+      expect((await reviews.threadsForSession(erin, advanced.id)).map(t => [t.id, t.startLine])).toEqual([[open.id, 13]]);
+      expect(await service.movedOn(session)).toEqual({ headSha: fixture.head2, sessionId: advanced.id });
+      expect((await service.advanceSession(session)).id).toBe(advanced.id);
+      expect(await service.movedOn(advanced)).toBeNull();
+    } finally {
+      moveTo(fixture.head1);
+    }
+  });
+
+  it('leaves a closed pull request where it is', async () => {
+    const session = (await service.createSession(erin, { repo: 'acme/widgets', pr: 1 })).session;
+    pulls[1].closed = true;
+    pulls[1].headSha = fixture.head2;
+    try {
+      expect(await service.advanceSession(session)).toBe(session);
+      expect(await service.movedOn(session)).toBeNull();
+    } finally {
+      pulls[1].closed = false;
+      pulls[1].headSha = fixture.head1;
+    }
+  });
+
+  it('brings the review requests’ sessions to the current head, asking GitHub only about updated pull requests, once a minute', async () => {
+    const dave = (await users.findOrCreate('dave@example.com')).id;
+    await users.setGitHubToken(dave, 'bob-token');
+    const request = { owner: 'acme', repo: 'widgets', number: 1, title: 'Change line ten', author: 'octocat', updatedAt: '2026-10-03T09:00:00Z' };
+    github.reviewRequests['bob-token'] = [request];
+    const session = (await service.createSession(dave, { repo: 'acme/widgets', pr: 1 })).session;
+
+    const lookups = pullLookups();
+    expect((await service.reviewRequests(dave))?.requests[0].session?.id).toBe(session.id);
+    expect(pullLookups()).toBe(lookups);
+
+    github.reviewRequests['bob-token'] = [{ ...request, updatedAt: '2999-01-01T00:00:00Z' }];
+    moveTo(fixture.head2);
+    try {
+      const now = Date.now() + 120_000;
+      const rows = (await service.reviewRequests(dave, { now }))!.requests;
+      expect(rows[0].session?.headSha).toBe(fixture.head2);
+      expect(rows[0].session?.id).not.toBe(session.id);
+      const afterMove = pullLookups();
+      expect(afterMove).toBeGreaterThan(lookups);
+      expect((await service.reviewRequests(dave, { now }))!.requests[0].session?.id).toBe(rows[0].session?.id);
+      expect(pullLookups()).toBe(afterMove);
+    } finally {
+      moveTo(fixture.head1);
+      github.reviewRequests['bob-token'] = [];
+    }
+  });
+
+  it('keeps a row’s session when bringing it forward fails', async () => {
+    const frank = (await users.findOrCreate('frank@example.com')).id;
+    await users.setGitHubToken(frank, 'bob-token');
+    const session = (await service.createSession(frank, { repo: 'acme/widgets', pr: 1 })).session;
+    github.reviewRequests['bob-token'] = [
+      { owner: 'acme', repo: 'widgets', number: 1, title: 'Change line ten', author: 'octocat', updatedAt: '2999-01-01T00:00:00Z' },
+    ];
+    pulls[1].headSha = fixture.head2;
+    const failing = vi.spyOn(service, 'createSession').mockRejectedValueOnce(new Error('mirror unavailable'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const rows = (await service.reviewRequests(frank, { now: Date.now() + 240_000 }))!.requests;
+      expect(rows[0].session?.id).toBe(session.id);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('mirror unavailable'));
+    } finally {
+      failing.mockRestore();
+      warn.mockRestore();
+      pulls[1].headSha = fixture.head1;
+      github.reviewRequests['bob-token'] = [];
+    }
   });
 });

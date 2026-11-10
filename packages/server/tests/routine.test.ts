@@ -30,6 +30,7 @@ let aliceId: string;
 let bobId: string;
 let fired: Fired[];
 let answer: number;
+let pulls: Record<number, { title: string; baseSha: string; headSha: string }>;
 
 const routineFetch = (async (input: string | URL | Request, init?: RequestInit) => {
   fired.push({ url: String(input), headers: new Headers(init?.headers), text: (JSON.parse(String(init?.body)) as { text: string }).text });
@@ -70,15 +71,8 @@ const fields = (text: string): Record<string, string> => {
 
 beforeAll(async () => {
   fixture = makeFixture();
-  github = await startFakeGitHub([
-    {
-      owner: 'acme',
-      name: 'widgets',
-      private: false,
-      tokens: [],
-      pulls: { 1: { title: 'Change line ten', baseSha: fixture.mainTip, headSha: fixture.head1 } },
-    },
-  ]);
+  pulls = { 1: { title: 'Change line ten', baseSha: fixture.mainTip, headSha: fixture.head1 } };
+  github = await startFakeGitHub([{ owner: 'acme', name: 'widgets', private: false, tokens: [], pulls }]);
   dataDir = tempDir('routine');
   server = await startTestServer(dataDir, github.url, { remoteUrl: fixture.remoteUrl, uiDir: fakeUiDir(dataDir), routineFetch });
   aliceCookie = await login(server.base, 'alice@example.com');
@@ -189,6 +183,31 @@ describe('calling the routine', () => {
     expect(fromPage.status).toBe(200);
     expect(fired).toHaveLength(0);
     expect(await firedAt(session.id)).toBeNull();
+  });
+
+  it('hands the agent the session at the pull request’s current head, from the Sessions page and from the review page', async () => {
+    const old = (await server.service.createSession(aliceId, { repo: 'acme/widgets', pr: 1 })).session;
+    const bobs = (await server.service.createSession(bobId, { repo: 'acme/widgets', pr: 1 })).session;
+    pulls[1].headSha = fixture.head2;
+    fixture.pushPull(fixture.head2);
+    try {
+      const fromList = await fetch(`${server.base}/sessions/${old.id}/review-request`, { method: 'POST', redirect: 'manual', headers: sameSite(aliceCookie) });
+      expect(fromList.status).toBe(303);
+      expect(fired).toHaveLength(1);
+      const payload = fields(fired[0].text);
+      expect(payload).toMatchObject({ pr: '1', head: fixture.head2, kind: 'review' });
+      expect(payload.session).not.toBe(old.id);
+
+      const fromPage = await fetch(`${server.base}/s/${bobs.id}/api/review-request`, { method: 'POST', headers: sameSite(bobCookie) });
+      const answered = await fromPage.json() as { sessionId: string; state: string };
+      expect(answered.sessionId).not.toBe(bobs.id);
+      expect(answered.state).toBe('queued');
+      expect((await server.service.reviews.getSession(bobId, answered.sessionId))?.headSha).toBe(fixture.head2);
+      expect((await server.service.reviews.getSession(bobId, bobs.id))?.review.state).toBe('none');
+    } finally {
+      pulls[1].headSha = fixture.head1;
+      fixture.pushPull(fixture.head1);
+    }
   });
 
   it('fires nothing for a user without a routine', async () => {

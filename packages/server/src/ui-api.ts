@@ -11,10 +11,11 @@ import {
   THREAD_STATUSES,
   type CommentAuthor,
   type FileContentResponse,
+  type AdvanceResponse,
   type LiveStatusResponse,
   type ParseResult,
   type RepoInfoResponse,
-  type ReviewRun,
+  type ReviewRequestResponse,
 } from '@diffity/api';
 import type { ReviewSessionRecord } from './reviews.js';
 import { describeSession, ServiceError, type ReviewService } from './service.js';
@@ -35,8 +36,8 @@ interface Scoped {
   session: ReviewSessionRecord;
 }
 
-function fail(res: Response, status: number, message: string): void {
-  res.status(status).json({ error: message });
+function fail(res: Response, status: number, message: string, details?: Record<string, unknown>): void {
+  res.status(status).json({ ...details, error: message });
 }
 
 function parsed<T>(res: Response, result: ParseResult<T>): T | null {
@@ -78,7 +79,12 @@ export function uiApiRouter(deps: UiApiDeps): Router {
         }
       } catch (err) {
         if (!res.headersSent) {
-          fail(res, err instanceof ServiceError ? err.status : 500, err instanceof Error ? err.message : String(err));
+          fail(
+            res,
+            err instanceof ServiceError ? err.status : 500,
+            err instanceof Error ? err.message : String(err),
+            err instanceof ServiceError ? err.details : undefined,
+          );
         }
       }
     };
@@ -118,7 +124,7 @@ export function uiApiRouter(deps: UiApiDeps): Router {
     return comment;
   };
 
-  router.get('/info', handle(({ session }, _req, res) => {
+  router.get('/info', handle(async ({ session }, _req, res) => {
     res.json({
       name: `${session.owner}/${session.repo}`,
       branch: session.prMeta?.headRef ?? session.headSha.slice(0, 7),
@@ -127,7 +133,13 @@ export function uiApiRouter(deps: UiApiDeps): Router {
       sessionId: session.id,
       review: session.review,
       github: session.prNumber !== null ? { owner: session.owner, repo: session.repo } : null,
+      movedOn: await service.movedOn(session),
     } satisfies RepoInfoResponse);
+  }));
+
+  router.post('/advance', handle(async ({ session }, _req, res) => {
+    const advanced = await service.advanceSession(session);
+    res.json({ sessionId: advanced.id, headSha: advanced.headSha } satisfies AdvanceResponse);
   }));
 
   router.get('/diff', handle(async ({ session }, req, res) => {
@@ -260,9 +272,10 @@ export function uiApiRouter(deps: UiApiDeps): Router {
   }));
 
   router.post('/review-request', handle(async ({ user, session }, _req, res) => {
-    await live.queueReview(user.id, session.id);
-    await routine.fire(user.id, session, 'review');
-    res.json((await reviews.getSession(user.id, session.id))!.review satisfies ReviewRun);
+    const current = await service.sessionToReview(session);
+    await live.queueReview(user.id, current.id);
+    await routine.fire(user.id, current, 'review');
+    res.json({ ...(await reviews.getSession(user.id, current.id))!.review, sessionId: current.id } satisfies ReviewRequestResponse);
   }));
 
   router.get('/github/details', handle(async ({ session }, _req, res) => {

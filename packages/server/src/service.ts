@@ -4,6 +4,7 @@ import {
   type CommentThread,
   type DiffResponse,
   type GitHubDetails,
+  type MovedOn,
   type PullCommentsResult,
   type ReviewResult,
   type ReviewSubmission,
@@ -29,7 +30,8 @@ import {
 
 /** A failure worth telling the caller about in words, with the HTTP status it amounts to. */
 export class ServiceError extends Error {
-  constructor(message: string, readonly status = 400) {
+  /** `details` go out beside the message, for a caller that acts on the failure rather than showing it. */
+  constructor(message: string, readonly status = 400, readonly details?: Record<string, unknown>) {
     super(message);
   }
 }
@@ -84,6 +86,22 @@ const CACHE_ENTRIES = 256;
 const REVIEW_REQUESTS_TTL_MS = 60_000;
 /** GitHub's search allows 30 requests a minute, and a refused one reads as an empty list. */
 const FRESH_MIN_AGE_MS = 10_000;
+const PULL_HEAD_TTL_MS = 60_000;
+const ADVANCE_CONCURRENCY = 4;
+
+interface PullHead {
+  headSha: string;
+  closed: boolean;
+}
+
+async function eachLimited<T>(items: T[], limit: number, work: (item: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      await work(items[next++]);
+    }
+  }));
+}
 
 export function filterReviewRequests(requests: ReviewRequest[], settings: UserSettings): ReviewRequest[] {
   const skip = settings.skipTitles.map(pattern => pattern.trim().toLowerCase()).filter(Boolean);
@@ -163,6 +181,7 @@ export class ReviewService {
   /** One GitHub mutation per user at a time, so a second submit sees the first one's comments. */
   private readonly githubLock = keyedSerializer();
   private readonly reviewRequestCache = new Map<string, { token: string; at: number; requests: Promise<ReviewRequest[]> }>();
+  private readonly pullHeads = new Map<string, { at: number; head: Promise<PullHead | null> }>();
 
   constructor(
     readonly reviews: Reviews,
@@ -232,9 +251,123 @@ export class ReviewService {
     return cached;
   }
 
+  /**
+   * Each row with the user's session at the pull request's current head. Only a pull request updated
+   * since its session was made can have moved, so the others cost no GitHub request.
+   */
   private async withSessions(userId: string, requests: ReviewRequest[]): Promise<ReviewRequestRow[]> {
     const sessions = await this.reviews.latestPrSessions(userId, requests);
-    return requests.map(request => ({ ...request, session: sessions.get(prKey(request.owner, request.repo, request.number)) ?? null }));
+    const rows: ReviewRequestRow[] = requests.map(request => ({
+      ...request,
+      session: sessions.get(prKey(request.owner, request.repo, request.number)) ?? null,
+    }));
+    const updated = rows.filter(row => row.session && Date.parse(row.updatedAt) > Date.parse(row.session.createdAt));
+    await eachLimited(updated, ADVANCE_CONCURRENCY, async row => {
+      try {
+        const session = await this.reviews.getSession(userId, row.session!.id);
+        const advanced = session && await this.advanceSession(session, { fresh: false });
+        if (advanced && advanced.id !== session.id) {
+          row.session = { id: advanced.id, headSha: advanced.headSha, createdAt: advanced.createdAt };
+        }
+      } catch (err) {
+        console.warn(`Bringing ${row.owner}/${row.repo}#${row.number} to its current head failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    });
+    return rows;
+  }
+
+  /** The pull request's head as GitHub has it, asked at most once a minute per user and pull request unless `fresh`. */
+  private pullHead(userId: string, owner: string, repo: string, prNumber: number, fresh: boolean): Promise<PullHead | null> {
+    const now = Date.now();
+    for (const [key, entry] of this.pullHeads) {
+      if (now - entry.at > PULL_HEAD_TTL_MS) {
+        this.pullHeads.delete(key);
+      }
+    }
+    const key = `${userId}\0${prKey(owner, repo, prNumber)}`;
+    const cached = this.pullHeads.get(key);
+    if (cached && !fresh) {
+      return cached.head;
+    }
+    const entry = {
+      at: now,
+      head: (async () => {
+        const pull = await this.github.getPull(await this.access.tokenFor(userId), owner, repo, prNumber);
+        return pull && { headSha: pull.headSha, closed: pull.closed };
+      })(),
+    };
+    this.pullHeads.set(key, entry);
+    entry.head.catch(() => {
+      if (this.pullHeads.get(key) === entry) {
+        this.pullHeads.delete(key);
+      }
+    });
+    return entry.head;
+  }
+
+  /** Null when GitHub could not say. */
+  private async knownPullHead(session: ReviewSessionRecord, fresh: boolean): Promise<PullHead | null> {
+    try {
+      return await this.pullHead(session.userId, session.owner, session.repo, session.prNumber!, fresh);
+    } catch {
+      return null;
+    }
+  }
+
+  private async newestPrSession(session: ReviewSessionRecord): Promise<{ id: string; headSha: string; createdAt: string } | null> {
+    const pull = { owner: session.owner, repo: session.repo, number: session.prNumber! };
+    return (await this.reviews.latestPrSessions(session.userId, [pull])).get(prKey(pull.owner, pull.repo, pull.number)) ?? null;
+  }
+
+  /**
+   * The user's session at the pull request's current head, made if need be, with the open findings
+   * carried over to it. A session of no pull request, or of a closed one, is its own current session.
+   * Where GitHub cannot say what the head is, a newer session of the pull request stands in for it.
+   */
+  async advanceSession(session: ReviewSessionRecord, { fresh = true }: { fresh?: boolean } = {}): Promise<ReviewSessionRecord> {
+    if (session.prNumber === null) {
+      return session;
+    }
+    const head = await this.knownPullHead(session, fresh);
+    if (head && (head.closed || head.headSha === session.headSha)) {
+      return session;
+    }
+    const newest = await this.newestPrSession(session);
+    if (newest && (head ? newest.headSha === head.headSha : newest.id !== session.id && newest.createdAt > session.createdAt)) {
+      return (await this.reviews.getSession(session.userId, newest.id)) ?? session;
+    }
+    if (!head) {
+      return session;
+    }
+    return (await this.createSession(session.userId, { repo: `${session.owner}/${session.repo}`, pr: session.prNumber })).session;
+  }
+
+  /** For handing a session to an agent: one that cannot be advanced is reviewed where it is rather than not at all. */
+  async sessionToReview(session: ReviewSessionRecord): Promise<ReviewSessionRecord> {
+    try {
+      return await this.advanceSession(session);
+    } catch (err) {
+      console.warn(`Bringing session ${session.id} to its pull request's current head failed: ${err instanceof Error ? err.message : String(err)}`);
+      return session;
+    }
+  }
+
+  /** What `advanceSession` would move to, found without making anything; null while the session is current. */
+  async movedOn(session: ReviewSessionRecord): Promise<MovedOn | null> {
+    if (session.prNumber === null) {
+      return null;
+    }
+    const head = await this.knownPullHead(session, false);
+    if (head && (head.closed || head.headSha === session.headSha)) {
+      return null;
+    }
+    const newest = await this.newestPrSession(session);
+    if (head) {
+      return { headSha: head.headSha, sessionId: newest?.headSha === head.headSha ? newest.id : null };
+    }
+    return newest && newest.id !== session.id && newest.createdAt > session.createdAt
+      ? { headSha: newest.headSha, sessionId: newest.id }
+      : null;
   }
 
   async requireSession(userId: string, idOrPrefix: string): Promise<ReviewSessionRecord> {
@@ -600,11 +733,12 @@ export class ReviewService {
     if (!pull) {
       throw new ServiceError(`${owner}/${repo} has no pull request #${prNumber}`, 404);
     }
-    if (pull.headSha !== session.headSha) {
+    if (pull.headSha !== session.headSha && !submission.allowOutdated) {
       throw new ServiceError(
         `The pull request has moved on to ${pull.headSha.slice(0, 7)} since this session (${session.headSha.slice(0, 7)}). `
-        + 'Ask your agent for a new session on the pull request; open findings carry over to it.',
+        + `Call create_session { repo: "${owner}/${repo}", pr: ${prNumber} } for a session at the current head; open findings carry over to it.`,
         409,
+        { code: 'moved_on', headSha: pull.headSha, sessionHeadSha: session.headSha },
       );
     }
     const [patch, existing, viewerLogin] = await Promise.all([

@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
 import { repoInfoOptions } from '../queries/info';
 import { requestReview } from '../lib/api';
+import { goToSession } from '../lib/session-head';
 
 export function useInfo() {
   const { data, error } = useSuspenseQuery(repoInfoOptions());
@@ -16,8 +17,14 @@ export function useRequestReview() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: requestReview,
-    onSuccess: review => {
-      queryClient.setQueryData(repoInfoOptions().queryKey, info => (info ? { ...info, review } : info));
+    onSuccess: ({ sessionId, ...review }) => {
+      const info = queryClient.getQueryData(repoInfoOptions().queryKey);
+      // The review was asked for on the pull request's current head, which is another session.
+      if (sessionId && info && sessionId !== info.sessionId) {
+        goToSession(sessionId);
+        return;
+      }
+      queryClient.setQueryData(repoInfoOptions().queryKey, current => (current ? { ...current, review } : current));
     },
   });
 }

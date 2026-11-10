@@ -8,10 +8,12 @@ import { DownloadIcon } from '../icons/download-icon';
 import { XIcon } from '../icons/x-icon';
 import {
   createReviewOnGitHub,
+  MovedOnError,
   pullCommentsFromGitHub,
   type GitHubDetails,
   type ReviewEvent,
 } from '../../lib/api';
+import { advanceAndGo, saveReviewDraft, takeReviewDraft } from '../../lib/session-head';
 import type { CommentThread } from '../comments/types';
 import {
   canSubmitReview,
@@ -52,12 +54,16 @@ export function GitHubDialog(props: GitHubDialogProps) {
   const [commentCount, setCommentCount] = useState(details.commentCount);
   const [submitting, setSubmitting] = useState(false);
   const [pulling, setPulling] = useState(false);
-  const [event, setEvent] = useState<ReviewEvent>('COMMENT');
+  const [draft] = useState(() => (sessionId ? takeReviewDraft(sessionId) : null));
+  const [event, setEvent] = useState<ReviewEvent>(draft?.event ?? 'COMMENT');
 
   const submittable = useMemo(() => threads.filter(isSubmittable), [threads]);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [summary, setSummary] = useState('');
-  const [summaryEdited, setSummaryEdited] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(() => new Set(draft?.deselected.map(id => `-${id}`)));
+  const [summary, setSummary] = useState(draft?.summary ?? '');
+  const [summaryEdited, setSummaryEdited] = useState(draft?.summary != null);
+  /** The pull request's head, when posting found it had moved on since this session's. */
+  const [movedTo, setMovedTo] = useState<string | null>(null);
+  const [updating, setUpdating] = useState(false);
 
   // Everything open is selected by default, including threads arriving from the agent while
   // the dialog is open; deselecting is the deliberate act.
@@ -120,7 +126,7 @@ export function GitHubDialog(props: GitHubDialogProps) {
     setSelected(new Set(submittable.map(thread => thread.id)));
   };
 
-  const handleSubmit = async () => {
+  const handleSubmit = async (allowOutdated = false) => {
     if (!canSubmit) {
       return;
     }
@@ -130,6 +136,7 @@ export function GitHubDialog(props: GitHubDialogProps) {
         event,
         body: summary,
         comments: chosen.map(threadToPayload),
+        ...(allowOutdated ? { allowOutdated } : {}),
       });
 
       if (result.failed > 0) {
@@ -138,7 +145,7 @@ export function GitHubDialog(props: GitHubDialogProps) {
         });
       } else {
         const skipped = result.skipped > 0 ? ` (${result.skipped} already on the PR)` : '';
-        const moved = movedOnNote({ commitSha: result.commitSha, headSha: details.headSha });
+        const moved = movedOnNote({ commitSha: result.commitSha, headSha: movedTo ?? details.headSha });
         toast.success(
           `Submitted ${result.submitted} comment${result.submitted !== 1 ? 's' : ''} as one review${skipped}`,
           moved ? { description: moved } : undefined,
@@ -147,11 +154,38 @@ export function GitHubDialog(props: GitHubDialogProps) {
         onClose();
       }
     } catch (err) {
+      if (err instanceof MovedOnError) {
+        setMovedTo(err.headSha);
+        return;
+      }
       toast.error('Failed to submit review', {
         description: err instanceof Error ? err.message : 'Unknown error',
       });
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleUpdate = async () => {
+    if (!sessionId) {
+      return;
+    }
+    setUpdating(true);
+    try {
+      const left = await advanceAndGo(sessionId, next => saveReviewDraft(next, {
+        summary: summaryEdited ? summary : null,
+        event,
+        deselected: submittable.filter(thread => !selected.has(thread.id)).map(thread => thread.id),
+      }));
+      if (!left) {
+        setUpdating(false);
+        setMovedTo(null);
+      }
+    } catch (err) {
+      setUpdating(false);
+      toast.error('Could not update to the pull request’s current head', {
+        description: err instanceof Error ? err.message : 'Unknown error',
+      });
     }
   };
 
@@ -289,45 +323,79 @@ export function GitHubDialog(props: GitHubDialogProps) {
             </div>
           )}
 
-          <div className="flex items-center gap-2">
-            <div className="flex items-center gap-1 flex-1">
-              {(Object.keys(EVENT_LABELS) as ReviewEvent[]).map(value => {
-                const blocked = value !== 'COMMENT' && details.viewerDidAuthor;
-                return (
-                  <button
-                    key={value}
-                    className={`px-2 py-1 text-[11px] rounded-md border cursor-pointer disabled:cursor-not-allowed disabled:opacity-40 ${
-                      event === value
-                        ? 'border-accent bg-accent/10 text-accent'
-                        : 'border-border bg-bg hover:bg-hover text-text-secondary'
-                    }`}
-                    onClick={() => setEvent(value)}
-                    disabled={blocked}
-                    title={blocked ? 'GitHub does not allow this on your own pull request' : undefined}
-                    aria-pressed={event === value}
-                  >
-                    {EVENT_LABELS[value]}
-                  </button>
-                );
-              })}
-            </div>
-            <button
-              onClick={handleSubmit}
-              disabled={submitting || !canSubmit}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-accent text-white hover:bg-accent-hover transition-colors cursor-pointer disabled:opacity-50 shrink-0"
+          {movedTo ? (
+            <div
+              role="alertdialog"
+              aria-label="The pull request has moved on"
+              data-testid="moved-on-confirm"
+              className="space-y-2 px-2.5 py-2 rounded-md border border-accent/40 bg-accent/10 text-[11px] text-text"
             >
-              {submitting ? (
-                <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-              ) : (
-                <UploadIcon className="w-3 h-3" />
-              )}
-              {chosen.length > 0
-                ? `Submit ${chosen.length} as one review`
-                : event === 'COMMENT'
-                  ? 'Submit as one review'
-                  : `Submit ${EVENT_LABELS[event].toLowerCase()}`}
-            </button>
-          </div>
+              <div>
+                The pull request has moved on to <code>{movedTo.slice(0, 7)}</code> since{' '}
+                <code>{details.headSha.slice(0, 7)}</code>, the commit you reviewed. Update to see the new code; open
+                findings and this draft come along. Or post to the reviewed commit, where GitHub marks lines changed
+                since as outdated.
+              </div>
+              <div className="flex items-center gap-2 justify-end">
+                <button
+                  type="button"
+                  onClick={() => void handleSubmit(true)}
+                  disabled={submitting || updating}
+                  className="px-3 py-1.5 text-xs font-medium rounded-md border border-border bg-bg hover:bg-hover text-text-secondary cursor-pointer disabled:opacity-50"
+                >
+                  Post to {details.headSha.slice(0, 7)} anyway
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleUpdate()}
+                  disabled={submitting || updating || !sessionId}
+                  className="px-3 py-1.5 text-xs font-medium rounded-md bg-accent text-white hover:bg-accent-hover cursor-pointer disabled:opacity-50"
+                >
+                  Update to {movedTo.slice(0, 7)}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1 flex-1">
+                {(Object.keys(EVENT_LABELS) as ReviewEvent[]).map(value => {
+                  const blocked = value !== 'COMMENT' && details.viewerDidAuthor;
+                  return (
+                    <button
+                      key={value}
+                      className={`px-2 py-1 text-[11px] rounded-md border cursor-pointer disabled:cursor-not-allowed disabled:opacity-40 ${
+                        event === value
+                          ? 'border-accent bg-accent/10 text-accent'
+                          : 'border-border bg-bg hover:bg-hover text-text-secondary'
+                      }`}
+                      onClick={() => setEvent(value)}
+                      disabled={blocked}
+                      title={blocked ? 'GitHub does not allow this on your own pull request' : undefined}
+                      aria-pressed={event === value}
+                    >
+                      {EVENT_LABELS[value]}
+                    </button>
+                  );
+                })}
+              </div>
+              <button
+                onClick={() => void handleSubmit()}
+                disabled={submitting || !canSubmit}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-accent text-white hover:bg-accent-hover transition-colors cursor-pointer disabled:opacity-50 shrink-0"
+              >
+                {submitting ? (
+                  <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                ) : (
+                  <UploadIcon className="w-3 h-3" />
+                )}
+                {chosen.length > 0
+                  ? `Submit ${chosen.length} as one review`
+                  : event === 'COMMENT'
+                    ? 'Submit as one review'
+                    : `Submit ${EVENT_LABELS[event].toLowerCase()}`}
+              </button>
+            </div>
+          )}
 
           <div className="flex items-center justify-between py-2.5 px-3 bg-bg-secondary rounded-lg">
             <div>
