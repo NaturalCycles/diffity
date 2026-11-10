@@ -600,6 +600,26 @@ describe('following a pull request’s head', () => {
     }
   });
 
+  it('shows the rows without waiting long on a slow head lookup', async () => {
+    const lena = (await users.findOrCreate('lena@example.com')).id;
+    await users.setGitHubToken(lena, 'bob-token');
+    const session = (await service.createSession(lena, { repo: 'acme/widgets', pr: 1 })).session;
+    github.reviewRequests['bob-token'] = [
+      { owner: 'acme', repo: 'widgets', number: 1, title: 'Change line ten', author: 'octocat', updatedAt: '2999-01-01T00:00:00Z' },
+    ];
+    const stuck = vi.spyOn(GitHubApi.prototype, 'getPull').mockReturnValue(new Promise(() => {}));
+    try {
+      const started = Date.now();
+      const rows = (await service.reviewRequests(lena, { now: Date.now() + 840_000 }))!.requests;
+      expect(Date.now() - started).toBeLessThan(5_000);
+      expect(rows[0].session?.id).toBe(session.id);
+      expect(rows[0].movedTo).toBeNull();
+    } finally {
+      stuck.mockRestore();
+      github.reviewRequests['bob-token'] = [];
+    }
+  }, 10_000);
+
   it('keeps a row as it is when its head cannot be looked up', async () => {
     const frank = (await users.findOrCreate('frank@example.com')).id;
     await users.setGitHubToken(frank, 'bob-token');

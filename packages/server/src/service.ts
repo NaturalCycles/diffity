@@ -91,6 +91,7 @@ const FRESH_MIN_AGE_MS = 10_000;
 const PULL_HEAD_TTL_MS = 60_000;
 const ADVANCE_CONCURRENCY = 4;
 const MOVED_ON_WAIT_MS = 2_000;
+const HEAD_LOOKUP_BUDGET_MS = 3_000;
 
 interface PullHead {
   headSha: string;
@@ -276,7 +277,8 @@ export class ReviewService {
       };
     });
     const behind = rows.filter(({ row, olderWork }) => row.session && (olderWork || Date.parse(row.updatedAt) > Date.parse(row.session.createdAt)));
-    await eachLimited(behind, ADVANCE_CONCURRENCY, async ({ row, olderWork }) => {
+    // A slow GitHub must not hold the page: what has not answered in time shows next refresh, from the cache.
+    const lookups = eachLimited(behind, ADVANCE_CONCURRENCY, async ({ row, olderWork }) => {
       try {
         const head = await this.pullHead(userId, row.owner, row.repo, row.number, false);
         if (!head || head.closed || head.headSha === row.session!.headSha) {
@@ -292,7 +294,8 @@ export class ReviewService {
         console.warn(`Looking up ${row.owner}/${row.repo}#${row.number}'s current head failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     });
-    return rows.map(({ row }) => row);
+    await Promise.race([lookups, new Promise(resolve => setTimeout(resolve, HEAD_LOOKUP_BUDGET_MS).unref())]);
+    return rows.map(({ row }) => ({ ...row }));
   }
 
   /** The pull request's head as GitHub has it, asked at most once a minute per user and pull request unless `fresh`. */
