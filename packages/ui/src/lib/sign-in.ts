@@ -1,12 +1,14 @@
 let signedOut = false;
 let reloaded = false;
+let lostWrite = false;
 const listeners = new Set<() => void>();
 
 export function isSignedOut(): boolean {
   return signedOut;
 }
 
-export function markSignedOut(): void {
+export function markSignedOut(cause: { lostWrite?: boolean } = {}): void {
+  lostWrite ||= !!cause.lostWrite;
   if (signedOut) {
     return;
   }
@@ -28,10 +30,12 @@ export interface PageState {
   /** Something the reader typed that a reload would throw away. */
   hasDraft: boolean;
   editing: boolean;
+  /** A save failed on the expired sign-in; its text may live only in memory. */
+  lostWrite: boolean;
 }
 
 export function shouldAutoReload(state: PageState, alreadyReloaded: boolean): boolean {
-  return !alreadyReloaded && state.visible && !state.hasDraft && !state.editing;
+  return !alreadyReloaded && !state.lostWrite && state.visible && !state.hasDraft && !state.editing;
 }
 
 const TEXT_INPUT_TYPES = new Set(['', 'text', 'search', 'email', 'url', 'tel', 'password', 'number']);
@@ -48,6 +52,7 @@ export function readPageState(doc: Document = document): PageState {
     visible: doc.visibilityState === 'visible',
     hasDraft: fields.some(field => field.value.trim() !== ''),
     editing,
+    lostWrite,
   };
 }
 
@@ -67,5 +72,6 @@ export function reloadIfSafe(reload: () => void = () => window.location.reload()
 export function resetSignInForTests(): void {
   signedOut = false;
   reloaded = false;
+  lostWrite = false;
   listeners.clear();
 }

@@ -14,7 +14,7 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-const CLEAN = { visible: true, hasDraft: false, editing: false };
+const CLEAN = { visible: true, hasDraft: false, editing: false, lostWrite: false };
 
 describe('the request helper', () => {
   it('asks not to follow redirects and passes a normal response through', async () => {
@@ -39,6 +39,16 @@ describe('the request helper', () => {
 
     await expect(apiRequest('/api/info')).rejects.toThrow('Signed out');
     expect(isSignedOut()).toBe(true);
+    expect(readPageState().lostWrite).toBe(false);
+  });
+
+  it('marks the page signed out on a 401, and never reloads it on its own after a failed write', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 401 })));
+
+    await expect(apiRequest('/api/threads/1', { method: 'PATCH' })).rejects.toThrow('Signed out');
+    expect(isSignedOut()).toBe(true);
+    expect(readPageState().lostWrite).toBe(true);
+    expect(reloadIfSafe(vi.fn())).toBe(false);
   });
 });
 
@@ -51,6 +61,7 @@ describe('reloading after the sign-in expired', () => {
     expect(shouldAutoReload({ ...CLEAN, hasDraft: true }, false)).toBe(false);
     expect(shouldAutoReload({ ...CLEAN, editing: true }, false)).toBe(false);
     expect(shouldAutoReload({ ...CLEAN, visible: false }, false)).toBe(false);
+    expect(shouldAutoReload({ ...CLEAN, lostWrite: true }, false)).toBe(false);
   });
 
   it('reloads only once', () => {
