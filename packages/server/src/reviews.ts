@@ -328,9 +328,11 @@ export class Reviews {
   }
 
   /** The newest session of each of these pull requests that has one, keyed by `prKey`. */
+  /** With `openWork`, only sessions still holding open threads count. */
   async latestPrSessions(
     userId: string,
     pulls: { owner: string; repo: string; number: number }[],
+    { openWork = false }: { openWork?: boolean } = {},
   ): Promise<Map<string, { id: string; headSha: string; createdAt: string }>> {
     const found = new Map<string, { id: string; headSha: string; createdAt: string }>();
     if (pulls.length === 0) {
@@ -341,6 +343,7 @@ export class Reviews {
        FROM sessions s JOIN repos r ON r.id = s.repo_id
        WHERE s.user_id = $1 AND s.pr_number IS NOT NULL
          AND lower(r.owner) || '/' || lower(r.name) || '#' || s.pr_number = ANY($2::text[])
+         ${openWork ? "AND EXISTS (SELECT 1 FROM threads t WHERE t.session_id = s.id AND t.status = 'open')" : ''}
        ORDER BY lower(r.owner), lower(r.name), s.pr_number, s.created_at DESC, s.seq DESC`,
       [userId, pulls.map(pull => prKey(pull.owner, pull.repo, pull.number))],
     );
@@ -348,6 +351,16 @@ export class Reviews {
       found.set(prKey(row.owner, row.name, row.pr_number), { id: row.id, headSha: row.head_sha, createdAt: row.created_at });
     }
     return found;
+  }
+
+  /** The user's newest session of the pull request at this head. */
+  async prSessionAt(userId: string, pull: { owner: string; repo: string; number: number }, headSha: string): Promise<ReviewSessionRecord | null> {
+    const row = await this.db.one<SessionRow>(
+      `${SESSION_SELECT} WHERE s.user_id = $1 AND lower(r.owner) = lower($2) AND lower(r.name) = lower($3) AND s.pr_number = $4 AND s.head_sha = $5
+       ORDER BY s.created_at DESC, s.seq DESC LIMIT 1`,
+      [userId, pull.owner, pull.repo, pull.number, headSha],
+    );
+    return row ? rowToSession(row) : null;
   }
 
   /** Earlier sessions of the same pull request, newest first — where carried work comes from. */
@@ -364,9 +377,9 @@ export class Reviews {
    * Moves rather than copies, so ids stay stable. Resolved and dismissed threads stay with the
    * commit where they were dealt with.
    */
-  async moveOpenWork(userId: string, fromSessionIds: string[], toSessionId: string): Promise<number> {
+  async moveOpenWork(userId: string, fromSessionIds: string[], toSessionId: string): Promise<string[]> {
     if (fromSessionIds.length === 0) {
-      return 0;
+      return [];
     }
     return this.db.transaction(async tx => {
       const moved = await tx.query<{ id: string }>(
@@ -383,7 +396,7 @@ export class Reviews {
         userId,
         fromSessionIds,
       ]);
-      return moved.length;
+      return moved.map(row => row.id);
     });
   }
 

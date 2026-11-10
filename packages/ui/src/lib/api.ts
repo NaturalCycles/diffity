@@ -1,4 +1,5 @@
 import type {
+  AdvanceResponse,
   Comment,
   CommentAuthor,
   CommentThread,
@@ -7,11 +8,12 @@ import type {
   FileContentResponse,
   GitHubDetails,
   LiveStatusResponse,
+  MovedOnRefusal,
   PullCommentsResult,
   RepoInfoResponse,
   ReplyRequest,
+  ReviewRequestResponse,
   ReviewResult,
-  ReviewRun,
   ReviewSubmission,
   ThreadStatus,
   Tour,
@@ -21,6 +23,7 @@ import { apiRequest } from './request';
 
 export type {
   GitHubDetails,
+  MovedOn,
   PrComment,
   ReviewEvent,
   ReviewRun,
@@ -143,12 +146,32 @@ export async function fetchGitHubDetails(): Promise<GitHubDetails | null> {
   return res.json();
 }
 
-export function createReviewOnGitHub(review: ReviewSubmission): Promise<ReviewResult> {
-  return apiFetch('/api/github/create-review', {
+/** The pull request has moved on since the session's head, and the review was not posted. */
+export class MovedOnError extends Error {
+  constructor(readonly headSha: string, readonly sessionHeadSha: string, message: string) {
+    super(message);
+  }
+}
+
+export async function createReviewOnGitHub(review: ReviewSubmission): Promise<ReviewResult> {
+  const res = await apiRequest(apiPath('/api/github/create-review'), {
     method: 'POST',
     headers: JSON_HEADERS,
     body: JSON.stringify(review),
   });
+  if (res.ok) {
+    return res.json();
+  }
+  const json = (await res.json().catch(() => null)) as Partial<MovedOnRefusal> | null;
+  if (res.status === 409 && json?.code === 'moved_on' && json.headSha && json.sessionHeadSha) {
+    throw new MovedOnError(json.headSha, json.sessionHeadSha, json.error ?? 'The pull request has moved on');
+  }
+  throw new Error(json?.error || `HTTP ${res.status}`);
+}
+
+/** With `prepare` the session at the current head is made, but nothing is moved to it yet. */
+export function advanceSession(prepare = false): Promise<AdvanceResponse> {
+  return apiFetch('/api/advance', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ prepare }) });
 }
 
 export function pullCommentsFromGitHub(sessionId: string): Promise<PullCommentsResult> {
@@ -163,7 +186,7 @@ export function fetchLiveStatus(): Promise<LiveStatusResponse> {
   return apiFetch('/api/live/status');
 }
 
-export function requestReview(): Promise<ReviewRun> {
+export function requestReview(): Promise<ReviewRequestResponse> {
   return apiFetch('/api/review-request', { method: 'POST' });
 }
 

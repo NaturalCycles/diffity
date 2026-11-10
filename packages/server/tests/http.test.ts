@@ -31,6 +31,7 @@ let session: ReviewSessionRecord;
 let prSession: ReviewSessionRecord;
 let bobSession: ReviewSessionRecord;
 let pr2Head: string;
+let pulls: Record<number, { title: string; baseSha: string; headSha: string }>;
 
 async function api(
   path: string,
@@ -77,10 +78,10 @@ beforeAll(async () => {
       name: 'widgets',
       private: false,
       tokens: [],
-      pulls: {
+      pulls: (pulls = {
         1: { title: 'Change line ten', baseSha: fixture.mainTip, headSha: fixture.head1 },
         2: { title: 'Rename a file', baseSha: fixture.mainTip, headSha: pr2Head },
-      },
+      }),
     },
   ]);
   dataDir = tempDir('http');
@@ -260,6 +261,25 @@ describe('pull requests awaiting review', () => {
     } finally {
       await server.users.setGitHubToken(aliceId, null);
       await server.users.setSettings(aliceId, { skipTitles: [], includeDrafts: false });
+    }
+  });
+
+  it('shows the head a session is behind on and links that session, making nothing', async () => {
+    const dora = (await server.users.findOrCreate('dora@example.com')).id;
+    const doraCookie = await login(server.base, 'dora@example.com');
+    const behind = (await server.service.createSession(dora, { repo: 'acme/widgets', pr: 2 })).session;
+    github.reviewRequests['dora-token'] = [
+      { owner: 'acme', repo: 'widgets', number: 2, title: 'Rename a file', author: 'carol', updatedAt: '2999-01-01T00:00:00Z' },
+    ];
+    await server.users.setGitHubToken(dora, 'dora-token');
+    pulls[2].headSha = fixture.head2;
+    try {
+      const page = (await api('/', { cookie: doraCookie })).body as string;
+      expect(page).toContain(`<a href="/s/${behind.id}/" target="_blank" rel="noopener" title="Reviewed at ${pr2Head.slice(0, 7)}; opens on the current head, ${fixture.head2.slice(0, 7)}">open · ${fixture.head2.slice(0, 7)}</a>`);
+      expect((await server.service.reviews.listSessions(dora)).map(listed => listed.id)).toEqual([behind.id]);
+    } finally {
+      pulls[2].headSha = pr2Head;
+      await server.users.setGitHubToken(dora, null);
     }
   });
 

@@ -24,6 +24,25 @@ export interface RepoInfoResponse {
   sessionId: string;
   review?: ReviewRun | null;
   github: GitHubRemote | null;
+  /** The pull request has a newer head than this session shows. */
+  movedOn?: MovedOn | null;
+}
+
+export interface MovedOn {
+  headSha: string;
+  /** The user's session at that head, when there is one already. */
+  sessionId: string | null;
+}
+
+/** What `POST /api/advance` answers: the session at the pull request's current head, which may be this one. */
+export interface AdvanceResponse {
+  sessionId: string;
+  headSha: string;
+}
+
+/** What `POST /api/review-request` answers; the review was asked for on `sessionId`, the session at the pull request's current head. */
+export interface ReviewRequestResponse extends ReviewRun {
+  sessionId: string;
 }
 
 /**

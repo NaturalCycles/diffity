@@ -671,7 +671,9 @@ export function createApp(deps: AppDeps): express.Express {
     const rows = found.rows.map(request => {
       const slug = `${request.owner}/${request.repo}`;
       const action = request.session
-        ? `<a href="/s/${escapeHtml(request.session.id)}/" target="_blank" rel="noopener">open · ${escapeHtml(request.session.headSha.slice(0, 7))}</a>${reachable
+        ? `<a href="/s/${escapeHtml(request.session.id)}/" target="_blank" rel="noopener"${request.movedTo
+          ? ` title="${escapeHtml(`Reviewed at ${request.session.headSha.slice(0, 7)}; opens on the current head, ${request.movedTo.slice(0, 7)}`)}"`
+          : ''}>open · ${escapeHtml((request.movedTo ?? request.session.headSha).slice(0, 7))}</a>${reachable
           ? ` <form class="inline" method="post" action="/sessions/${escapeHtml(request.session.id)}/review-request"><button type="submit">review</button></form>`
           : ''}`
         : `<form class="inline" method="post" action="/sessions" target="_blank">
@@ -797,8 +799,9 @@ export function createApp(deps: AppDeps): express.Express {
       sendPage(res, 404, 'Not found', '<h1>No such session</h1><p><a href="/">Your sessions</a></p>', user);
       return;
     }
-    await live.queueReview(user.id, session.id);
-    await routine.fire(user.id, session, 'review');
+    const current = await service.sessionToReview(session);
+    await live.queueReview(user.id, current.id);
+    await routine.fire(user.id, current, 'review');
     res.redirect(303, '/');
   });
 

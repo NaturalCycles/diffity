@@ -30,6 +30,8 @@ export interface PullInfo {
   headSha: string;
   headRef: string;
   baseRef: string;
+  /** Closed or merged. */
+  closed: boolean;
 }
 
 export interface ReviewComment {
@@ -273,6 +275,7 @@ export class GitHubApi {
       html_url: string;
       created_at: string;
       body: string | null;
+      state?: string;
       user: { login: string } | null;
       base: { sha: string; ref: string };
       head: { sha: string; ref: string };
@@ -287,6 +290,7 @@ export class GitHubApi {
       headSha: json.head.sha,
       headRef: json.head.ref,
       baseRef: json.base.ref,
+      closed: json.state === 'closed',
     };
   }
 

@@ -134,6 +134,14 @@ describe('a review submission', () => {
     });
   });
 
+  it('carries allowOutdated, and refuses one that is not a boolean', () => {
+    expect(parseReviewSubmission({ event: 'APPROVE', allowOutdated: true })).toEqual({
+      ok: true,
+      value: { event: 'APPROVE', body: '', comments: [], allowOutdated: true },
+    });
+    expect(errorOf(parseReviewSubmission({ event: 'APPROVE', allowOutdated: 'yes' }))).toContain('allowOutdated');
+  });
+
   it('rejects an unknown verdict instead of coercing it', () => {
     expect(errorOf(parseReviewSubmission({ event: 'SHIP_IT' })))
       .toBe('event must be one of: COMMENT, APPROVE, REQUEST_CHANGES');

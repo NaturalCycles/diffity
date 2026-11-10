@@ -33,12 +33,16 @@ The first tool call opens the browser to sign in and allow the connection. Then:
   installed on the agent's side. In Claude Code it is `/mcp__diffity__review`.
 - **Sessions.** `create_session` takes a pull request, two commits, or a base commit and a patch
   (for work that is not pushed). Its result carries the page's URL. A new session on a pull request
-  that moved on carries the open findings over.
+  that moved on carries the open findings over. A pull request session follows its head: the
+  Sessions page shows the current head, a review page opened on an older session moves there, and
+  one left open follows while its tab is hidden and nothing typed would be lost, and otherwise offers
+  the update.
 - **Findings** are inline comments with a severity prefix (`P1`/`P2`/`P3` unless the repository
   says otherwise); tours give the diff a reading order.
 - **Posting.** From the page the user posts the findings to the pull request as one review, and
-  pulls GitHub's review threads in. Posting is only for pull request sessions, and refused once the
-  pull request has moved past the session's head. GitHub is reached as the user: through the GitHub
+  pulls GitHub's review threads in. Posting is only for pull request sessions. Once the pull request
+  has moved past the session's head the page asks whether to update to the new head or post to the
+  reviewed commit anyway; an agent's `post_review` is refused. GitHub is reached as the user: through the GitHub
   App they connect on **Settings**, or a token pasted there when no App is configured. An agent
   posts as the App instead (see Automated reviews).
 
@@ -229,8 +233,9 @@ The deploy runs one instance (pending OAuth consents are held in memory), sets
 - OAuth client secrets, codes, access and refresh tokens, automation tokens and the web session
   cookie are stored as sha256 hashes; GitHub tokens (pasted, or the App's access and refresh tokens) are encrypted with
   `DIFFITY_SECRET_KEY`.
-- Posting is only for pull request sessions, and refused once the pull request has moved past the
-  session's head: the user asks for a new session, which the open findings carry over to.
+- Posting is only for pull request sessions. Once the pull request has moved past the session's
+  head, a review goes to the reviewed commit only when the user asks for that; otherwise the session
+  at the current head, which the open findings carry over to, is where to post from.
 
 ## License
 

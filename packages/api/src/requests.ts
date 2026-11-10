@@ -130,6 +130,7 @@ export function parseReviewSubmission(body: unknown): ParseResult<ReviewSubmissi
     event: member(obj.event, 'event', REVIEW_EVENTS),
     body: obj.body == null ? '' : anyStr(obj.body, 'body'),
     comments: prComments(obj.comments),
+    allowOutdated: optBool(obj.allowOutdated, 'allowOutdated'),
   }));
 }
 

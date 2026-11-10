@@ -12,6 +12,7 @@ import { GitHubIcon } from '../icons/github-icon';
 import type { GitHubDetails } from '../../lib/api';
 import { DiffStats } from '../diff/diff-stats';
 import { GitHubDialog } from './github-dialog';
+import { hasReviewDraft } from '../../lib/session-head';
 import { CommentToolbarActions } from '../comments/comment-toolbar-actions';
 import { OptionsMenu, menuItemClass } from './options-menu';
 import { GENERAL_THREAD_FILE_PATH } from '../comments/types';
@@ -137,7 +138,8 @@ export function Toolbar(props: ToolbarProps) {
     sessionId,
     onGitHubPulled,
   } = props;
-  const [showGitHub, setShowGitHub] = useState(false);
+  // A review being posted when the reader moved to the pull request's current head picks up where it was.
+  const [showGitHub, setShowGitHub] = useState(() => !!sessionId && hasReviewDraft(sessionId));
 
   const formatForCopy = useCallback(() => {
     return formatThreadsForCopy(threads, diff);

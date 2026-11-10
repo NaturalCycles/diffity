@@ -48,6 +48,16 @@ export interface ReviewSubmission {
   event: ReviewEvent;
   body: string;
   comments: PrComment[];
+  /** Posts against the session's head even though the pull request has moved on since. */
+  allowOutdated?: boolean;
+}
+
+/** The body of the 409 a review gets when the pull request has moved on since the session's head. */
+export interface MovedOnRefusal {
+  error: string;
+  code: 'moved_on';
+  headSha: string;
+  sessionHeadSha: string;
 }
 
 export interface ReviewResult {

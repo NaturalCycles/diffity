@@ -533,11 +533,13 @@ describe('post_review', () => {
       }
     });
 
-    it('refuses once the pull request has moved past the session', async () => {
+    it('refuses once the pull request has moved past the session, naming the call that gets the current head', async () => {
       const { session } = await ok<{ session: string }>(routine, 'create_session', { repo: 'acme/widgets', pr: 1 });
       pulls[1].headSha = fixture.head2;
       try {
-        expect(await failed(routine, 'post_review', { session, event: 'REQUEST_CHANGES', body: 'Changes, please' })).toContain('moved on');
+        const refusal = await failed(routine, 'post_review', { session, event: 'REQUEST_CHANGES', body: 'Changes, please' });
+        expect(refusal).toContain('moved on');
+        expect(refusal).toContain('create_session { repo: "acme/widgets", pr: 1 }');
       } finally {
         pulls[1].headSha = fixture.head1;
       }

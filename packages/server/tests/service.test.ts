@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Db } from '../src/db.js';
 import { Mirrors } from '../src/git.js';
 import { GitHubApi, StoredTokenAccess, type ReviewRequest } from '../src/github.js';
@@ -25,16 +25,18 @@ let service: ReviewService;
 let alice: string;
 let bob: string;
 let mallory: string;
+let pulls: Record<number, { title: string; baseSha: string; headSha: string; closed?: boolean }>;
 
 beforeAll(async () => {
   fixture = makeFixture();
+  pulls = { 1: { title: 'Change line ten', baseSha: fixture.mainTip, headSha: fixture.head1 } };
   github = await startFakeGitHub([
     {
       owner: 'Acme',
       name: 'widgets',
       private: true,
       tokens: ['alice-token', 'bob-token'],
-      pulls: { 1: { title: 'Change line ten', baseSha: fixture.mainTip, headSha: fixture.head1 } },
+      pulls,
     },
   ]);
   dataDir = tempDir('service');
@@ -331,8 +333,7 @@ describe('review requests', () => {
       { owner: 'acme', repo: 'widgets', number: 2, title: 'Bump lodash', author: 'dependabot', updatedAt: '2026-10-02T09:00:00Z' },
       { owner: 'acme', repo: 'widgets', number: 3, title: 'Sketch', author: 'octocat', draft: true, updatedAt: '2026-10-01T09:00:00Z' },
     ];
-    await service.createSession(bob, { repo: 'acme/widgets', pr: 1 });
-    const newest = (await reviews.listSessions(bob)).find(s => s.prNumber === 1)!;
+    const newest = (await service.createSession(bob, { repo: 'acme/widgets', pr: 1 })).session;
     const now = Date.now();
     const searches = github.searches.length;
 
@@ -386,5 +387,259 @@ describe('review requests', () => {
     const alices = (await reviews.listSessions(alice)).filter(s => s.prNumber === 1).map(s => s.id);
     const found = await service.reviewRequests(alice);
     expect(alices).toContain(found?.requests[0].session?.id);
+  });
+});
+
+describe('following a pull request’s head', () => {
+  let erin: string;
+  const pullLookups = () => github.requests.filter(request => request.toLowerCase() === 'get /repos/acme/widgets/pulls/1').length;
+  const moveTo = (sha: string) => {
+    pulls[1].headSha = sha;
+    fixture.pushPull(sha);
+  };
+
+  beforeAll(async () => {
+    erin = (await users.findOrCreate('erin@example.com')).id;
+    await users.setGitHubToken(erin, 'bob-token');
+  });
+
+  it('keeps a session at the current head, and a session of no pull request', async () => {
+    const session = (await service.createSession(erin, { repo: 'acme/widgets', pr: 1 })).session;
+    expect(await service.advanceSession(session)).toEqual(session);
+    expect(await service.movedOn(session)).toBeNull();
+    const commits = (await service.createSession(erin, { repo: 'acme/widgets', base: fixture.mainTip, head: fixture.head2 })).session;
+    const lookups = pullLookups();
+    expect(await service.advanceSession(commits)).toBe(commits);
+    expect(await service.movedOn(commits)).toBeNull();
+    expect(pullLookups()).toBe(lookups);
+  });
+
+  it('moves to a session at the new head with the open findings, made once', async () => {
+    const session = (await service.createSession(erin, { repo: 'acme/widgets', pr: 1 })).session;
+    const open = await reviews.createThread({
+      userId: erin, sessionId: session.id, filePath: 'src.ts', side: 'new', startLine: 10, endLine: 10,
+      body: 'Why this change?', author: { name: 'Agent', type: 'agent' }, anchorContent: 'line 10 changed by the feature',
+    });
+    moveTo(fixture.head2);
+    try {
+      const advanced = await service.advanceSession(session);
+      expect(advanced.id).not.toBe(session.id);
+      expect(advanced.headSha).toBe(fixture.head2);
+      expect((await reviews.threadsForSession(erin, advanced.id)).map(t => [t.id, t.startLine])).toEqual([[open.id, 13]]);
+      expect(await service.movedOn(session)).toEqual({ headSha: fixture.head2, sessionId: advanced.id });
+      expect((await service.advanceSession(session)).id).toBe(advanced.id);
+      expect(await service.movedOn(advanced)).toBeNull();
+    } finally {
+      moveTo(fixture.head1);
+    }
+  });
+
+  it('leaves a closed pull request where it is', async () => {
+    const session = (await service.createSession(erin, { repo: 'acme/widgets', pr: 1 })).session;
+    pulls[1].closed = true;
+    pulls[1].headSha = fixture.head2;
+    try {
+      expect(await service.advanceSession(session)).toBe(session);
+      expect(await service.movedOn(session)).toBeNull();
+    } finally {
+      pulls[1].closed = false;
+      pulls[1].headSha = fixture.head1;
+    }
+  });
+
+  it('advances onto a session that already exists at the head, carrying only the findings left behind', async () => {
+    const gina = (await users.findOrCreate('gina@example.com')).id;
+    await users.setGitHubToken(gina, 'bob-token');
+    const old = (await service.createSession(gina, { repo: 'acme/widgets', pr: 1 })).session;
+    const finding = (body: string, sessionId: string) => reviews.createThread({
+      userId: gina, sessionId, filePath: 'src.ts', side: 'new', startLine: 10, endLine: 10,
+      body, author: { name: 'Agent', type: 'agent' }, anchorContent: 'line 10 changed by the feature',
+    });
+    moveTo(fixture.head2);
+    try {
+      const current = (await service.createSession(gina, { repo: 'acme/widgets', pr: 1 })).session;
+      const own = await finding('Left on the new head', current.id);
+      const later = await finding('Written in a tab still on the old head', old.id);
+
+      const advanced = await service.advanceSession(old);
+      expect(advanced.id).toBe(current.id);
+      const lines = new Map((await reviews.threadsForSession(gina, current.id)).map(t => [t.id, t.startLine]));
+      expect(lines.get(later.id)).toBe(13);
+      expect(lines.get(own.id)).toBe(10);
+      expect(await reviews.threadsForSession(gina, old.id, 'open')).toEqual([]);
+    } finally {
+      moveTo(fixture.head1);
+    }
+  });
+
+  it('only makes the head’s session when asked not to carry, leaving the findings where they are', async () => {
+    const jan = (await users.findOrCreate('jan@example.com')).id;
+    await users.setGitHubToken(jan, 'bob-token');
+    const old = (await service.createSession(jan, { repo: 'acme/widgets', pr: 1 })).session;
+    const kept = await reviews.createThread({
+      userId: jan, sessionId: old.id, filePath: 'src.ts', side: 'new', startLine: 10, endLine: 10,
+      body: 'Still being replied to', author: { name: 'Agent', type: 'agent' }, anchorContent: 'line 10 changed by the feature',
+    });
+    moveTo(fixture.head2);
+    try {
+      const prepared = await service.advanceSession(old, { carry: false });
+      expect(prepared.id).not.toBe(old.id);
+      expect(await reviews.threadsForSession(jan, prepared.id)).toEqual([]);
+      expect((await reviews.threadsForSession(jan, old.id, 'open')).map(t => t.id)).toEqual([kept.id]);
+
+      expect((await service.advanceSession(old)).id).toBe(prepared.id);
+      expect((await reviews.threadsForSession(jan, prepared.id)).map(t => [t.id, t.startLine])).toEqual([[kept.id, 13]]);
+    } finally {
+      moveTo(fixture.head1);
+    }
+  });
+
+  it('links the session holding the findings while a prepared one at the head has none, and gathers them when the head’s session is asked for', async () => {
+    const kim = (await users.findOrCreate('kim@example.com')).id;
+    await users.setGitHubToken(kim, 'bob-token');
+    const old = (await service.createSession(kim, { repo: 'acme/widgets', pr: 1 })).session;
+    const kept = await reviews.createThread({
+      userId: kim, sessionId: old.id, filePath: 'src.ts', side: 'new', startLine: 10, endLine: 10,
+      body: 'Not carried yet', author: { name: 'Agent', type: 'agent' }, anchorContent: 'line 10 changed by the feature',
+    });
+    moveTo(fixture.head2);
+    github.reviewRequests['bob-token'] = [
+      { owner: 'acme', repo: 'widgets', number: 1, title: 'Change line ten', author: 'octocat', updatedAt: '2000-01-01T00:00:00Z' },
+    ];
+    try {
+      const prepared = await service.advanceSession(old, { carry: false });
+      const row = (await service.reviewRequests(kim, { now: Date.now() + 720_000 }))!.requests[0];
+      expect(row.session?.id).toBe(old.id);
+      expect(row.movedTo).toBe(fixture.head2);
+
+      const again = await service.createSession(kim, { repo: 'acme/widgets', pr: 1 });
+      expect(again.session.id).toBe(prepared.id);
+      expect(again.carried).toBe(1);
+      expect((await reviews.threadsForSession(kim, prepared.id)).map(t => t.id)).toEqual([kept.id]);
+    } finally {
+      github.reviewRequests['bob-token'] = [];
+      moveTo(fixture.head1);
+    }
+  });
+
+  it('carries the findings left behind when making the head’s session finds it already there', async () => {
+    const hal = (await users.findOrCreate('hal@example.com')).id;
+    await users.setGitHubToken(hal, 'bob-token');
+    const first = (await service.createSession(hal, { repo: 'acme/widgets', pr: 1 })).session;
+    moveTo(fixture.head2);
+    try {
+      const second = (await service.createSession(hal, { repo: 'acme/widgets', pr: 1 })).session;
+      const later = await reviews.createThread({
+        userId: hal, sessionId: second.id, filePath: 'src.ts', side: 'new', startLine: 13, endLine: 13,
+        body: 'On the second head', author: { name: 'Agent', type: 'agent' }, anchorContent: 'line 10 changed by the feature',
+      });
+      moveTo(fixture.head1);
+      const lookup = vi.spyOn(reviews, 'prSessionAt').mockResolvedValueOnce(null);
+      const back = await service.advanceSession(second);
+      lookup.mockRestore();
+      expect(back.id).toBe(first.id);
+      expect((await reviews.threadsForSession(hal, first.id)).map(t => [t.id, t.startLine])).toEqual([[later.id, 10]]);
+    } finally {
+      moveTo(fixture.head1);
+    }
+  });
+
+  it('shows the review requests’ current head without making or moving anything, asking GitHub only about updated pull requests, once a minute', async () => {
+    const dave = (await users.findOrCreate('dave@example.com')).id;
+    await users.setGitHubToken(dave, 'bob-token');
+    const request = { owner: 'acme', repo: 'widgets', number: 1, title: 'Change line ten', author: 'octocat', updatedAt: '2026-10-03T09:00:00Z' };
+    github.reviewRequests['bob-token'] = [request];
+    const session = (await service.createSession(dave, { repo: 'acme/widgets', pr: 1 })).session;
+    const open = await reviews.createThread({
+      userId: dave, sessionId: session.id, filePath: 'src.ts', side: 'new', startLine: 10, endLine: 10,
+      body: 'Still open', author: { name: 'Agent', type: 'agent' },
+    });
+
+    const lookups = pullLookups();
+    const unchanged = (await service.reviewRequests(dave))!.requests[0];
+    expect(unchanged.session?.id).toBe(session.id);
+    expect(unchanged.movedTo).toBeNull();
+    expect(pullLookups()).toBe(lookups);
+
+    github.reviewRequests['bob-token'] = [{ ...request, updatedAt: '2999-01-01T00:00:00Z' }];
+    moveTo(fixture.head2);
+    try {
+      const now = Date.now() + 120_000;
+      const sessionsBefore = (await reviews.listSessions(dave)).length;
+      const row = (await service.reviewRequests(dave, { now }))!.requests[0];
+      expect(row.session?.id).toBe(session.id);
+      expect(row.movedTo).toBe(fixture.head2);
+      expect((await reviews.listSessions(dave)).length).toBe(sessionsBefore);
+      expect((await reviews.getThread(dave, open.id))?.sessionId).toBe(session.id);
+      const afterMove = pullLookups();
+      expect(afterMove).toBeGreaterThan(lookups);
+      expect((await service.reviewRequests(dave, { now }))!.requests[0].movedTo).toBe(fixture.head2);
+      expect(pullLookups()).toBe(afterMove);
+    } finally {
+      moveTo(fixture.head1);
+      github.reviewRequests['bob-token'] = [];
+    }
+  });
+
+  it('links the session at the current head where the user already has one', async () => {
+    const ivy = (await users.findOrCreate('ivy@example.com')).id;
+    await users.setGitHubToken(ivy, 'bob-token');
+    const atHead1 = (await service.createSession(ivy, { repo: 'acme/widgets', pr: 1 })).session;
+    moveTo(fixture.head2);
+    await service.createSession(ivy, { repo: 'acme/widgets', pr: 1 });
+    moveTo(fixture.head1);
+    github.reviewRequests['bob-token'] = [
+      { owner: 'acme', repo: 'widgets', number: 1, title: 'Change line ten', author: 'octocat', updatedAt: '2999-01-01T00:00:00Z' },
+    ];
+    try {
+      const row = (await service.reviewRequests(ivy, { now: Date.now() + 360_000 }))!.requests[0];
+      expect(row.session).toMatchObject({ id: atHead1.id, headSha: fixture.head1 });
+      expect(row.movedTo).toBeNull();
+    } finally {
+      github.reviewRequests['bob-token'] = [];
+    }
+  });
+
+  it('shows the rows without waiting long on a slow head lookup', async () => {
+    const lena = (await users.findOrCreate('lena@example.com')).id;
+    await users.setGitHubToken(lena, 'bob-token');
+    const session = (await service.createSession(lena, { repo: 'acme/widgets', pr: 1 })).session;
+    github.reviewRequests['bob-token'] = [
+      { owner: 'acme', repo: 'widgets', number: 1, title: 'Change line ten', author: 'octocat', updatedAt: '2999-01-01T00:00:00Z' },
+    ];
+    const stuck = vi.spyOn(GitHubApi.prototype, 'getPull').mockReturnValue(new Promise(() => {}));
+    try {
+      const started = Date.now();
+      const rows = (await service.reviewRequests(lena, { now: Date.now() + 840_000 }))!.requests;
+      expect(Date.now() - started).toBeLessThan(5_000);
+      expect(rows[0].session?.id).toBe(session.id);
+      expect(rows[0].movedTo).toBeNull();
+    } finally {
+      stuck.mockRestore();
+      github.reviewRequests['bob-token'] = [];
+    }
+  }, 10_000);
+
+  it('keeps a row as it is when its head cannot be looked up', async () => {
+    const frank = (await users.findOrCreate('frank@example.com')).id;
+    await users.setGitHubToken(frank, 'bob-token');
+    const session = (await service.createSession(frank, { repo: 'acme/widgets', pr: 1 })).session;
+    github.reviewRequests['bob-token'] = [
+      { owner: 'acme', repo: 'widgets', number: 1, title: 'Change line ten', author: 'octocat', updatedAt: '2999-01-01T00:00:00Z' },
+    ];
+    pulls[1].headSha = fixture.head2;
+    const failing = vi.spyOn(reviews, 'prSessionAt').mockRejectedValueOnce(new Error('database unavailable'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const rows = (await service.reviewRequests(frank, { now: Date.now() + 240_000 }))!.requests;
+      expect(rows[0].session?.id).toBe(session.id);
+      expect(rows[0].movedTo).toBeNull();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('database unavailable'));
+    } finally {
+      failing.mockRestore();
+      warn.mockRestore();
+      pulls[1].headSha = fixture.head1;
+      github.reviewRequests['bob-token'] = [];
+    }
   });
 });

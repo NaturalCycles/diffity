@@ -8,10 +8,11 @@ import { useWrapLines } from '../../hooks/use-wrap-lines';
 import { useKeyboard } from '../../hooks/use-keyboard';
 import { useReviewThreads } from '../../hooks/use-review-threads';
 import { useTours } from '../../hooks/use-tours';
-import { useHeld, useReviewArrival } from '../../hooks/use-review-arrival';
+import { isReviewPending, useHeld, useReviewArrival } from '../../hooks/use-review-arrival';
 import { useHideWhitespace } from '../../hooks/use-hide-whitespace';
 import { useAnswerAlerts } from '../../hooks/use-answer-alerts';
 import { useTabBadge } from '../../hooks/use-tab-badge';
+import { useFollowHead } from '../../hooks/use-follow-head';
 import { isThreadOnScreen, type AnswerAlert } from '../../lib/answer-alerts';
 import { pickActiveTour, orderPathsByTour, stopsByPath } from '../../lib/tour-order';
 import { TOUR_NOT_STARTED, clampTourStep } from '../../lib/tour-navigation';
@@ -24,6 +25,7 @@ import { DiffView, type DiffViewHandle } from './diff-view';
 import { Sidebar } from '../layout/sidebar';
 import { ShortcutModal } from '../layout/shortcut-modal';
 import { ReviewBanner } from '../layout/review-banner';
+import { MovedOnBanner } from '../layout/moved-on-banner';
 import { PullRequestPanel } from '../layout/pull-request-panel';
 import { AnswerBubble } from '../layout/answer-bubble';
 import { CheckCircleIcon } from '../icons/check-circle-icon';
@@ -90,6 +92,7 @@ export function DiffPage() {
   const agentCalled = !agentListening && !!liveStatus?.calledAt;
   const agentReachable = agentListening || !!liveStatus?.routine;
   const requestReview = useRequestReview();
+  const head = useFollowHead(sessionId, info?.movedOn, isReviewPending(info?.review?.state));
 
   const commentCountsByFile = useMemo(() => buildThreadCountsByFile(threads), [threads]);
 
@@ -512,6 +515,7 @@ export function DiffPage() {
           onGitHubPulled={() => queryClient.invalidateQueries({ queryKey: ['threads'] })}
         />
         <PullRequestPanel details={githubDetails} hasPullRequest={!!info?.github} repoRoot={repoRoot} />
+        {head.movedOn && <MovedOnBanner headSha={head.movedOn.headSha} updating={head.updating} onUpdate={head.update} />}
         {info?.review && (
           <ReviewBanner
             review={info.review}
