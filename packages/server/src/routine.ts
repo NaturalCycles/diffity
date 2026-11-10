@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import type { Db } from './db.js';
 import type { Live } from './live.js';
 import type { ReviewSessionRecord } from './reviews.js';
@@ -7,7 +8,17 @@ export const ROUTINE_COOLDOWN_MS = 10 * 60 * 1000;
 const FIRE_TIMEOUT_MS = 10_000;
 
 export type RoutineFireKind = 'review' | 'ask';
-export type RoutineFireResult = 'fired' | 'cooldown' | 'unconfigured' | 'failed';
+export type RoutineFireResult = 'fired' | 'cooldown' | 'unconfigured' | 'unfetchable' | 'failed';
+
+let promptTemplate: string | undefined;
+
+/** The prompt the user's routine runs, for this server. Beside the module: the build copies it into dist. */
+export function routinePrompt(publicUrl: URL): string {
+  promptTemplate ??= readFileSync(new URL('./routine-prompt.md', import.meta.url), 'utf-8');
+  return promptTemplate
+    .replaceAll('{{mcpUrl}}', new URL('/mcp', publicUrl).href)
+    .replaceAll('{{awaitUrl}}', new URL('/live/await', publicUrl).href);
+}
 
 /** Calls the user's Claude routine (an API trigger) to attend a session; the run itself happens elsewhere. */
 export class Routine {
@@ -24,8 +35,19 @@ export class Routine {
     return !!settings.url && settings.keySet;
   }
 
+  /**
+   * A patch session's head exists only on this server, and the session token reads no code, so a run could not see
+   * what it is asked about.
+   */
+  async callableFor(userId: string, session: ReviewSessionRecord): Promise<boolean> {
+    return session.kind !== 'patch' && await this.configured(userId);
+  }
+
   /** Fires the user's routine for the session unless none is configured or one fired within the cooldown; never throws. */
   async fire(userId: string, session: ReviewSessionRecord, kind: RoutineFireKind, now = Date.now()): Promise<RoutineFireResult> {
+    if (session.kind === 'patch') {
+      return 'unfetchable';
+    }
     try {
       const routine = await this.users.routine(userId);
       if (!routine) {

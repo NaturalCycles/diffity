@@ -16,9 +16,9 @@ import type { DevLoginProvider, IapLogin } from './login.js';
 import { GitHubConnectError, type GitHubAppAccess } from './github-app.js';
 import { createMcpServer } from './mcp.js';
 import { MAX_WAIT_SECONDS, type Live } from './live.js';
-import type { Routine } from './routine.js';
+import { routinePrompt, type Routine } from './routine.js';
 import { uiApiRouter } from './ui-api.js';
-import { SECTIONS_SCRIPT, SESSIONS_SCRIPT, escapeHtml, page, sessionsStatus } from './html.js';
+import { SECTIONS_SCRIPT, SESSIONS_SCRIPT, SETTINGS_SCRIPT, escapeHtml, page, sessionsStatus } from './html.js';
 import { randomToken } from './crypto.js';
 import {
   SESSION_COOKIE,
@@ -149,6 +149,10 @@ export function createApp(deps: AppDeps): express.Express {
 
   app.get('/sections.js', (_req, res) => {
     res.type('text/javascript').set('Cache-Control', 'no-cache').send(SECTIONS_SCRIPT);
+  });
+
+  app.get('/settings.js', (_req, res) => {
+    res.type('text/javascript').set('Cache-Control', 'no-cache').send(SETTINGS_SCRIPT);
   });
 
   app.get('/sessions.js', (_req, res) => {
@@ -474,6 +478,24 @@ export function createApp(deps: AppDeps): express.Express {
       <h2>Call an agent</h2>
       <p>When you ask for a review from this page, or ask a question while no agent is listening, diffity fires this Claude
         routine with the session and a token that works on that session only.</p>
+      <details>
+        <summary>Set up the routine</summary>
+        <ol>
+          <li>On claude.ai, open Routines and create a new routine, for example “Diffity attendant”. Trigger: <strong>API</strong>.
+            Repositories: the ones you review, so the run can fetch the head. Cloud environment: one whose network allows
+            <code>${escapeHtml(publicUrl.host)}</code>; no diffity secret is needed, the token arrives in the payload.
+            Prompt: the one below. Save, then copy the fire URL and the API key the trigger shows.</li>
+          <li>Paste them in the form below and save. The key is never shown again; an empty key on a later save keeps it.</li>
+          <li>Try it: <strong>Create and review</strong> a pull request on the Sessions page. The session page says
+            “Agent called, starting…” and then “Agent listening”.</li>
+        </ol>
+        <p>The routine’s prompt must be the one below. It changes with diffity, so copy it again after an update that changes it.</p>
+      </details>
+      <details>
+        <summary>Routine prompt</summary>
+        <p><button type="button" data-copy="routine-prompt">Copy</button></p>
+        <pre class="wrap" id="routine-prompt">${escapeHtml(routinePrompt(publicUrl))}</pre>
+      </details>
       <form method="post" action="/settings/routine">
         <p><label>Fire URL <input type="text" name="url" size="60" value="${escapeHtml(routineSettings.url ?? '')}"></label></p>
         <p><label>Key <input type="password" name="key" autocomplete="off"></label>
@@ -486,7 +508,8 @@ export function createApp(deps: AppDeps): express.Express {
       <h2>Connect an agent</h2>
       <p>Add this server to Claude Code as an MCP connector; it signs you in through this page the first time.
         Its <code>review</code> prompt holds the review method.</p>
-      <pre>claude mcp add --transport http diffity ${escapeHtml(mcpUrl.href)}</pre>`, user);
+      <pre>claude mcp add --transport http diffity ${escapeHtml(mcpUrl.href)}</pre>
+      <script src="/settings.js"></script>`, user, [], true);
   });
 
   app.post('/settings/github-token', sameOrigin, forms, async (req, res) => {

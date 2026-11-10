@@ -34,4 +34,5 @@ await build({
 });
 
 copyFileSync(join(here, 'src/review-prompt.md'), join(distDir, 'review-prompt.md'));
+copyFileSync(join(here, 'src/routine-prompt.md'), join(distDir, 'routine-prompt.md'));
 cpSync(uiSource, join(distDir, 'ui'), { recursive: true });

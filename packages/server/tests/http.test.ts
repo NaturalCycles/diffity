@@ -3,6 +3,8 @@ import type { CommentThread, RepoInfoResponse, Tour } from '@diffity/api';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ReviewSessionRecord } from '../src/reviews.js';
+import { routinePrompt } from '../src/routine.js';
+import { escapeHtml } from '../src/html.js';
 import {
   fakeUiDir,
   git,
@@ -187,6 +189,26 @@ describe('web pages', () => {
     await save('clear=1');
     expect(await server.users.routine(aliceId)).toBeNull();
     expect(await server.users.routineSettings(aliceId)).toEqual({ url: null, keySet: false });
+  });
+
+  it('shows how to set up the routine, with this server\'s prompt to copy', async () => {
+    const res = await api('/settings', { cookie: aliceCookie });
+    const settings = res.body as string;
+    expect(settings).toContain('<summary>Set up the routine</summary>');
+    expect(settings).toContain('<summary>Routine prompt</summary>');
+    expect(settings).toContain(`<code>${new URL(server.base).host}</code>`);
+    expect(settings).toContain('<button type="button" data-copy="routine-prompt">Copy</button>');
+    expect(settings).toContain(`<pre class="wrap" id="routine-prompt">${escapeHtml(routinePrompt(server.config.publicUrl))}</pre>`);
+    expect(settings).toContain('&lt;token&gt;');
+    expect(settings).toContain('<script src="/settings.js"></script>');
+    const csp = res.headers.get('content-security-policy')!;
+    expect(csp).toContain("script-src 'self'");
+    expect(csp).not.toMatch(/script-src[^;]*unsafe/);
+
+    const script = await api('/settings.js');
+    expect(script.headers.get('content-type')).toContain('javascript');
+    expect(script.body).toContain('navigator.clipboard.writeText');
+    expect(script.body).toContain("closest('button[data-copy]')");
   });
 
   it('signs out', async () => {
@@ -451,7 +473,6 @@ describe('pull requests awaiting review', () => {
       expect(script.headers.get('content-type')).toContain('javascript');
       expect(script.body).toContain('localStorage');
       expect(script.body).toContain("'diffity.section:' + details.dataset.section");
-      expect((await api('/settings', { cookie: aliceCookie })).headers.get('content-security-policy')).not.toContain('script-src');
     } finally {
       await server.users.setGitHubToken(aliceId, null);
     }

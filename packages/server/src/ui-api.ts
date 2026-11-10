@@ -256,7 +256,7 @@ export function uiApiRouter(deps: UiApiDeps): Router {
   }));
 
   router.get('/live/status', handle(async ({ user, session }, _req, res) => {
-    res.json({ ...(await live.status(user.id, session.id)), routine: await routine.configured(user.id) } satisfies LiveStatusResponse);
+    res.json({ ...(await live.status(user.id, session.id)), routine: await routine.callableFor(user.id, session) } satisfies LiveStatusResponse);
   }));
 
   router.post('/review-request', handle(async ({ user, session }, _req, res) => {
