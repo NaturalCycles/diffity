@@ -350,6 +350,16 @@ export class Reviews {
     return found;
   }
 
+  /** The user's newest session of the pull request at this head. */
+  async prSessionAt(userId: string, pull: { owner: string; repo: string; number: number }, headSha: string): Promise<ReviewSessionRecord | null> {
+    const row = await this.db.one<SessionRow>(
+      `${SESSION_SELECT} WHERE s.user_id = $1 AND lower(r.owner) = lower($2) AND lower(r.name) = lower($3) AND s.pr_number = $4 AND s.head_sha = $5
+       ORDER BY s.created_at DESC, s.seq DESC LIMIT 1`,
+      [userId, pull.owner, pull.repo, pull.number, headSha],
+    );
+    return row ? rowToSession(row) : null;
+  }
+
   /** Earlier sessions of the same pull request, newest first — where carried work comes from. */
   async priorPrSessions(userId: string, repoId: number, prNumber: number, excludeId: string): Promise<ReviewSessionRecord[]> {
     const rows = await this.db.query<SessionRow>(
@@ -364,9 +374,9 @@ export class Reviews {
    * Moves rather than copies, so ids stay stable. Resolved and dismissed threads stay with the
    * commit where they were dealt with.
    */
-  async moveOpenWork(userId: string, fromSessionIds: string[], toSessionId: string): Promise<number> {
+  async moveOpenWork(userId: string, fromSessionIds: string[], toSessionId: string): Promise<string[]> {
     if (fromSessionIds.length === 0) {
-      return 0;
+      return [];
     }
     return this.db.transaction(async tx => {
       const moved = await tx.query<{ id: string }>(
@@ -383,7 +393,7 @@ export class Reviews {
         userId,
         fromSessionIds,
       ]);
-      return moved.length;
+      return moved.map(row => row.id);
     });
   }
 

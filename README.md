@@ -34,8 +34,9 @@ The first tool call opens the browser to sign in and allow the connection. Then:
 - **Sessions.** `create_session` takes a pull request, two commits, or a base commit and a patch
   (for work that is not pushed). Its result carries the page's URL. A new session on a pull request
   that moved on carries the open findings over. A pull request session follows its head: the
-  Sessions page links the session at the current head, a review page opened on an older one moves
-  there, and one left open offers the update.
+  Sessions page shows the current head, a review page opened on an older session moves there, and
+  one left open follows while its tab is hidden and nothing typed would be lost, and otherwise offers
+  the update.
 - **Findings** are inline comments with a severity prefix (`P1`/`P2`/`P3` unless the repository
   says otherwise); tours give the diff a reading order.
 - **Posting.** From the page the user posts the findings to the pull request as one review, and

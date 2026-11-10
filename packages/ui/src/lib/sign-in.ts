@@ -43,8 +43,13 @@ export interface PageState {
   unsavedWrite: boolean;
 }
 
+/** Nothing the reader is in the middle of would be lost by leaving the page. */
+export function safeToLeave(state: PageState): boolean {
+  return !state.unsavedWrite && !state.hasDraft && !state.editing;
+}
+
 export function shouldAutoReload(state: PageState, alreadyReloaded: boolean): boolean {
-  return !alreadyReloaded && !state.unsavedWrite && state.visible && !state.hasDraft && !state.editing;
+  return !alreadyReloaded && state.visible && safeToLeave(state);
 }
 
 const TEXT_INPUT_TYPES = new Set(['', 'text', 'search', 'email', 'url', 'tel', 'password', 'number']);

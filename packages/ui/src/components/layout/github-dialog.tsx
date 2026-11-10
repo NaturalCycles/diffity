@@ -213,6 +213,9 @@ export function GitHubDialog(props: GitHubDialogProps) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
       <div
+        role="dialog"
+        aria-label="Post to GitHub"
+        data-post-dialog
         className="bg-bg rounded-xl shadow-lg w-full max-w-lg mx-4 font-sans max-h-[85vh] flex flex-col"
         onClick={e => e.stopPropagation()}
       >
@@ -340,7 +343,7 @@ export function GitHubDialog(props: GitHubDialogProps) {
                 <button
                   type="button"
                   onClick={() => void handleSubmit(true)}
-                  disabled={submitting || updating}
+                  disabled={submitting || updating || !canSubmit}
                   className="px-3 py-1.5 text-xs font-medium rounded-md border border-border bg-bg hover:bg-hover text-text-secondary cursor-pointer disabled:opacity-50"
                 >
                   Post to {details.headSha.slice(0, 7)} anyway

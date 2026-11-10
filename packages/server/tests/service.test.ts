@@ -448,27 +448,83 @@ describe('following a pull request’s head', () => {
     }
   });
 
-  it('brings the review requests’ sessions to the current head, asking GitHub only about updated pull requests, once a minute', async () => {
+  it('advances onto a session that already exists at the head, carrying only the findings left behind', async () => {
+    const gina = (await users.findOrCreate('gina@example.com')).id;
+    await users.setGitHubToken(gina, 'bob-token');
+    const old = (await service.createSession(gina, { repo: 'acme/widgets', pr: 1 })).session;
+    const finding = (body: string, sessionId: string) => reviews.createThread({
+      userId: gina, sessionId, filePath: 'src.ts', side: 'new', startLine: 10, endLine: 10,
+      body, author: { name: 'Agent', type: 'agent' }, anchorContent: 'line 10 changed by the feature',
+    });
+    moveTo(fixture.head2);
+    try {
+      const current = (await service.createSession(gina, { repo: 'acme/widgets', pr: 1 })).session;
+      const own = await finding('Left on the new head', current.id);
+      const later = await finding('Written in a tab still on the old head', old.id);
+
+      const advanced = await service.advanceSession(old);
+      expect(advanced.id).toBe(current.id);
+      const lines = new Map((await reviews.threadsForSession(gina, current.id)).map(t => [t.id, t.startLine]));
+      expect(lines.get(later.id)).toBe(13);
+      expect(lines.get(own.id)).toBe(10);
+      expect(await reviews.threadsForSession(gina, old.id, 'open')).toEqual([]);
+    } finally {
+      moveTo(fixture.head1);
+    }
+  });
+
+  it('carries the findings left behind when making the head’s session finds it already there', async () => {
+    const hal = (await users.findOrCreate('hal@example.com')).id;
+    await users.setGitHubToken(hal, 'bob-token');
+    const first = (await service.createSession(hal, { repo: 'acme/widgets', pr: 1 })).session;
+    moveTo(fixture.head2);
+    try {
+      const second = (await service.createSession(hal, { repo: 'acme/widgets', pr: 1 })).session;
+      const later = await reviews.createThread({
+        userId: hal, sessionId: second.id, filePath: 'src.ts', side: 'new', startLine: 13, endLine: 13,
+        body: 'On the second head', author: { name: 'Agent', type: 'agent' }, anchorContent: 'line 10 changed by the feature',
+      });
+      moveTo(fixture.head1);
+      const lookup = vi.spyOn(reviews, 'prSessionAt').mockResolvedValueOnce(null);
+      const back = await service.advanceSession(second);
+      lookup.mockRestore();
+      expect(back.id).toBe(first.id);
+      expect((await reviews.threadsForSession(hal, first.id)).map(t => [t.id, t.startLine])).toEqual([[later.id, 10]]);
+    } finally {
+      moveTo(fixture.head1);
+    }
+  });
+
+  it('shows the review requests’ current head without making or moving anything, asking GitHub only about updated pull requests, once a minute', async () => {
     const dave = (await users.findOrCreate('dave@example.com')).id;
     await users.setGitHubToken(dave, 'bob-token');
     const request = { owner: 'acme', repo: 'widgets', number: 1, title: 'Change line ten', author: 'octocat', updatedAt: '2026-10-03T09:00:00Z' };
     github.reviewRequests['bob-token'] = [request];
     const session = (await service.createSession(dave, { repo: 'acme/widgets', pr: 1 })).session;
+    const open = await reviews.createThread({
+      userId: dave, sessionId: session.id, filePath: 'src.ts', side: 'new', startLine: 10, endLine: 10,
+      body: 'Still open', author: { name: 'Agent', type: 'agent' },
+    });
 
     const lookups = pullLookups();
-    expect((await service.reviewRequests(dave))?.requests[0].session?.id).toBe(session.id);
+    const unchanged = (await service.reviewRequests(dave))!.requests[0];
+    expect(unchanged.session?.id).toBe(session.id);
+    expect(unchanged.movedTo).toBeNull();
     expect(pullLookups()).toBe(lookups);
 
     github.reviewRequests['bob-token'] = [{ ...request, updatedAt: '2999-01-01T00:00:00Z' }];
     moveTo(fixture.head2);
     try {
       const now = Date.now() + 120_000;
-      const rows = (await service.reviewRequests(dave, { now }))!.requests;
-      expect(rows[0].session?.headSha).toBe(fixture.head2);
-      expect(rows[0].session?.id).not.toBe(session.id);
+      const sessionsBefore = (await reviews.listSessions(dave)).length;
+      const row = (await service.reviewRequests(dave, { now }))!.requests[0];
+      expect(row.session?.id).toBe(session.id);
+      expect(row.movedTo).toBe(fixture.head2);
+      expect((await reviews.listSessions(dave)).length).toBe(sessionsBefore);
+      expect((await reviews.getThread(dave, open.id))?.sessionId).toBe(session.id);
       const afterMove = pullLookups();
       expect(afterMove).toBeGreaterThan(lookups);
-      expect((await service.reviewRequests(dave, { now }))!.requests[0].session?.id).toBe(rows[0].session?.id);
+      expect((await service.reviewRequests(dave, { now }))!.requests[0].movedTo).toBe(fixture.head2);
       expect(pullLookups()).toBe(afterMove);
     } finally {
       moveTo(fixture.head1);
@@ -476,7 +532,26 @@ describe('following a pull request’s head', () => {
     }
   });
 
-  it('keeps a row’s session when bringing it forward fails', async () => {
+  it('links the session at the current head where the user already has one', async () => {
+    const ivy = (await users.findOrCreate('ivy@example.com')).id;
+    await users.setGitHubToken(ivy, 'bob-token');
+    const atHead1 = (await service.createSession(ivy, { repo: 'acme/widgets', pr: 1 })).session;
+    moveTo(fixture.head2);
+    await service.createSession(ivy, { repo: 'acme/widgets', pr: 1 });
+    moveTo(fixture.head1);
+    github.reviewRequests['bob-token'] = [
+      { owner: 'acme', repo: 'widgets', number: 1, title: 'Change line ten', author: 'octocat', updatedAt: '2999-01-01T00:00:00Z' },
+    ];
+    try {
+      const row = (await service.reviewRequests(ivy, { now: Date.now() + 360_000 }))!.requests[0];
+      expect(row.session).toMatchObject({ id: atHead1.id, headSha: fixture.head1 });
+      expect(row.movedTo).toBeNull();
+    } finally {
+      github.reviewRequests['bob-token'] = [];
+    }
+  });
+
+  it('keeps a row as it is when its head cannot be looked up', async () => {
     const frank = (await users.findOrCreate('frank@example.com')).id;
     await users.setGitHubToken(frank, 'bob-token');
     const session = (await service.createSession(frank, { repo: 'acme/widgets', pr: 1 })).session;
@@ -484,12 +559,13 @@ describe('following a pull request’s head', () => {
       { owner: 'acme', repo: 'widgets', number: 1, title: 'Change line ten', author: 'octocat', updatedAt: '2999-01-01T00:00:00Z' },
     ];
     pulls[1].headSha = fixture.head2;
-    const failing = vi.spyOn(service, 'createSession').mockRejectedValueOnce(new Error('mirror unavailable'));
+    const failing = vi.spyOn(reviews, 'prSessionAt').mockRejectedValueOnce(new Error('database unavailable'));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       const rows = (await service.reviewRequests(frank, { now: Date.now() + 240_000 }))!.requests;
       expect(rows[0].session?.id).toBe(session.id);
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('mirror unavailable'));
+      expect(rows[0].movedTo).toBeNull();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('database unavailable'));
     } finally {
       failing.mockRestore();
       warn.mockRestore();

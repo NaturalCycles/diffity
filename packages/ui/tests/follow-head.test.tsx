@@ -1,5 +1,6 @@
+import type { ReactNode } from 'react';
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, cleanup, screen, waitFor } from '@testing-library/react';
+import { act, render, cleanup, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { useFollowHead } from '../src/hooks/use-follow-head';
@@ -38,6 +39,7 @@ function stubNavigation() {
 
 afterEach(() => {
   cleanup();
+  setVisibility('visible', false);
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   sessionStorage.clear();
@@ -51,12 +53,31 @@ describe('the address of the same view in another session', () => {
   });
 });
 
-function Harness({ movedOn, reviewing }: { movedOn: MovedOn | null; reviewing?: boolean }) {
+function Harness({ movedOn, reviewing, children }: { movedOn: MovedOn | null; reviewing?: boolean; children?: ReactNode }) {
   const head = useFollowHead('old', movedOn, reviewing);
-  return head.movedOn
-    ? <MovedOnBanner headSha={head.movedOn.headSha} updating={head.updating} onUpdate={head.update} />
-    : <span>current</span>;
+  return (
+    <>
+      {children}
+      {head.movedOn
+        ? <MovedOnBanner headSha={head.movedOn.headSha} updating={head.updating} onUpdate={head.update} />
+        : <span>current</span>}
+    </>
+  );
 }
+
+let visibility: DocumentVisibilityState = 'visible';
+
+function setVisibility(state: DocumentVisibilityState, announce = true) {
+  visibility = state;
+  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility });
+  if (announce) {
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+  }
+}
+
+const moved: MovedOn = { headSha: NEW, sessionId: 'new' };
 
 describe('a review page behind its pull request', () => {
   it('moves to the current head on load, without asking', async () => {
@@ -102,6 +123,76 @@ describe('a review page behind its pull request', () => {
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Update' })).toBeTruthy());
     expect(replace).not.toHaveBeenCalled();
+  });
+});
+
+describe('a review page nobody is looking at', () => {
+  it('follows a head that moves while the tab is hidden', async () => {
+    const calls = stubServer({ '/api/advance': () => Response.json({ sessionId: 'new', headSha: NEW }) });
+    const replace = stubNavigation();
+    const { rerender } = render(<Harness movedOn={null} />);
+    setVisibility('hidden', false);
+
+    rerender(<Harness movedOn={moved} />);
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/s/new/'));
+    expect(calls.map(call => call.url)).toEqual(['/api/advance']);
+  });
+
+  it('follows when the reader leaves the tab, or comes back to it, with the update still on offer', async () => {
+    const calls = stubServer({ '/api/advance': () => Response.json({ sessionId: 'new', headSha: NEW }) });
+    const replace = stubNavigation();
+    const { rerender } = render(<Harness movedOn={null} />);
+    rerender(<Harness movedOn={moved} />);
+    expect(await screen.findByTestId('moved-on-banner')).toBeTruthy();
+    expect(calls).toHaveLength(0);
+
+    setVisibility('hidden');
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/s/new/'));
+    expect(calls).toHaveLength(1);
+  });
+
+  it('stays while the reader is on the page', async () => {
+    const calls = stubServer({ '/api/advance': () => Response.json({ sessionId: 'new', headSha: NEW }) });
+    const replace = stubNavigation();
+    const { rerender } = render(<Harness movedOn={null} />);
+    rerender(<Harness movedOn={moved} />);
+    expect(await screen.findByTestId('moved-on-banner')).toBeTruthy();
+    rerender(<Harness movedOn={{ ...moved }} />);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(calls).toHaveLength(0);
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  const blockers: [string, () => ReactNode, () => void][] = [
+    ['a draft in a field', () => <textarea defaultValue="Half a thought" />, () => {}],
+    ['a field being edited', () => <input aria-label="Reply" />, () => screen.getByRole('textbox', { name: 'Reply' }).focus()],
+    ['the post dialog open', () => <div data-post-dialog />, () => {}],
+  ];
+
+  it.each(blockers)('stays and offers the update with %s', async (_name, extra, prepare) => {
+    const calls = stubServer({ '/api/advance': () => Response.json({ sessionId: 'new', headSha: NEW }) });
+    const replace = stubNavigation();
+    const { rerender } = render(<Harness movedOn={null}>{extra()}</Harness>);
+    prepare();
+    setVisibility('hidden', false);
+
+    rerender(<Harness movedOn={moved}>{extra()}</Harness>);
+    expect(await screen.findByTestId('moved-on-banner')).toBeTruthy();
+    setVisibility('visible');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(calls).toHaveLength(0);
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it('stays while an agent is reviewing this session, even hidden', async () => {
+    const calls = stubServer({ '/api/advance': () => Response.json({ sessionId: 'new', headSha: NEW }) });
+    const { rerender } = render(<Harness movedOn={null} reviewing />);
+    setVisibility('hidden', false);
+    rerender(<Harness movedOn={moved} reviewing />);
+    expect(await screen.findByTestId('moved-on-banner')).toBeTruthy();
+    setVisibility('visible');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(calls).toHaveLength(0);
   });
 });
 
@@ -155,6 +246,18 @@ describe('posting after the pull request moved on', () => {
     await user.click(screen.getByRole('button', { name: `Post to ${OLD.slice(0, 7)} anyway` }));
     await waitFor(() => expect(calls).toHaveLength(2));
     expect(calls[1].body).toMatchObject({ event: 'COMMENT', allowOutdated: true });
+  });
+
+  it('does not post to the reviewed commit once there is nothing to post', async () => {
+    stubServer({ '/api/github/create-review': movedOn });
+    const user = userEvent.setup();
+    renderDialog('old');
+
+    await user.click(screen.getByRole('button', { name: /^submit 2/i }));
+    const anyway = await screen.findByRole('button', { name: `Post to ${OLD.slice(0, 7)} anyway` });
+    expect((anyway as HTMLButtonElement).disabled).toBe(false);
+    await user.click(screen.getByRole('button', { name: 'Deselect all' }));
+    expect((anyway as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('updates to the new head, and the draft comes along', async () => {
